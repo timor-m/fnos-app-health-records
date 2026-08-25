@@ -2,7 +2,87 @@
 
 本项目遵循语义化版本。
 
-## 0.2.5 - Unreleased
+## 0.2.5
+
+## 0.2.6
+
+## 0.2.7
+
+## 0.2.8
+
+## 0.2.9
+
+## 0.2.10
+
+## 0.2.11
+
+## 0.2.12
+
+## 0.2.13 - Unreleased
+
+### Added
+
+- 待补充本版本变更说明。
+
+### Changed
+
+### Fixed
+
+### Added
+
+- 待补充本版本变更说明。
+
+### Changed
+
+### Fixed
+
+### Added
+
+- 待补充本版本变更说明。
+
+### Changed
+
+### Fixed
+
+### Added
+
+- 待补充本版本变更说明。
+
+### Changed
+
+### Fixed
+
+### Added
+
+- 待补充本版本变更说明。
+
+### Changed
+
+### Fixed
+
+### Added
+
+- 待补充本版本变更说明。
+
+### Changed
+
+### Fixed
+
+### Added
+
+- 待补充本版本变更说明。
+
+### Changed
+
+### Fixed
+
+### Added
+
+- 待补充本版本变更说明。
+
+### Changed
+
+### Fixed
 
 ### Added
 

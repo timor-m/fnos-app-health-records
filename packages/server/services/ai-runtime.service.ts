@@ -28,6 +28,7 @@ export type AiRuntimeResponse = {
   provider: string;
   model: string;
   content: string;
+  reasoningContent: string | null;
   finishReason: string | null;
   promptTokens: number | null;
   completionTokens: number | null;
@@ -104,7 +105,10 @@ export async function executeAiChatCompletion(
     model?: string;
     choices?: Array<{
       finish_reason?: string;
-      message?: { content?: string | Array<{ type?: string; text?: string }> };
+      message?: {
+        content?: string | Array<{ type?: string; text?: string }>;
+        reasoning_content?: string;
+      };
     }>;
     usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
@@ -114,10 +118,12 @@ export async function executeAiChatCompletion(
     : Array.isArray(contentValue)
       ? contentValue.map((item) => item.text || "").join("")
       : "";
+  const reasoningContent = payload.choices?.[0]?.message?.reasoning_content || null;
   return {
     provider: config.provider,
     model: payload.model || config.model,
     content,
+    reasoningContent,
     finishReason: payload.choices?.[0]?.finish_reason || null,
     promptTokens: numericValue(payload.usage?.prompt_tokens),
     completionTokens: numericValue(payload.usage?.completion_tokens),

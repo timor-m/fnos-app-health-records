@@ -1923,6 +1923,15 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .settings-form { padding: 20px; display: grid; gap: 16px; }
 .runtime-pip-form { padding: 0; gap: 10px; }
 .settings-form > label:not(.toggle-row), .form-grid label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; }
+.form-grid label .model-input-group { position: relative; }
+.vision-hint-grid {
+  grid-column: 2;
+  justify-self: end;
+  text-align: right;
+  white-space: nowrap;
+  min-width: 0;
+  margin-top: -4px;
+}
 .settings-form label > span { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .settings-form .field-hint { color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .settings-form .field-warning { color: var(--warning, #a15c00); }
@@ -2848,6 +2857,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
 
   .login-page { padding: 16px; }
   .login-panel { padding: 26px 20px; }
+  .vision-hint-grid { display: none; }
 }
 
 /* ---------- 桌面端不显示移动端详情抽屉 ---------- */
@@ -3727,3 +3737,174 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
 .processing-history-batch > summary strong { color: var(--ink); font-size: 12px; }
 .processing-history-batch > summary small { color: var(--muted); font-size: 11px; font-weight: 500; }
 .historical-job-log-list { padding: 0 11px 4px; border-top: 1px solid var(--line); background: var(--surface); }
+
+/* 模型列表下拉框样式 */
+.model-input-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  position: relative;
+}
+
+.model-input-group input {
+  flex: 1;
+}
+
+.model-refresh-btn {
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.model-refresh-btn:hover:not(:disabled) {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.model-refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.model-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  margin-top: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  z-index: 100;
+  max-height: 300px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.model-dropdown-header {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.model-dropdown-header button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0;
+  line-height: 1;
+}
+
+.model-dropdown-list {
+  overflow-y: auto;
+  max-height: 250px;
+}
+
+.model-dropdown-item {
+  padding: 10px 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: background 0.15s;
+}
+
+.model-dropdown-item:hover {
+  background: var(--fill-1);
+}
+
+.model-dropdown-item .model-id {
+  font-size: 13px;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.model-dropdown-item .model-name {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* 测试结果样式 */
+.test-results {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--fill-1);
+}
+
+.test-results-header {
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.test-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.test-step:last-child {
+  border-bottom: none;
+}
+
+.test-step-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.test-step--success .test-step-icon {
+  color: var(--green-ok);
+}
+
+.test-step--failed .test-step-icon {
+  color: var(--danger);
+}
+
+.test-step--pending .test-step-icon {
+  color: var(--muted);
+}
+
+.test-step-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.test-step-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 2px;
+}
+
+.test-step-message {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.test-step-time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: monospace;
+}

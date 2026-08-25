@@ -9,9 +9,9 @@
 | 项 | 当前值 | 来源 |
 | --- | --- | --- |
 | 应用 ID | `fnos-app-health-records` | `template.config.json` |
-| 应用版本 | `0.2.4` | `package.json` |
-| fnOS manifest 版本 | `0.2.4` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
-| fnOS sub_version | `0.2.4.0` | `scripts/prepare-package.mjs` 生成 |
+| 应用版本 | `0.2.13` | `package.json` |
+| fnOS manifest 版本 | `0.2.13` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
+| fnOS sub_version | `0.2.13.0` | `scripts/prepare-package.mjs` 生成 |
 | Docker 镜像版本 | `0.2.2`、`v0.2.2` | GitHub Tag 工作流从 `package.json` 生成 |
 | Docker 镜像仓库 | `docker.io/timorm/fnos-app-health-records` | Docker Hub，可通过 `DOCKERHUB_IMAGE` 覆盖 |
 | 数据库 schema | `v16` | `packages/server/database/migrations.ts` 最后一个迁移版本 |

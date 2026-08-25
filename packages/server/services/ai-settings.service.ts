@@ -112,7 +112,7 @@ function parseProviderSettings(value: StoredProviderSettings | undefined): Parti
   return parsed;
 }
 
-function parseStoredSettings(): ParsedAiSettings {
+export function parseStoredSettings(): ParsedAiSettings {
   const row = getDatabase().prepare("SELECT value_json AS valueJson FROM app_settings WHERE setting_key = ?")
     .get(settingKey) as { valueJson: string } | undefined;
   if (!row) return { enabled: false, provider: "deepseek", providers: {}, taskBindings: {} };
@@ -176,7 +176,7 @@ function normalizeProviderBaseUrl(provider: AiProviderKey, value: string) {
   }
 }
 
-function resolveProvider(provider: AiProviderKey, parsed: ParsedAiSettings): ProviderSettings {
+export function resolveProvider(provider: AiProviderKey, parsed: ParsedAiSettings): ProviderSettings {
   const resolved = { ...providerDefaults(provider), ...parsed.providers[provider] };
   return {
     ...resolved,
