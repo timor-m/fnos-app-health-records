@@ -2717,12 +2717,7 @@ function withDeterministicDocumentFields(
   }
   const bodyParts =
     plan.documentClassification.primaryType === "checkup"
-      ? result.fields.bodyParts.filter(
-          (item) =>
-            !/^(?:综合体检|健康体检|体检|physicalexam|checkup)$/i.test(
-              compactEvidence(item.name || item.raw),
-            ),
-        )
+      ? [{ raw: "综合体检", name: "综合体检", parent: null, laterality: "unspecified" as const }]
       : result.fields.bodyParts;
   if (
     Object.keys(identifiers).length ===
