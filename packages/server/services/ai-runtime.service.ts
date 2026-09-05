@@ -7,6 +7,7 @@ export type AiRuntimeMessage = {
 
 export type AiRuntimeConfig = {
   provider: string;
+  providerKey?: string;
   baseUrl: string;
   apiKey: string;
   model: string;
@@ -60,34 +61,62 @@ async function upstreamError(response: Response) {
   return detail.slice(0, 600);
 }
 
+export function buildAiChatCompletionRequestBody(config: AiRuntimeConfig, request: AiRuntimeRequest) {
+  const isMiniMax = config.providerKey === "minimax" || config.provider === "minimax";
+  return {
+    model: config.model,
+    temperature: request.temperature ?? 0,
+    ...(isMiniMax
+      ? { max_completion_tokens: Math.min(2_048, request.maxOutputTokens), reasoning_split: true }
+      : { max_tokens: request.maxOutputTokens }),
+    ...(!isMiniMax && request.responseFormat === "json_object"
+      ? { response_format: { type: "json_object" as const } }
+      : {}),
+    messages: request.messages
+  };
+}
+
 export async function executeAiChatCompletion(
   config: AiRuntimeConfig,
   request: AiRuntimeRequest
 ): Promise<AiRuntimeResponse> {
   const started = Date.now();
-  const requestBody = {
-    model: config.model,
-    temperature: request.temperature ?? 0,
-    max_tokens: request.maxOutputTokens,
-    ...(request.responseFormat === "json_object"
-      ? { response_format: { type: "json_object" as const } }
-      : {}),
-    messages: request.messages
-  };
-  const response = await fetchWithTimeout(`${config.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${config.apiKey}`,
-      "content-type": "application/json"
-    },
-    body: JSON.stringify(requestBody)
-  }, {
+  const isMiniMax = config.providerKey === "minimax" || config.provider === "minimax";
+  const requestBody = buildAiChatCompletionRequestBody(config, request);
+  const endpoint = `${config.baseUrl}/chat/completions`;
+  const requestOptions = {
     timeoutMs: request.timeoutMs,
     timeoutCode: request.timeoutCode || "AI_REQUEST_TIMEOUT",
     timeoutMessage: request.timeoutMessage || "AI 服务请求超时",
     networkCode: request.networkCode || "AI_NETWORK_ERROR",
     networkMessage: request.networkMessage || "无法连接 AI 服务"
-  });
+  };
+  const send = (body: Record<string, unknown>) => fetchWithTimeout(endpoint, {
+    method: "POST",
+    headers: {
+      ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}),
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(body)
+  }, requestOptions);
+  let response = await send(requestBody);
+
+  if (!response.ok && response.status === 400 && "response_format" in requestBody) {
+    const detail = await upstreamError(response);
+    if (/response[_ ]format|json[_ ]object/i.test(detail)) {
+      const { response_format: _unsupported, ...fallbackBody } = requestBody;
+      response = await send(fallbackBody);
+    } else {
+      throw Object.assign(new Error(`AI 服务返回 ${response.status}${detail ? `：${detail}` : ""}`), {
+        code: `AI_HTTP_${response.status}`,
+        upstreamStatus: response.status,
+        upstreamDetail: detail,
+        provider: config.provider,
+        model: config.model,
+        elapsedMs: Date.now() - started
+      });
+    }
+  }
 
   if (!response.ok) {
     const detail = await upstreamError(response);
@@ -108,17 +137,26 @@ export async function executeAiChatCompletion(
       message?: {
         content?: string | Array<{ type?: string; text?: string }>;
         reasoning_content?: string;
+        reasoning_details?: Array<{ text?: string }>;
       };
     }>;
     usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
   const contentValue = payload.choices?.[0]?.message?.content;
-  const content = typeof contentValue === "string"
+  let content = typeof contentValue === "string"
     ? contentValue
     : Array.isArray(contentValue)
       ? contentValue.map((item) => item.text || "").join("")
       : "";
-  const reasoningContent = payload.choices?.[0]?.message?.reasoning_content || null;
+  const message = payload.choices?.[0]?.message;
+  const inlineReasoning = isMiniMax
+    ? [...content.matchAll(/<think>([\s\S]*?)<\/think>/gi)].map((match) => match[1]?.trim()).filter(Boolean).join("\n")
+    : "";
+  if (isMiniMax) content = content.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  const reasoningContent = message?.reasoning_content
+    || message?.reasoning_details?.map((item) => item.text || "").filter(Boolean).join("\n")
+    || inlineReasoning
+    || null;
   return {
     provider: config.provider,
     model: payload.model || config.model,

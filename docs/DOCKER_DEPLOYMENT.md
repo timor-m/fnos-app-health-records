@@ -69,7 +69,7 @@ docker compose logs --tail=200 health-records
 
 ## 从 NAS 目录导入报告
 
-Compose 默认把 `docker-compose.yml` 同目录下的 `./reports` 只读挂载到容器 `/reports`。把报告放入该目录后，以管理员登录，进入“上传报告”，点击“从 NAS 导入”即可浏览和选择。支持 HEIC、JPEG、PNG、WebP 和 PDF；一次最多 24 个文件，单个文件最大 40 MB，合计最大 200 MB。
+Compose 默认把 `docker-compose.yml` 同目录下的 `./reports` 只读挂载到容器 `/reports`。把报告放入该目录后，以管理员登录，进入“上传报告”，点击“从 NAS 导入”即可浏览和选择。列表会按需显示图片缩略图，点击可放大查看，PDF 可预览第一页。支持 HEIC、JPEG、PNG、WebP 和 PDF；一次最多 24 个文件，单个文件最大 40 MB，合计最大 200 MB。
 
 从旧版本升级时，如果之前使用 Compose 默认的 `./imports` 目录，请先迁移目录：
 

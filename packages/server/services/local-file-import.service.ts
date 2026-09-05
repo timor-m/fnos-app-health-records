@@ -1,10 +1,18 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, readdirSync, statSync, type Dirent } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync, readdirSync, rmSync, statSync, type Dirent } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createError } from "h3";
-import type { RequestUser } from "../domain/request-user";
+import { isAdministrator, type RequestUser } from "../domain/request-user";
 import { getAppConfig } from "../utils/runtime-config";
+import {
+  checkFnosUserAcl,
+  getFnosUserAccessibleFolders,
+  isFnosUserFileApiConfigured,
+  requireFnosUserReadable
+} from "./fnos-open-api.service";
 import { createUploadFromLocalFiles } from "./upload.service";
+import { requestWorker } from "./ocr-worker-client";
 
 const supportedName = /\.(?:heic|heif|jpe?g|png|webp|pdf)$/i;
 const maxDirectoryEntries = 500;
@@ -95,8 +103,7 @@ function rootId(path: string) {
   return createHash("sha256").update(path).digest("hex").slice(0, 20);
 }
 
-function inspectLocalImportRoots() {
-  const configured = configuredPaths();
+function inspectLocalImportRoots(configured = configuredPaths()) {
   const roots = new Map<string, LocalImportRoot>();
   let unavailableCount = 0;
   for (const configuredPath of configured) {
@@ -130,10 +137,14 @@ export function listLocalImportRoots(): LocalImportRoot[] {
   return inspectLocalImportRoots().roots;
 }
 
-function getRoot(id: string) {
-  const root = listLocalImportRoots().find((item) => item.id === id);
+function getRootFrom(roots: LocalImportRoot[], id: string) {
+  const root = roots.find((item) => item.id === id);
   if (!root) throw createError({ statusCode: 404, statusMessage: "导入目录不存在或尚未授权" });
   return root;
+}
+
+function getRoot(id: string) {
+  return getRootFrom(listLocalImportRoots(), id);
 }
 
 function cleanRelativePath(value: unknown) {
@@ -165,12 +176,180 @@ function resolveInsideRoot(root: LocalImportRoot, path: string) {
   return actual;
 }
 
-export function listLocalImportDirectory(rootIdValue?: unknown, pathValue?: unknown) {
-  const inspected = inspectLocalImportRoots();
+async function inspectLocalImportRootsForUser(user: RequestUser) {
+  const config = getAppConfig();
+  if (config.authMode !== "fnos") return { ...inspectLocalImportRoots(), personalAuthorization: false };
+  if (!user.authenticated || user.provider !== "fnos_gateway") {
+    throw createError({ statusCode: 401, statusMessage: "请先通过飞牛账号登录" });
+  }
+
+  const sharedPaths = configuredPaths();
+  if (!isFnosUserFileApiConfigured()) {
+    if (isAdministrator(user)) return { ...inspectLocalImportRoots(sharedPaths), personalAuthorization: false };
+    return {
+      roots: [] as LocalImportRoot[],
+      availability: {
+        state: "not_configured" as const,
+        configuredCount: 0,
+        unavailableCount: 0,
+        message: "当前飞牛系统尚未提供个人文件授权能力，请升级 fnOS 和飞牛客户端后重试。"
+      },
+      personalAuthorization: false
+    };
+  }
+
+  let personalPaths: string[];
+  try {
+    personalPaths = await getFnosUserAccessibleFolders(user);
+  } catch (error) {
+    if (!isAdministrator(user)) throw error;
+    return { ...inspectLocalImportRoots(sharedPaths), personalAuthorization: false };
+  }
+
+  const inspected = inspectLocalImportRoots([...sharedPaths, ...personalPaths]);
+  if (!inspected.roots.length) {
+    return {
+      ...inspected,
+      availability: {
+        ...inspected.availability,
+        message: "尚未授权可导入目录，可选择 NAS 目录完成个人授权，或直接选择报告文件。"
+      },
+      personalAuthorization: true
+    };
+  }
+  const permissions = await checkFnosUserAcl(user, inspected.roots.map((root) => root.path));
+  const readablePaths = new Set(permissions.filter((item) => item.readable).map((item) => item.path));
+  const roots = inspected.roots.filter((root) => readablePaths.has(root.path));
+  const deniedCount = inspected.roots.length - roots.length;
+  return {
+    roots,
+    availability: roots.length
+      ? {
+          state: "ready" as const,
+          configuredCount: inspected.availability.configuredCount,
+          unavailableCount: inspected.availability.unavailableCount + deniedCount,
+          message: deniedCount ? `${deniedCount} 个目录当前用户无权读取，未在列表中显示。` : inspected.availability.message
+        }
+      : {
+          state: "unavailable" as const,
+          configuredCount: inspected.availability.configuredCount,
+          unavailableCount: inspected.availability.unavailableCount + deniedCount,
+          message: "已存在应用授权目录，但当前飞牛用户没有读取权限；也可以重新选择自己的目录或文件。"
+        },
+    personalAuthorization: true
+  };
+}
+
+function previewMimeType(path: string) {
+  const extension = extname(path).toLowerCase();
+  if (extension === ".pdf") return "application/pdf";
+  if (extension === ".png") return "image/png";
+  if (extension === ".webp") return "image/webp";
+  if (extension === ".heic" || extension === ".heif") return "image/heic";
+  return "image/jpeg";
+}
+
+export function getLocalImportPreviewSource(rootIdValue: unknown, pathValue: unknown) {
+  const root = getRoot(String(rootIdValue || ""));
+  const path = cleanRelativePath(pathValue);
+  if (!path || !supportedName.test(path)) throw createError({ statusCode: 400, statusMessage: "所选文件不支持预览" });
+  const sourcePath = resolveInsideRoot(root, path);
+  const stats = statSync(sourcePath);
+  if (!stats.isFile()) throw createError({ statusCode: 400, statusMessage: "所选路径不是普通文件" });
+  return { root, path, sourcePath, stats, mimeType: previewMimeType(path), filename: basename(path) };
+}
+
+async function generateLocalImportPreview(
+  source: ReturnType<typeof getLocalImportPreviewSource>,
+  variantValue: unknown
+) {
+  const variant = variantValue === "large" ? "large" : "thumbnail";
+  const cacheDirectory = join(tmpdir(), "fnos-health-records-local-previews");
+  mkdirSync(cacheDirectory, { recursive: true, mode: 0o700 });
+  const cacheKey = createHash("sha256").update(`${source.root.id}:${source.path}:${variant}`).digest("hex");
+  const outputPath = join(cacheDirectory, `${cacheKey}.jpg`);
+  try {
+    const cached = statSync(outputPath);
+    if (cached.isFile() && cached.size > 64 && cached.mtimeMs >= source.stats.mtimeMs) {
+      return { path: outputPath, mimeType: "image/jpeg", filename: `${source.filename}.jpg` };
+    }
+  } catch {
+    // Generate the preview below.
+  }
+  if (existsSync(outputPath)) rmSync(outputPath, { force: true });
+  try {
+    await requestWorker({
+      action: "thumbnail",
+      imagePath: source.sourcePath,
+      mimeType: source.mimeType,
+      outputPath,
+      pageNumber: source.mimeType === "application/pdf" ? 1 : null,
+      rotation: 0,
+      maxSize: variant === "large" ? 1600 : 220,
+      quality: variant === "large" ? 88 : 78,
+      renderScale: source.mimeType === "application/pdf" ? (variant === "large" ? 3 : 2) : undefined
+    });
+    const generated = statSync(outputPath);
+    if (!generated.isFile() || generated.size <= 64) throw new Error("预览文件为空");
+    return { path: outputPath, mimeType: "image/jpeg", filename: `${source.filename}.jpg` };
+  } catch (error) {
+    if (existsSync(outputPath)) rmSync(outputPath, { force: true });
+    const code = String((error as { code?: unknown })?.code || "");
+    throw createError({
+      statusCode: /DECODE|FORMAT|PDF/i.test(code) ? 422 : 503,
+      statusMessage: /DECODE|FORMAT|PDF/i.test(code)
+        ? "文件损坏或格式不支持，无法生成预览"
+        : "预览服务暂不可用，请稍后重试"
+    });
+  }
+}
+
+export async function getLocalImportPreviewFile(
+  rootIdValue: unknown,
+  pathValue: unknown,
+  variantValue: unknown
+) {
+  return generateLocalImportPreview(getLocalImportPreviewSource(rootIdValue, pathValue), variantValue);
+}
+
+export async function getLocalImportPreviewFileForUser(
+  user: RequestUser,
+  rootIdValue: unknown,
+  pathValue: unknown,
+  variantValue: unknown
+) {
+  if (getAppConfig().authMode !== "fnos") {
+    if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可预览 NAS 文件" });
+    return getLocalImportPreviewFile(rootIdValue, pathValue, variantValue);
+  }
+  const inspected = await inspectLocalImportRootsForUser(user);
+  const root = getRootFrom(inspected.roots, String(rootIdValue || ""));
+  const path = cleanRelativePath(pathValue);
+  if (!path || !supportedName.test(path)) throw createError({ statusCode: 400, statusMessage: "所选文件不支持预览" });
+  const sourcePath = resolveInsideRoot(root, path);
+  if (isFnosUserFileApiConfigured()) await requireFnosUserReadable(user, [sourcePath]);
+  else if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "当前飞牛系统不支持个人文件预览" });
+  const stats = statSync(sourcePath);
+  if (!stats.isFile()) throw createError({ statusCode: 400, statusMessage: "所选路径不是普通文件" });
+  return generateLocalImportPreview({
+    root,
+    path,
+    sourcePath,
+    stats,
+    mimeType: previewMimeType(path),
+    filename: basename(path)
+  }, variantValue);
+}
+
+function listLocalImportDirectoryFrom(
+  inspected: ReturnType<typeof inspectLocalImportRoots>,
+  rootIdValue?: unknown,
+  pathValue?: unknown
+) {
   const { roots, availability } = inspected;
   if (!rootIdValue) return { roots, current: null, entries: [], truncated: false, availability };
 
-  const root = getRoot(String(rootIdValue));
+  const root = getRootFrom(roots, String(rootIdValue));
   const path = cleanRelativePath(pathValue);
   const directory = resolveInsideRoot(root, path);
   let directoryStats: ReturnType<typeof statSync>;
@@ -219,6 +398,38 @@ export function listLocalImportDirectory(rootIdValue?: unknown, pathValue?: unkn
   return { roots, current: { rootId: root.id, path }, entries, truncated, availability };
 }
 
+export function listLocalImportDirectory(rootIdValue?: unknown, pathValue?: unknown) {
+  return listLocalImportDirectoryFrom(inspectLocalImportRoots(), rootIdValue, pathValue);
+}
+
+export async function listLocalImportDirectoryForUser(
+  user: RequestUser,
+  rootIdValue?: unknown,
+  pathValue?: unknown
+) {
+  if (getAppConfig().authMode !== "fnos") {
+    if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可浏览 NAS 文件" });
+    return { ...listLocalImportDirectory(rootIdValue, pathValue), personalAuthorization: false };
+  }
+  const inspected = await inspectLocalImportRootsForUser(user);
+  const result = listLocalImportDirectoryFrom(inspected, rootIdValue, pathValue);
+  if (!result.current || !isFnosUserFileApiConfigured()) {
+    return { ...result, personalAuthorization: inspected.personalAuthorization };
+  }
+  const root = getRootFrom(inspected.roots, result.current.rootId);
+  const resolvedEntries = result.entries.map((entry) => ({
+    entry,
+    sourcePath: resolveInsideRoot(root, entry.path)
+  }));
+  const permissions = await checkFnosUserAcl(user, resolvedEntries.map((item) => item.sourcePath));
+  const readablePaths = new Set(permissions.filter((item) => item.readable).map((item) => item.path));
+  return {
+    ...result,
+    entries: resolvedEntries.filter((item) => readablePaths.has(item.sourcePath)).map((item) => item.entry),
+    personalAuthorization: inspected.personalAuthorization
+  };
+}
+
 export function importLocalFiles(
   user: RequestUser,
   memberId: string,
@@ -249,5 +460,86 @@ export function importLocalFiles(
       rotation: Number(file.rotation || 0)
     };
   });
+  return createUploadFromLocalFiles(user, memberId, resolved);
+}
+
+function resolveFilesFromRoots(
+  roots: LocalImportRoot[],
+  files: Array<{ rootId?: unknown; path?: unknown; rotation?: unknown }>
+) {
+  if (!Array.isArray(files)) throw createError({ statusCode: 400, statusMessage: "请选择要导入的文件" });
+  if (!files.length) throw createError({ statusCode: 400, statusMessage: "请选择至少一个报告文件" });
+  if (files.length > 24) throw createError({ statusCode: 413, statusMessage: "一次最多导入 24 个文件" });
+  const seen = new Set<string>();
+  return files.map((file) => {
+    const root = getRootFrom(roots, String(file.rootId || ""));
+    const path = cleanRelativePath(file.path);
+    if (!path) throw createError({ statusCode: 400, statusMessage: "不能将目录作为报告导入" });
+    const key = `${root.id}:${path}`;
+    if (seen.has(key)) throw createError({ statusCode: 400, statusMessage: "不能重复导入同一个文件" });
+    seen.add(key);
+    const sourcePath = resolveInsideRoot(root, path);
+    const stats = statSync(sourcePath);
+    if (!stats.isFile()) throw createError({ statusCode: 400, statusMessage: `“${basename(path)}”不是普通文件` });
+    return { originalName: basename(path), sourcePath, rotation: Number(file.rotation || 0) };
+  });
+}
+
+export async function importLocalFilesForUser(
+  user: RequestUser,
+  memberId: string,
+  files: Array<{ rootId?: unknown; path?: unknown; rotation?: unknown }>
+) {
+  if (getAppConfig().authMode !== "fnos") {
+    if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可从 NAS 导入报告" });
+    return importLocalFiles(user, memberId, files);
+  }
+  const inspected = await inspectLocalImportRootsForUser(user);
+  const resolved = resolveFilesFromRoots(inspected.roots, files);
+  if (isFnosUserFileApiConfigured()) await requireFnosUserReadable(user, resolved.map((file) => file.sourcePath));
+  else if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "当前飞牛系统不支持个人文件导入" });
+  return createUploadFromLocalFiles(user, memberId, resolved);
+}
+
+export async function importAuthorizedFnosFiles(
+  user: RequestUser,
+  memberId: string,
+  pathValues: unknown
+) {
+  if (getAppConfig().authMode !== "fnos" || !isFnosUserFileApiConfigured()) {
+    throw createError({ statusCode: 400, statusMessage: "当前部署环境不支持飞牛用户文件授权" });
+  }
+  if (!Array.isArray(pathValues) || !pathValues.length) {
+    throw createError({ statusCode: 400, statusMessage: "请选择至少一个报告文件" });
+  }
+  if (pathValues.length > 24) throw createError({ statusCode: 413, statusMessage: "一次最多导入 24 个文件" });
+  const requestedPaths = pathValues.map((value) => String(value || "").trim());
+  if (requestedPaths.some((path) => !path || path.length > 4096 || !isAbsolute(path) || path.includes("\0") || !supportedName.test(path))) {
+    throw createError({ statusCode: 400, statusMessage: "所选文件路径或格式无效" });
+  }
+  if (new Set(requestedPaths).size !== requestedPaths.length) {
+    throw createError({ statusCode: 400, statusMessage: "不能重复导入同一个文件" });
+  }
+
+  await requireFnosUserReadable(user, requestedPaths);
+  const resolved = requestedPaths.map((requestedPath) => {
+    let sourcePath: string;
+    try {
+      sourcePath = realpathSync(requestedPath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      throw createError({
+        statusCode: code === "EACCES" || code === "EPERM" ? 403 : 404,
+        statusMessage: code === "EACCES" || code === "EPERM" ? "没有权限读取所选文件" : "所选文件不存在"
+      });
+    }
+    const stats = statSync(sourcePath);
+    if (!stats.isFile()) throw createError({ statusCode: 400, statusMessage: "不能将目录作为报告导入" });
+    return { originalName: basename(requestedPath), sourcePath, rotation: 0 };
+  });
+  const canonicalPaths = resolved.map((file) => file.sourcePath);
+  if (canonicalPaths.some((path, index) => path !== requestedPaths[index])) {
+    await requireFnosUserReadable(user, canonicalPaths);
+  }
   return createUploadFromLocalFiles(user, memberId, resolved);
 }

@@ -8,7 +8,13 @@ OCR 失败不会删除已保存的原件。修复环境后可在报告详情中�
 
 ## AI 配置
 
-AI Provider 在“我的 -> AI 配置”中设置。支持 OpenAI-compatible Provider 和 Ollama，可按场景选择模型。视觉模型只应配置支持图片输入的模型，普通文本模型不能用于视觉任务。
+AI Provider 在“我的 -> AI 配置”中设置。支持常用 OpenAI-compatible Provider、MiniMax 和 Ollama，可按场景选择模型。视觉模型只应配置支持图片输入的模型，普通文本模型不能用于视觉任务。
+
+“单次请求超时”控制每个报告解析单元等待 AI 返回的最长时间，默认 600 秒，可设置为 30～3600 秒。本地模型首次加载或 NAS 推理较慢时可适当提高；修改后新发起的解析任务生效。
+
+MiniMax 选择内置预设后，中国大陆默认使用 `https://api.minimaxi.com/v1`，填写 API Key 即可使用默认的 `MiniMax-M2.7`。当前 MiniMax M2 系列在本应用中仅用于 OCR 文本整理，请保持视觉增强关闭；海外账号可将地址改为 `https://api.minimax.io/v1`。
+
+`qwen2.5:7b` 可作为 Ollama 文本模型使用，但不能填写到视觉模型栏。首次测试前建议先执行 `ollama run qwen2.5:7b` 完成下载和冷启动；NAS 性能较低时，首次响应可能需要较长时间。长报告建议为模型提供至少 16K 上下文，Ollama 的 OpenAI-compatible API 不能在单次请求中调整上下文，需要通过 Modelfile 创建对应配置。
 
 AI 结果会经过本地证据校验。无法回指 OCR 原文、单位不明确或来源存在冲突的结果不会默认进入趋势，但仍可在报告中查看和人工校对。
 

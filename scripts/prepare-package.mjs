@@ -106,8 +106,13 @@ const privilege = {
   groupname: template.appName
 };
 
-// Existing NAS files are selected through fnOS authorized paths, not an app-owned data share.
-const resource = {};
+// Keep the existing administrator-shared path flow and add current-user file authorization.
+const resource = {
+  "api-scope": [
+    "trim.file.userAccess",
+    "trim.file.userAcl"
+  ]
+};
 
 const manifest = `appname=${template.appName}
 version=${version}
@@ -124,6 +129,7 @@ distributor_url=${template.distributorUrl}
 os_min_version=${template.osMinVersion}
 desktop_uidir=ui
 desktop_applaunchname=${template.desktopLaunchName}
+micro_app=true
 install_dep_apps=${template.runtimeDependency}
 ctl_stop=true
 disable_authorization_path=false
@@ -318,6 +324,7 @@ start_app() {
     STORAGE_DIR="\${TRIM_PKGVAR}/data" \\
     TRIM_PKGVAR="\${TRIM_PKGVAR}" \\
     TRIM_APPDEST="\${TRIM_APPDEST}" \\
+    TRIM_API_TOKEN="\${TRIM_API_TOKEN:-}" \\
     TRIM_DATA_ACCESSIBLE_PATHS="\${TRIM_DATA_ACCESSIBLE_PATHS:-}" \\
     OCR_WORKER_SCRIPT="\${OCR_WORKER_SCRIPT}" \\
     OCR_SETUP_SCRIPT="\${OCR_SETUP_SCRIPT}" \\

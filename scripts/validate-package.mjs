@@ -99,7 +99,10 @@ const privilege = readJson("config/privilege");
 check(privilege?.defaults?.["run-as"] === "package", "config/privilege must use run-as=package");
 
 const resource = readJson("config/resource");
-check(resource && Object.keys(resource).length === 0, "starter resource declaration should be empty");
+check(
+  JSON.stringify(resource?.["api-scope"]) === JSON.stringify(["trim.file.userAccess", "trim.file.userAcl"]),
+  "fnOS user file API scopes mismatch"
+);
 
 const uiConfig = readJson("app/ui/config");
 const uiEntry = uiConfig?.[".url"]?.[template.desktopLaunchName];
@@ -107,6 +110,7 @@ check(uiEntry?.gatewayPrefix === template.gatewayPrefix, "gatewayPrefix mismatch
 check(uiEntry?.gatewaySocket === template.gatewaySocket, "gatewaySocket mismatch");
 check(uiEntry?.url === template.gatewayPrefix, "gateway URL mismatch");
 check(uiEntry?.port === undefined, "gateway entry must not declare port");
+check(manifest.micro_app === "true", "fnOS user file picker requires micro_app=true");
 
 const iconRoot = pngDimensions("ICON.PNG");
 const icon256 = pngDimensions("ICON_256.PNG");
@@ -146,6 +150,7 @@ if (existsSync(join(packageDir, "cmd/main"))) {
   const mainScript = readFileSync(join(packageDir, "cmd/main"), "utf8");
   check(mainScript.includes("fnos-authorized-paths"), "cmd/main must persist fnOS authorized paths");
   check(mainScript.includes("TRIM_DATA_ACCESSIBLE_PATHS"), "cmd/main must consume fnOS authorized paths");
+  check(mainScript.includes("TRIM_API_TOKEN"), "cmd/main must pass the fnOS Open API token to the service");
 }
 
 check(!existsSync(join(packageDir, "app/ui/index.cgi")), "gateway template must not include index.cgi");

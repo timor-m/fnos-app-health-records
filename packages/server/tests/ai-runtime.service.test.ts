@@ -71,3 +71,78 @@ test("returns provider status and detail through a stable runtime error", async 
     globalThis.fetch = originalFetch;
   }
 });
+
+test("uses MiniMax completion fields and separates inline reasoning", async () => {
+  const originalFetch = globalThis.fetch;
+  let body: Record<string, unknown> = {};
+  globalThis.fetch = async (_input, init) => {
+    body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+    return new Response(JSON.stringify({
+      model: "MiniMax-M2.7",
+      choices: [{
+        finish_reason: "stop",
+        message: { content: "<think>内部推理</think>\n{\"ok\":true}" }
+      }]
+    }), { status: 200 });
+  };
+  try {
+    const result = await executeAiChatCompletion({
+      provider: "api.minimaxi.com",
+      providerKey: "minimax",
+      baseUrl: "https://api.minimaxi.com/v1",
+      apiKey: "secret",
+      model: "MiniMax-M2.7"
+    }, {
+      messages: [{ role: "user", content: "test" }],
+      responseFormat: "json_object",
+      maxOutputTokens: 8_192,
+      temperature: 1,
+      timeoutMs: 15_000
+    });
+    assert.equal(body.max_completion_tokens, 2_048);
+    assert.equal(body.reasoning_split, true);
+    assert.equal("max_tokens" in body, false);
+    assert.equal("response_format" in body, false);
+    assert.equal(result.content, "{\"ok\":true}");
+    assert.equal(result.reasoningContent, "内部推理");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("retries without json_object when a compatible service explicitly rejects it", async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+    bodies.push(body);
+    if (bodies.length === 1) {
+      return new Response(JSON.stringify({
+        error: "'response_format.type' must be 'json_schema' or 'text'"
+      }), { status: 400 });
+    }
+    return new Response(JSON.stringify({
+      model: "qwen2.5-7b-instruct",
+      choices: [{ finish_reason: "stop", message: { content: "```json\n{\"ok\":true}\n```" } }]
+    }), { status: 200 });
+  };
+  try {
+    const result = await executeAiChatCompletion({
+      provider: "localhost:1234",
+      providerKey: "ollama",
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: "",
+      model: "qwen2.5-7b-instruct"
+    }, {
+      messages: [{ role: "user", content: "test" }],
+      responseFormat: "json_object",
+      maxOutputTokens: 128,
+      timeoutMs: 15_000
+    });
+    assert.deepEqual(bodies[0]?.response_format, { type: "json_object" });
+    assert.equal("response_format" in (bodies[1] || {}), false);
+    assert.match(result.content, /\{"ok":true\}/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

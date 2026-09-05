@@ -2,7 +2,7 @@ import { createError, defineEventHandler, getQuery } from "h3";
 import { ok } from "../../../utils/api-response";
 import { getRequestUser } from "../../../utils/request-user";
 import { isAdministrator } from "../../../domain/request-user";
-import { parseStoredSettings, resolveProvider } from "../../../services/ai-settings.service";
+import { parseStoredSettings, resolveAiBaseUrl, resolveProvider } from "../../../services/ai-settings.service";
 import { normalizeAiProvider, aiProviderCatalog } from "../../../services/ai-provider";
 import { fetchWithTimeout } from "../../../utils/outbound-request";
 
@@ -20,7 +20,7 @@ export default defineEventHandler(async (event) => {
     : current.apiKey;
 
   // 获取 Base URL
-  const baseUrl = current.baseUrl;
+  const baseUrl = resolveAiBaseUrl(provider, query.baseUrl, current.baseUrl);
 
   if (aiProviderCatalog[provider].apiKeyRequired !== false && !apiKey) {
     throw createError({

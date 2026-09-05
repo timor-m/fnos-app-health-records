@@ -12,6 +12,7 @@ import {
 } from "../services/ai-settings.service.ts";
 import { isAiExtractionConfigured } from "../services/ai-extraction.service.ts";
 import { executeAiTask } from "../services/ai-task.service.ts";
+import { aiProviderCatalog } from "../services/ai-provider.ts";
 
 async function withDatabase(run: () => Promise<void> | void) {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-ai-settings-"));
@@ -58,6 +59,7 @@ test("migrates the legacy flat AI configuration into the selected provider", asy
     assert.equal(settings.textModel, "legacy-text");
     assert.equal(settings.visionModel, "legacy-vision");
     assert.equal(settings.visionEnabled, true);
+    assert.equal(settings.requestTimeoutSeconds, 600);
     assert.equal(settings.apiKey, "legacy-secret-key");
     assert.equal(settings.apiKeyMasked.includes("legacy-secret-key"), false);
   });
@@ -109,6 +111,21 @@ test("retains independent provider configurations when switching models", async 
     assert.equal("apiKey" in stored, false);
     assert.equal(JSON.stringify(stored).includes("deepseek-secret-key"), false);
     assert.equal(JSON.stringify(stored).includes("qwen-secret-key"), false);
+  });
+});
+
+test("stores a global AI request timeout and exposes it to task execution", async () => {
+  await withDatabase(() => {
+    assert.equal(getAiSettings(false).requestTimeoutSeconds, 600);
+    const saved = saveAiSettings({ requestTimeoutSeconds: 900 });
+    assert.equal(saved.requestTimeoutSeconds, 900);
+    assert.equal(getAiTaskSettings("report_extraction", false).requestTimeoutSeconds, 900);
+
+    assert.throws(
+      () => saveAiSettings({ requestTimeoutSeconds: 29 }),
+      (error: unknown) => `${(error as { statusText?: string; message?: string }).statusText} ${(error as Error).message}`
+        .includes("30 至 3600 秒")
+    );
   });
 });
 
@@ -225,6 +242,128 @@ test("tests the selected provider with unsaved form values", async () => {
       assert.equal(requestedUrl, "https://unsaved.example.com/v1/chat/completions");
       assert.equal(requestedModel, "unsaved-qwen-model");
       assert.equal(getAiSettings(false).providerSettings.qwen.apiKeyConfigured, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test("uses Ollama without an API key and normalizes its OpenAI-compatible address", async () => {
+  await withDatabase(async () => {
+    assert.equal(aiProviderCatalog.ollama.apiKeyRequired, false);
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = "";
+    let authorization: string | null = "unexpected";
+    let requestBody: Record<string, unknown> = {};
+    globalThis.fetch = async (input, init) => {
+      requestedUrl = String(input);
+      authorization = new Headers(init?.headers).get("authorization");
+      requestBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        model: "qwen2.5:7b",
+        choices: [{ finish_reason: "stop", message: { content: "{\"ok\":true}" } }]
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    try {
+      const saved = saveAiSettings({
+        enabled: true,
+        provider: "ollama",
+        baseUrl: "http://ollama.local:11434",
+        textModel: "qwen2.5:7b"
+      });
+      assert.equal(saved.baseUrl, "http://ollama.local:11434/v1");
+      assert.equal(isAiExtractionConfigured(), true);
+      const result = await testAiConnection({ provider: "ollama" });
+      assert.equal(result.model, "qwen2.5:7b");
+      assert.equal(requestedUrl, "http://ollama.local:11434/v1/chat/completions");
+      assert.equal(authorization, null);
+      assert.deepEqual(requestBody.response_format, { type: "json_object" });
+      assert.equal(requestBody.max_tokens, 128);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test("keeps MiniMax configuration independent and validates structured text output", async () => {
+  await withDatabase(async () => {
+    const originalFetch = globalThis.fetch;
+    let requestBody: Record<string, unknown> = {};
+    globalThis.fetch = async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        model: "MiniMax-M2.7",
+        choices: [{
+          finish_reason: "stop",
+          message: { content: "<think>先检查格式</think>\n{\"ok\":true}" }
+        }]
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    try {
+      const saved = saveAiSettings({
+        enabled: true,
+        provider: "minimax",
+        apiKey: "minimax-test-key"
+      });
+      assert.equal(saved.baseUrl, "https://api.minimaxi.com/v1");
+      assert.equal(saved.textModel, "MiniMax-M2.7");
+      assert.equal(saved.providerSettings.minimax.apiKeyConfigured, true);
+      const result = await testAiConnection({ provider: "minimax" });
+      assert.equal(result.model, "MiniMax-M2.7");
+      assert.equal(requestBody.temperature, 1);
+      assert.equal(requestBody.max_completion_tokens, 128);
+      assert.equal(requestBody.reasoning_split, true);
+      assert.equal("response_format" in requestBody, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test("rejects visual enhancement for the MiniMax preset", async () => {
+  await withDatabase(async () => {
+    assert.throws(
+      () => saveAiSettings({
+        provider: "minimax",
+        apiKey: "minimax-test-key",
+        visionEnabled: true,
+        visionModel: "MiniMax-M2.7"
+      }),
+      (error: unknown) => {
+        const value = error as { status?: number; statusText?: string; message?: string };
+        return value.status === 400 && `${value.statusText} ${value.message}`.includes("不支持视觉增强");
+      }
+    );
+    await assert.rejects(
+      () => testAiConnection({ provider: "minimax", testVision: true }),
+      (error: unknown) => {
+        const value = error as { status?: number; statusText?: string; message?: string };
+        return value.status === 400 && `${value.statusText} ${value.message}`.includes("不支持图片输入");
+      }
+    );
+  });
+});
+
+test("reports an Ollama model that cannot return structured JSON", async () => {
+  await withDatabase(async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      model: "qwen2.5:7b",
+      choices: [{ finish_reason: "stop", message: { content: "ok" } }]
+    }), { status: 200, headers: { "content-type": "application/json" } });
+    try {
+      await assert.rejects(
+        () => testAiConnection({
+          provider: "ollama",
+          baseUrl: "http://ollama.local:11434",
+          textModel: "qwen2.5:7b"
+        }),
+        (error: unknown) => {
+          const value = error as { status?: number; statusText?: string; message?: string };
+          return value.status === 502
+            && `${value.statusText} ${value.message}`.includes("结构化 JSON");
+        }
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }

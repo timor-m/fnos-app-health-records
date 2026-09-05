@@ -92,7 +92,8 @@
 - [x] 原件查看、导出、删除、授权、配置、备份和登录失败审计。
 - [x] AI 调用次数、耗时、Token 和失败状态审计。
 - [ ] 视觉发送审计明细。
-- [ ] AI Provider 增加 Ollama 预设：继续使用 OpenAI-compatible `/v1/chat/completions`，支持可编辑服务地址、免 API Key、手动填写文本模型、连接测试和独立配置保存；首期仅正式支持文本模型，不包含模型下载管理、多个 Ollama 实例、自动模型发现和视觉能力检测。
+- [x] AI Provider 增加 Ollama 预设：继续使用 OpenAI-compatible `/v1/chat/completions`，支持可编辑服务地址、免 API Key、手动填写文本模型、连接测试和独立配置保存；文本连接测试同时验证报告整理依赖的 JSON 输出能力。
+- [x] AI Provider 增加 MiniMax 预设：提供中国大陆 OpenAI-compatible 默认地址和 `MiniMax-M2.7` 文本模型，适配推理内容、输出参数和结构化结果测试，并禁止当前 M2 系列误启用视觉增强。
 - [ ] Ollama 预设补齐 fnOS 同机、Docker 访问宿主机和局域网其他设备的地址说明，并验证长报告 JSON 输出、指标遗漏、上下文长度、输出截断、请求超时及服务不可达提示。
 - [ ] Ollama 后续增强：通过 `/api/tags` 获取已安装模型，按模型声明上下文长度、最大输出 Token 和文本/视觉能力，并允许为不同 AI 任务选择 Ollama 模型。
 

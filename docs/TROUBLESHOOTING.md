@@ -12,6 +12,8 @@
 
 **fnOS 看不到已授权目录**：确认应用中心已授权正确目录，并停止后重新启动应用。fnOS 目录授权由系统注入，应用设置变更不会替代重启。
 
+**普通用户无法打开 NAS 文件选择器**：个人文件授权要求 fnOS `1.2.0401`、飞牛客户端 App `1.34.0` 及以上，并且必须从健康档案的 fnOS 网关入口访问。升级后重新安装或更新应用，使文件授权 Scope 生效。
+
 **Docker 看不到报告**：确认 `REPORTS_HOST_PATH` 指向 Docker 主机上的真实目录，目录以只读方式挂载到 `/reports`，然后执行：
 
 ```bash
@@ -35,7 +37,7 @@ docker compose exec health-records sh -c 'ls -la /reports | head'
 
 **PDF 清晰但指标缺失**：部分 PDF 只有不完整的文字层。应用会按页补充高清 OCR；可在报告处理详细日志中确认页面是否执行文字层与 OCR 合并，之后重试 OCR+AI。
 
-**Ollama 无法连接**：Docker 不要填写 `127.0.0.1`，应使用 `host.docker.internal` 或 Ollama 所在机器的局域网 IP。确认 Ollama 监听地址、防火墙和模型名称正确。
+**Ollama 无法连接**：Docker 不要填写 `127.0.0.1`，应使用 `host.docker.internal` 或 Ollama 所在机器的局域网 IP。确认 Ollama 监听地址、防火墙和模型名称正确。`qwen2.5:7b` 应填写在文本模型栏，API Key 可以留空；首次测试前建议运行 `ollama run qwen2.5:7b`，避免模型冷启动被误判为不可用。
 
 ## 指标和趋势
 

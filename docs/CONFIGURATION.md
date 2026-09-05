@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 身份认证 | fnOS 网关账号 | 本地账号，首次登录默认 `admin/admin` |
 | 数据目录 | 应用私有目录 | `/data` 或 `DATA_HOST_PATH` |
-| 导入目录 | fnOS 应用设置授权目录 | `REPORTS_HOST_PATH` 只读挂载到 `/reports` |
+| 导入目录 | 当前用户个人授权；兼容管理员应用设置共享授权 | `REPORTS_HOST_PATH` 只读挂载到 `/reports` |
 | 访问前缀 | `/app/fnos-app-health-records` | `/` |
 | 反向代理 | 通常由 fnOS 网关处理 | 用户自行配置，可信代理需设置 `TRUST_PROXY=1` |
 
@@ -33,9 +33,11 @@ TRUST_PROXY=1
 
 错误配置可能导致登录 403、Cookie 无法保存、备份下载失败或上传超时。
 
-## AI 与 Ollama
+## AI、MiniMax 与 Ollama
 
-AI Provider 在“我的 -> AI 配置”中设置。Ollama 不需要 API Key。Docker 容器访问宿主机 Ollama 时使用：
+AI Provider 在“我的 -> AI 配置”中设置。单个报告解析单元的请求超时默认 600 秒，可在页面设置为 30～3600 秒。MiniMax 可直接选择内置预设，中国大陆默认地址为 `https://api.minimaxi.com/v1`，填写 API Key 后使用；当前 MiniMax M2 系列仅支持文本整理，不要开启视觉增强。
+
+Ollama 不需要 API Key。Docker 容器访问宿主机 Ollama 时使用：
 
 ```text
 http://host.docker.internal:11434/v1

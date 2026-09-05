@@ -10,6 +10,7 @@ export type ApiResponse<T> = {
 
 export type Session = {
   id: string;
+  appName: string;
   displayName: string;
   provider: "fnos_gateway" | "local" | "development";
   authenticated: boolean;

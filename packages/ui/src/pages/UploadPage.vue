@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, ref } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from "vue";
 import {
   ArrowDown, ArrowUp, Camera, CheckCircle2, ChevronRight, CircleAlert, FileImage, FileText,
   Folder, FolderOpen, HardDrive, ImagePlus, LoaderCircle, RefreshCw, RotateCw, UploadCloud, X
 } from "@lucide/vue";
 import { useAppContext } from "../composables/useAppContext";
-import { request, requestUpload } from "../utils/api";
+import { apiUrl, request, requestUpload } from "../utils/api";
 import { describeTechnical } from "../utils/error";
 import { getDeploymentCopy } from "../utils/deployment-copy";
 import type { ProcessingJob } from "../types/api";
@@ -47,6 +47,7 @@ type LocalBrowserResponse = {
     unavailableCount: number;
     message: string | null;
   };
+  personalAuthorization: boolean;
 };
 type SelectedLocalFile = { rootId: string; path: string; name: string; size: number };
 
@@ -69,6 +70,10 @@ const localEntries = ref<LocalImportEntry[]>([]);
 const localTruncated = ref(false);
 const localAvailability = ref<LocalBrowserResponse["availability"] | null>(null);
 const selectedLocalFiles = ref<SelectedLocalFile[]>([]);
+const localPreviewEntry = ref<LocalImportEntry | null>(null);
+const localPreviewFailed = ref(new Set<string>());
+const localLargePreviewFailed = ref(false);
+const localAuthorizing = ref(false);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 const totalBytes = computed(() => items.value.reduce((total, item) => total + item.file.size, 0));
 const batchGroups = computed(() => groupProcessingJobBatches(jobs.value));
@@ -94,10 +99,41 @@ const localBreadcrumbs = computed(() => {
   return segments.map((name, index) => ({ name, path: segments.slice(0, index + 1).join("/") }));
 });
 const deploymentCopy = computed(() => getDeploymentCopy(app.session.value?.authMode));
+const canUseNasImport = computed(() => app.session.value?.authMode === "fnos" || Boolean(app.session.value?.isAdmin));
+const isFnosImport = computed(() => app.session.value?.authMode === "fnos");
+const fnosAuthStateKey = "health-records:fnos-file-auth";
+const fnosFileExtensions = [".heic", ".heif", ".jpg", ".jpeg", ".png", ".webp", ".pdf"];
 
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function localPreviewUrl(entry: LocalImportEntry, variant: "thumbnail" | "large" = "thumbnail") {
+  if (!localCurrent.value) return "";
+  const params = new URLSearchParams({
+    rootId: localCurrent.value.rootId,
+    path: entry.path,
+    variant
+  });
+  return apiUrl(`local-files/preview?${params.toString()}`);
+}
+
+function localPreviewKey(entry: LocalImportEntry) {
+  return `${localCurrent.value?.rootId || ""}:${entry.path}`;
+}
+
+function localCheckboxId(entry: LocalImportEntry) {
+  return `nas-file-${encodeURIComponent(localPreviewKey(entry))}`;
+}
+
+function markLocalPreviewFailed(entry: LocalImportEntry) {
+  localPreviewFailed.value = new Set(localPreviewFailed.value).add(localPreviewKey(entry));
+}
+
+function openLocalPreview(entry: LocalImportEntry) {
+  localLargePreviewFailed.value = false;
+  localPreviewEntry.value = entry;
 }
 
 function supported(file: File) {
@@ -117,6 +153,128 @@ function createItemId() {
   if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") crypto.getRandomValues(bytes);
   else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+type FnosAuthorizationFlow = "directory" | "files";
+
+function clearFnosAuthorizationQuery() {
+  const url = new URL(window.location.href);
+  for (const key of ["status", "error", "method", "appName", "state", "path", "paths"]) {
+    url.searchParams.delete(key);
+  }
+  window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+async function requestFnosUserPaths(flow: FnosAuthorizationFlow) {
+  const { TrimApp } = await import("@trimjs/web-app");
+  const sdk = new TrimApp();
+  await sdk.ready();
+  const directory = flow === "directory";
+  const options = {
+    directory,
+    ...(directory ? {} : { multiple: true, accept: fnosFileExtensions }),
+    sidebarGroup: ["myFiles", "otherShare", "external", "remote", "favorites", "team"] as const,
+    title: directory ? "选择报告目录" : "选择健康报告",
+    okText: directory ? "授权目录" : "选择并导入"
+  };
+  if (!sdk.isStandaloneWeb) {
+    const result = await sdk.pickUserFile(options);
+    if (!result) return null;
+    if (result.code !== 0) throw new Error(result.msg || "飞牛文件授权失败");
+    return Array.isArray(result.data) ? result.data : [];
+  }
+
+  const state = createItemId();
+  const memberId = app.selectedMemberId.value;
+  sessionStorage.setItem(fnosAuthStateKey, JSON.stringify({ state, flow, memberId }));
+  await sdk.openAppAuth("pickUserFile", {
+    appName: app.session.value?.appName || "fnos-app-health-records",
+    directory,
+    ...(!directory ? { accept: fnosFileExtensions } : {}),
+    sidebarGroup: [...options.sidebarGroup],
+    redirectUri: window.location.pathname,
+    state
+  }, { target: "_self" });
+  return null;
+}
+
+async function submitAuthorizedFnosPaths(paths: string[], memberId = app.selectedMemberId.value) {
+  if (!paths.length) return;
+  if (!memberId) throw new Error("请先选择报告所属成员");
+  localImporting.value = true;
+  localError.value = "";
+  error.value = "";
+  result.value = null;
+  try {
+    result.value = await request<UploadResult>("local-files/import", {
+      method: "POST",
+      body: JSON.stringify({ memberId, authorizedPaths: paths })
+    });
+    clearQueue();
+    selectedLocalFiles.value = [];
+    localBrowserOpen.value = false;
+    startPolling();
+  } finally {
+    localImporting.value = false;
+  }
+}
+
+async function authorizeFnosDirectory() {
+  if (localAuthorizing.value) return;
+  localAuthorizing.value = true;
+  localError.value = "";
+  try {
+    const paths = await requestFnosUserPaths("directory");
+    if (!paths) return;
+    await openLocalBrowser();
+  } catch (cause) {
+    localError.value = cause instanceof Error ? cause.message : "无法打开飞牛目录授权";
+  } finally {
+    localAuthorizing.value = false;
+  }
+}
+
+async function chooseFnosFiles() {
+  if (localAuthorizing.value || localImporting.value) return;
+  localAuthorizing.value = true;
+  localError.value = "";
+  try {
+    const paths = await requestFnosUserPaths("files");
+    if (!paths) return;
+    await submitAuthorizedFnosPaths(paths);
+  } catch (cause) {
+    localError.value = cause instanceof Error ? cause.message : "从飞牛选择文件失败";
+    localBrowserOpen.value = true;
+  } finally {
+    localAuthorizing.value = false;
+  }
+}
+
+async function handleFnosAuthorizationCallback() {
+  const raw = sessionStorage.getItem(fnosAuthStateKey);
+  if (!raw) return;
+  sessionStorage.removeItem(fnosAuthStateKey);
+  try {
+    const pending = JSON.parse(raw) as { state?: unknown; flow?: unknown; memberId?: unknown };
+    const { TrimApp } = await import("@trimjs/web-app");
+    const result = new TrimApp().parseAppAuthCallback(window.location.href);
+    clearFnosAuthorizationQuery();
+    if (typeof pending.state !== "string" || result.state !== pending.state) {
+      throw new Error("飞牛文件授权状态校验失败，请重新选择");
+    }
+    if (result.status === "cancel") return;
+    if (result.status !== "success" || !Array.isArray(result.path)) {
+      throw new Error(result.error === "access_denied" ? "当前飞牛用户无权完成文件授权" : "飞牛文件授权失败");
+    }
+    if (pending.flow === "directory") {
+      await openLocalBrowser();
+      return;
+    }
+    await submitAuthorizedFnosPaths(result.path, typeof pending.memberId === "string" ? pending.memberId : "");
+  } catch (cause) {
+    clearFnosAuthorizationQuery();
+    error.value = cause instanceof Error ? cause.message : "无法处理飞牛文件授权结果";
+  }
 }
 
 function addFiles(files: File[]) {
@@ -237,6 +395,7 @@ async function openLocalBrowser() {
 
 function closeLocalBrowser() {
   if (localImporting.value) return;
+  localPreviewEntry.value = null;
   localBrowserOpen.value = false;
   localError.value = "";
 }
@@ -400,6 +559,9 @@ onBeforeUnmount(() => {
   clearQueue();
   stopPolling();
 });
+onMounted(() => {
+  if (isFnosImport.value) void handleFnosAuthorizationCallback();
+});
 /* 已完成的上传只在当前停留期间保留结果；离开后回到干净的上传工作台。失败任务继续保留以便重试。 */
 onDeactivated(() => {
   if (uploadFinishedSuccessfully.value || cancelledJobs.value) clearFinishedUpload();
@@ -442,7 +604,7 @@ onActivated(() => {
           <Camera :size="18" /><span>拍照</span>
           <input type="file" accept="image/*" capture="environment" aria-label="拍摄报告照片" @change="pick" />
         </label>
-        <button v-if="app.session.value?.isAdmin" class="nas-import-button" type="button" @click="openLocalBrowser">
+        <button v-if="canUseNasImport" class="nas-import-button" type="button" @click="openLocalBrowser">
           <HardDrive :size="18" /><span>从 NAS 导入</span>
         </button>
       </div>
@@ -520,6 +682,17 @@ onActivated(() => {
             <button type="button" title="关闭" :disabled="localImporting" @click="closeLocalBrowser"><X :size="20" /></button>
           </header>
 
+          <div v-if="isFnosImport" class="local-file-auth-actions">
+            <button type="button" :disabled="localAuthorizing || localImporting" @click="chooseFnosFiles">
+              <LoaderCircle v-if="localAuthorizing" class="spin-icon" :size="16" />
+              <UploadCloud v-else :size="16" />
+              直接选择文件
+            </button>
+            <button type="button" :disabled="localAuthorizing || localImporting" @click="authorizeFnosDirectory">
+              <FolderOpen :size="16" />授权其他目录
+            </button>
+          </div>
+
           <div class="local-file-browser">
             <div v-if="localCurrent" class="local-file-toolbar">
               <nav aria-label="当前目录">
@@ -536,8 +709,8 @@ onActivated(() => {
             <div v-else-if="localError && !localRoots.length" class="local-file-empty is-error"><CircleAlert :size="24" /><span>{{ localError }}</span></div>
             <div v-else-if="!localCurrent && !localRoots.length" class="local-file-empty">
               <HardDrive :size="28" />
-              <strong>{{ localAvailability?.state === "unavailable" ? "授权目录当前不可读取" : deploymentCopy.importEmptyTitle }}</strong>
-              <span>{{ localAvailability?.message || deploymentCopy.importEmptyDescription }}</span>
+              <strong>{{ isFnosImport ? "还没有可浏览的授权目录" : localAvailability?.state === "unavailable" ? "授权目录当前不可读取" : deploymentCopy.importEmptyTitle }}</strong>
+              <span>{{ localAvailability?.message || (isFnosImport ? "可在上方直接选择报告文件，或授权一个目录后浏览和预览。" : deploymentCopy.importEmptyDescription) }}</span>
               <button class="soft-action-button" type="button" title="重新检测授权目录" @click="loadLocalDirectory()">
                 <RefreshCw :size="16" /><span>重新检测</span>
               </button>
@@ -553,12 +726,29 @@ onActivated(() => {
                 <button v-if="entry.type === 'directory'" class="local-entry is-directory" type="button" @click="openLocalDirectory(entry)">
                   <Folder :size="20" /><span><strong>{{ entry.name }}</strong><small>文件夹</small></span><ChevronRight :size="17" />
                 </button>
-                <label v-else class="local-entry" :class="{ 'is-selected': isLocalSelected(entry) }">
-                  <input type="checkbox" :checked="isLocalSelected(entry)" @change="toggleLocalFile(entry)" />
-                  <FileText v-if="/\.pdf$/i.test(entry.name)" :size="20" />
-                  <FileImage v-else :size="20" />
-                  <span><strong>{{ entry.name }}</strong><small>{{ formatBytes(entry.size || 0) }}</small></span>
-                </label>
+                <div v-else class="local-entry" :class="{ 'is-selected': isLocalSelected(entry) }">
+                  <input :id="localCheckboxId(entry)" type="checkbox" :checked="isLocalSelected(entry)" @change="toggleLocalFile(entry)" />
+                  <button
+                    class="local-entry-thumbnail"
+                    type="button"
+                    :title="`预览 ${entry.name}`"
+                    :aria-label="`预览 ${entry.name}`"
+                    @click.prevent.stop="openLocalPreview(entry)"
+                  >
+                    <img
+                      v-if="!localPreviewFailed.has(localPreviewKey(entry))"
+                      :src="localPreviewUrl(entry)"
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                      @error="markLocalPreviewFailed(entry)"
+                    />
+                    <FileText v-else-if="/\.pdf$/i.test(entry.name)" :size="20" />
+                    <FileImage v-else :size="20" />
+                    <small v-if="/\.pdf$/i.test(entry.name)">PDF</small>
+                  </button>
+                  <label :for="localCheckboxId(entry)"><strong>{{ entry.name }}</strong><small>{{ formatBytes(entry.size || 0) }}</small></label>
+                </div>
               </template>
               <p v-if="localTruncated" class="local-file-limit">目录内容较多，仅显示前 500 项，请进入更具体的子目录。</p>
             </div>
@@ -573,6 +763,31 @@ onActivated(() => {
               {{ localImporting ? "正在导入" : "导入并开始识别" }}
             </button>
           </footer>
+        </section>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="localPreviewEntry" class="modal-backdrop local-preview-backdrop" @click.self="localPreviewEntry = null">
+        <section class="modal-panel local-preview-modal" role="dialog" aria-modal="true" aria-labelledby="local-preview-title">
+          <header>
+            <div><FileText v-if="/\.pdf$/i.test(localPreviewEntry.name)" :size="20" /><FileImage v-else :size="20" /><h3 id="local-preview-title">{{ localPreviewEntry.name }}</h3></div>
+            <button type="button" title="关闭预览" @click="localPreviewEntry = null"><X :size="20" /></button>
+          </header>
+          <div class="local-preview-stage">
+            <img
+              v-if="!localLargePreviewFailed"
+              :src="localPreviewUrl(localPreviewEntry, 'large')"
+              :alt="`${localPreviewEntry.name} 预览`"
+              @error="localLargePreviewFailed = true"
+            />
+            <div v-else class="local-preview-error">
+              <CircleAlert :size="28" />
+              <strong>暂时无法生成预览</strong>
+              <span>文件仍可正常选择并导入，请稍后重试。</span>
+            </div>
+          </div>
+          <p v-if="/\.pdf$/i.test(localPreviewEntry.name)" class="local-preview-note">PDF 显示第一页，导入后可查看完整报告。</p>
         </section>
       </div>
     </Teleport>

@@ -5,7 +5,7 @@ import SubPageHeader from "../../components/SubPageHeader.vue";
 import FormSelect from "../../components/FormSelect.vue";
 import { request } from "../../utils/api";
 
-type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "ollama";
+type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "minimax" | "ollama";
 type AiProviderOption = {
   key: AiProviderKey;
   label: string;
@@ -38,6 +38,7 @@ type AiTaskBinding = {
 type AiSettings = AiProviderSettings & {
   enabled: boolean;
   provider: AiProviderKey;
+  requestTimeoutSeconds: number;
   apiKey: string;
   providerSettings: Record<AiProviderKey, AiProviderSettings>;
   providers: AiProviderOption[];
@@ -48,6 +49,7 @@ type AiSettings = AiProviderSettings & {
 const ai = ref<AiSettings>({
   enabled: false,
   provider: "deepseek",
+  requestTimeoutSeconds: 600,
   visionEnabled: false,
   baseUrl: "https://api.deepseek.com",
   textModel: "deepseek-v4-flash",
@@ -66,6 +68,7 @@ const loadError = ref("");
 const saving = ref(false);
 const testing = ref(false);
 const currentProvider = computed(() => ai.value.providers.find((item) => item.key === ai.value.provider));
+const supportsVision = computed(() => ai.value.provider !== "minimax");
 
 // 模型列表相关
 const modelListLoading = ref(false);
@@ -79,10 +82,14 @@ const enhancedTesting = ref(false);
 const testSteps = ref<Array<{ name: string; status: string; message: string; elapsedMs?: number }>>([]);
 const implementedTasks = computed(() => ai.value.tasks.filter((task) => task.implemented));
 const visionModelHint = computed(() => {
+  if (!supportsVision.value) return "MiniMax M2 系列当前仅支持文本整理，不能用于视觉增强";
   const model = ai.value.visionModel.trim().toLowerCase();
   if (!model) return "请填写视觉模型名称";
   if (ai.value.textModel.trim() && model === ai.value.textModel.trim().toLowerCase()) {
     return "视觉模型与文本模型相同，请确认该模型确实支持图片输入";
+  }
+  if (ai.value.provider === "ollama" && /^qwen2\.5(?::|$)/i.test(model) && !/vl/i.test(model)) {
+    return "qwen2.5 是文本模型，不能用于视觉增强；请关闭视觉增强或改用明确支持图片输入的模型";
   }
   if (/(\b|[-_:])(vl|vision|visual|llava|moondream|internvl|minicpm[-_]?v|idefics|pixtral|qwen[\w.-]*vl|gemma[\w.-]*3)(\b|[-_:])/i.test(model)) {
     return "已识别为可能支持图片输入的模型，请继续测试确认";
@@ -100,6 +107,7 @@ async function fetchModelList(type: "text" | "vision") {
     // 构建查询参数
     const params = new URLSearchParams();
     params.set("provider", ai.value.provider);
+    params.set("baseUrl", ai.value.baseUrl);
     if (ai.value.apiKey.trim()) {
       params.set("apiKey", ai.value.apiKey.trim());
     }
@@ -186,6 +194,7 @@ function aiBody() {
   return {
     enabled: ai.value.enabled,
     provider: ai.value.provider,
+    requestTimeoutSeconds: ai.value.requestTimeoutSeconds,
     visionEnabled: ai.value.visionEnabled,
     baseUrl: ai.value.baseUrl,
     textModel: ai.value.textModel,
@@ -198,14 +207,16 @@ function changeProvider() {
   const provider = currentProvider.value;
   if (!provider) return;
   const saved = ai.value.providerSettings[provider.key];
-  ai.value.visionEnabled = saved?.visionEnabled ?? false;
+  ai.value.visionEnabled = supportsVision.value ? saved?.visionEnabled ?? false : false;
   ai.value.baseUrl = saved?.baseUrl || provider.defaultBaseUrl;
   ai.value.textModel = saved?.textModel || provider.defaultTextModel;
   ai.value.visionModel = saved?.visionModel || provider.defaultVisionModel;
   ai.value.apiKeyConfigured = Boolean(saved?.apiKeyConfigured);
   ai.value.apiKeyMasked = saved?.apiKeyMasked || "";
   ai.value.apiKey = "";
-  message.value = saved?.apiKeyConfigured
+  message.value = provider.apiKeyRequired === false
+    ? `已载入 ${provider.label} 配置，API Key 可留空`
+    : saved?.apiKeyConfigured
     ? `已载入 ${provider.label} 保存的配置`
     : `${provider.label} 尚未配置 API Key`;
 }
@@ -287,9 +298,14 @@ onUnmounted(() => {
       <div v-else class="settings-form">
         <label class="toggle-row"><div><strong>启用 AI 整理</strong><span>识别后的文本由 AI 整理为结构化字段</span></div><input v-model="ai.enabled" class="switch" type="checkbox" /></label>
         <label><span>AI 服务商</span><FormSelect v-model="ai.provider" :options="ai.providers.map((provider) => ({ value: provider.key, label: provider.label }))" aria-label="AI 服务商" @change="changeProvider" /></label>
-        <label class="toggle-row"><div><strong>视觉增强</strong><span>复杂表格可发送处理后的页面副本</span></div><input v-model="ai.visionEnabled" class="switch" type="checkbox" /></label>
+        <label class="toggle-row"><div><strong>视觉增强</strong><span>{{ supportsVision ? "复杂表格可发送处理后的页面副本" : "MiniMax M2 系列当前仅支持文本整理" }}</span></div><input v-model="ai.visionEnabled" class="switch" type="checkbox" :disabled="!supportsVision" /></label>
         <label><span>API 地址</span><input v-model.trim="ai.baseUrl" :placeholder="currentProvider?.defaultBaseUrl || 'https://api.example.com/v1'" /></label>
-        <div class="form-grid">
+        <label>
+          <span>单次请求超时（秒）</span>
+          <input v-model.number="ai.requestTimeoutSeconds" type="number" min="30" max="3600" step="30" inputmode="numeric" />
+          <small class="field-hint">每个报告解析单元最多等待 30～3600 秒，本地大模型建议保留默认 600 秒或适当提高</small>
+        </label>
+        <div class="form-grid ai-model-grid">
           <label>
             <span>文本模型</span>
             <div class="model-input-group">
@@ -316,8 +332,8 @@ onUnmounted(() => {
           <label>
             <span>视觉模型</span>
             <div class="model-input-group">
-              <input v-model.trim="ai.visionModel" :placeholder="currentProvider?.defaultVisionModel || '填写支持图片输入的模型'" />
-              <button type="button" class="model-refresh-btn" :disabled="modelListLoading" @click="fetchModelList('vision')" title="获取模型列表">
+              <input v-model.trim="ai.visionModel" :disabled="!supportsVision" :placeholder="supportsVision ? currentProvider?.defaultVisionModel || '填写支持图片输入的模型' : 'MiniMax M2 系列不支持图片输入'" />
+              <button type="button" class="model-refresh-btn" :disabled="modelListLoading || !supportsVision" @click="fetchModelList('vision')" title="获取模型列表">
                 <LoaderCircle v-if="modelListLoading" class="spin-icon" :size="14" />
                 <RefreshCw v-else :size="14" />
               </button>
@@ -379,7 +395,7 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="form-actions">
+        <div class="form-actions ai-settings-actions">
           <button type="button" :disabled="saving || testing || enhancedTesting" @click="test">
             <LoaderCircle v-if="testing" class="spin-icon" :size="17" />
             <TestTubeDiagonal v-else :size="17" />

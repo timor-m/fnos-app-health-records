@@ -4,6 +4,7 @@ import { getAiTaskSettings } from "./ai-settings.service";
 import { backfillMemberBloodTypeFromReport } from "./member.service";
 import { aiProviderHasRequiredApiKey, resolveAiMaxOutputTokens, resolveAiTemperature } from "./ai-provider";
 import { executeAiTask } from "./ai-task.service";
+import { buildAiChatCompletionRequestBody } from "./ai-runtime.service";
 import {
   normalizeObservation,
   normalizeReportObservations,
@@ -17,7 +18,6 @@ import {
   applyObservationFieldOverrides,
   bindObservationFieldOverride,
 } from "./observation-field-overrides.service";
-import { configuredRequestTimeout } from "../utils/outbound-request";
 import {
   buildAiExtractionPlan,
   localObservationsForLine,
@@ -1594,10 +1594,7 @@ export const requestAiExtraction: AiExecutor = async (input) => {
       code: "AI_NOT_CONFIGURED",
     });
   }
-  const timeoutMs = configuredRequestTimeout(
-    "AI_REQUEST_TIMEOUT_MS",
-    10 * 60_000,
-  );
+  const timeoutMs = settings.requestTimeoutSeconds * 1_000;
   const userContent = redactAiInputText(input.text);
   const modelMaxOutputTokens = resolveAiMaxOutputTokens(settings.provider);
   const maxOutputTokens = calculateAiOutputTokenBudget(
@@ -1605,16 +1602,23 @@ export const requestAiExtraction: AiExecutor = async (input) => {
     modelMaxOutputTokens,
   );
   const temperature = resolveAiTemperature(settings.provider, settings.model);
-  const requestBody = {
+  const messages = [
+    { role: "system" as const, content: promptForInput(input) },
+    { role: "user" as const, content: userContent },
+  ];
+  const requestBody = buildAiChatCompletionRequestBody({
+    provider: new URL(settings.baseUrl).host,
+    providerKey: settings.provider,
+    baseUrl: settings.baseUrl,
+    apiKey: "",
     model: settings.model,
+  }, {
+    messages,
     temperature,
-    max_tokens: maxOutputTokens,
-    response_format: { type: "json_object" },
-    messages: [
-      { role: "system" as const, content: promptForInput(input) },
-      { role: "user" as const, content: userContent },
-    ],
-  };
+    responseFormat: "json_object",
+    maxOutputTokens,
+    timeoutMs,
+  });
   await writeAiInputDebugLog({
     provider: new URL(settings.baseUrl).host,
     model: settings.model,
@@ -1636,7 +1640,7 @@ export const requestAiExtraction: AiExecutor = async (input) => {
     requestBody,
   });
   const response = await executeAiTask("report_extraction", {
-    messages: requestBody.messages,
+    messages,
     temperature,
     responseFormat: "json_object",
     maxOutputTokens,

@@ -2,7 +2,7 @@ import { createError, defineEventHandler, readBody } from "h3";
 import { ok } from "../../../utils/api-response";
 import { getRequestUser } from "../../../utils/request-user";
 import { isAdministrator } from "../../../domain/request-user";
-import { parseStoredSettings, resolveProvider } from "../../../services/ai-settings.service";
+import { parseStoredSettings, resolveAiBaseUrl, resolveProvider } from "../../../services/ai-settings.service";
 import { normalizeAiProvider, aiProviderCatalog } from "../../../services/ai-provider";
 import { executeAiChatCompletion } from "../../../services/ai-runtime.service";
 
@@ -42,7 +42,12 @@ export default defineEventHandler(async (event) => {
     : current.apiKey;
   const textModel = String(body.textModel || current.textModel).trim();
   const visionModel = String(body.visionModel || current.visionModel).trim();
-  const baseUrl = current.baseUrl;
+  const baseUrl = resolveAiBaseUrl(provider, body.baseUrl, current.baseUrl);
+  const modelTimeoutMs = provider === "ollama" ? 120_000 : 15_000;
+
+  if (provider === "minimax" && body.visionEnabled === true) {
+    throw createError({ statusCode: 400, statusMessage: "MiniMax M2 系列当前不支持视觉增强，请关闭视觉增强" });
+  }
 
   // 验证必填项
   if (aiProviderCatalog[provider].apiKeyRequired !== false && !apiKey) {
@@ -64,7 +69,8 @@ export default defineEventHandler(async (event) => {
 
   // 步骤 1：测试 API Key 可用性（通过获取模型列表）
   const step1Start = Date.now();
-  steps.push({ name: "测试 API Key", status: "pending", message: "正在验证..." });
+  const serviceStepName = provider === "ollama" ? "测试 Ollama 服务" : "测试 API Key";
+  steps.push({ name: serviceStepName, status: "pending", message: "正在验证..." });
 
   try {
     const modelsUrl = `${baseUrl}/models`;
@@ -80,9 +86,9 @@ export default defineEventHandler(async (event) => {
     }
 
     steps[steps.length - 1] = {
-      name: "测试 API Key",
+      name: serviceStepName,
       status: "success",
-      message: "API Key 验证通过",
+      message: provider === "ollama" ? "Ollama 服务可访问" : "API Key 验证通过",
       elapsedMs: Date.now() - step1Start
     };
   } catch (cause) {
@@ -91,7 +97,7 @@ export default defineEventHandler(async (event) => {
     const timedOut = /TIMEOUT|TIMEDOUT/i.test(code);
 
     steps[steps.length - 1] = {
-      name: "测试 API Key",
+      name: serviceStepName,
       status: "failed",
       message: timedOut ? "连接超时" : `验证失败：${error.message}`,
       elapsedMs: Date.now() - step1Start
@@ -111,12 +117,12 @@ export default defineEventHandler(async (event) => {
 
   try {
     const result = await executeAiChatCompletion(
-      { provider, baseUrl, apiKey, model: textModel },
+      { provider, providerKey: provider, baseUrl, apiKey, model: textModel },
       {
         messages: [{ role: "user", content: "reply ok" }],
         temperature: 0,
         maxOutputTokens: 4,
-        timeoutMs: 15_000,
+        timeoutMs: modelTimeoutMs,
         timeoutCode: "TEXT_MODEL_TIMEOUT",
         timeoutMessage: "文本模型测试超时",
         networkCode: "TEXT_MODEL_NETWORK_ERROR",
@@ -144,7 +150,9 @@ export default defineEventHandler(async (event) => {
     } else if (upstreamStatus === 429) {
       message = "请求受限，请检查额度或余额";
     } else if (timedOut) {
-      message = "连接超时，请检查网络";
+      message = provider === "ollama"
+        ? "模型启动或响应超时，请先在 Ollama 中运行该模型并检查设备内存"
+        : "连接超时，请检查网络";
     } else {
       message = `测试失败：${error.message}`;
     }
@@ -171,7 +179,7 @@ export default defineEventHandler(async (event) => {
 
     try {
       const result = await executeAiChatCompletion(
-        { provider, baseUrl, apiKey, model: visionModel },
+        { provider, providerKey: provider, baseUrl, apiKey, model: visionModel },
         {
           messages: [{
             role: "user",
@@ -182,7 +190,7 @@ export default defineEventHandler(async (event) => {
           }],
           temperature: 0,
           maxOutputTokens: 4,
-          timeoutMs: 15_000,
+          timeoutMs: modelTimeoutMs,
           timeoutCode: "VISION_MODEL_TIMEOUT",
           timeoutMessage: "视觉模型测试超时",
           networkCode: "VISION_MODEL_NETWORK_ERROR",
@@ -236,7 +244,7 @@ export default defineEventHandler(async (event) => {
 
     try {
       const result = await executeAiChatCompletion(
-        { provider, baseUrl, apiKey, model: visionModel },
+        { provider, providerKey: provider, baseUrl, apiKey, model: visionModel },
         {
           messages: [{
             role: "user",
@@ -247,7 +255,7 @@ export default defineEventHandler(async (event) => {
           }],
           temperature: 0,
           maxOutputTokens: 200,
-          timeoutMs: 15_000,
+          timeoutMs: modelTimeoutMs,
           timeoutCode: "MULTIMODAL_PROBE_TIMEOUT",
           timeoutMessage: "多模态探测超时",
           networkCode: "MULTIMODAL_PROBE_NETWORK_ERROR",

@@ -10,6 +10,7 @@ export default defineEventHandler((event) => {
   const user = getRequestUser(event);
   return ok({
     ...user,
+    appName: config.appName,
     isAdmin: isAdministrator(user),
     mustChangePassword: Boolean(user.mustChangePassword),
     authMode: config.authMode,

@@ -9,6 +9,8 @@ const props = defineProps<{
   disabled?: boolean;
   showTime?: boolean;
   ariaLabel?: string;
+  minYear?: number;
+  maxYear?: number;
 }>();
 const emit = defineEmits<{ "update:modelValue": [value: string | null] }>();
 
@@ -56,6 +58,7 @@ const selectedHour = ref(0);
 const selectedMinute = ref(0);
 const displayedYear = ref(selectedYear.value);
 const displayedMonth = ref(selectedMonth.value);
+const currentYear = new Date().getFullYear();
 
 watch(open, (value) => {
   if (value) {
@@ -85,8 +88,12 @@ watch(open, (value) => {
 
 // 生成滚轮数据
 const years = computed(() => {
-  const current = new Date().getFullYear();
-  return Array.from({ length: 21 }, (_, i) => current - 10 + i);
+  const configuredMin = Number.isInteger(props.minYear) ? Number(props.minYear) : 1900;
+  const configuredMax = Number.isInteger(props.maxYear) ? Number(props.maxYear) : currentYear + 20;
+  const existingYear = parsedDate.value?.year;
+  const start = Math.min(configuredMin, configuredMax, existingYear ?? configuredMin);
+  const end = Math.max(configuredMin, configuredMax, existingYear ?? configuredMax);
+  return Array.from({ length: end - start + 1 }, (_, i) => start + i);
 });
 
 const months = computed(() => Array.from({ length: 12 }, (_, i) => i + 1));

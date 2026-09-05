@@ -487,6 +487,41 @@ function manualFieldSet(row: Pick<FindingRow, "manualFieldsJson">) {
   }
 }
 
+const trackingGroupLabelField = "trackingGroupLabel";
+
+function fallbackTrackingDescriptor(row: FindingRow): TrackingDescriptor {
+  const identifyingText = [row.organ, row.region, row.findingType, row.findingName]
+    .filter(Boolean).join(" ");
+  const organ = String(row.organ || "").trim()
+    || normalizeMorphologyOrgan(row.findingName)
+    || "部位待确认";
+  const type = String(row.findingType || "").trim()
+    || String(row.findingName || "").trim()
+    || "形态发现";
+  const laterality = normalizeLaterality(row.laterality, identifyingText);
+  const region = String(row.region || "").trim() || null;
+  return {
+    organ,
+    type,
+    laterality,
+    region,
+    baseKey: [organ, type, laterality].map(compactKey).join("|")
+  };
+}
+
+function trackingGroupPresentation(groupRows: FindingRow[], descriptors: Map<string, TrackingDescriptor>) {
+  const preferredRow = groupRows.find((row) => manualFieldSet(row).has(trackingGroupLabelField))
+    || groupRows.find((row) => Boolean(descriptors.get(row.id)?.region))
+    || groupRows.find((row) => descriptors.has(row.id))
+    || groupRows[0];
+  if (!preferredRow) return null;
+  const descriptor = descriptors.get(preferredRow.id) || fallbackTrackingDescriptor(preferredRow);
+  const name = descriptors.has(preferredRow.id)
+    ? trackingSeriesName(descriptor)
+    : String(preferredRow.findingName || "").trim() || trackingSeriesName(descriptor);
+  return { preferredRow, descriptor, name };
+}
+
 function trackingAssignments(rows: FindingRow[]) {
   const descriptors = new Map<string, TrackingDescriptor>();
   const byIdentity = new Map<string, Array<{ row: FindingRow; descriptor: TrackingDescriptor }>>();
@@ -869,11 +904,9 @@ export function listMorphologyTracking(user: RequestUser, memberId: string) {
   }
 
   const series = [...grouped.entries()].flatMap(([trackingGroupId, groupRows]) => {
-    const descriptor = groupRows
-      .map((row) => descriptors.get(row.id))
-      .find((item) => Boolean(item?.region))
-      || groupRows.map((row) => descriptors.get(row.id)).find(Boolean);
-    if (!descriptor) return [];
+    const presentation = trackingGroupPresentation(groupRows, descriptors);
+    if (!presentation) return [];
+    const { descriptor } = presentation;
     const byReport = new Map<string, FindingRow>();
     for (const row of groupRows) {
       const existing = byReport.get(row.reportId);
@@ -932,7 +965,7 @@ export function listMorphologyTracking(user: RequestUser, memberId: string) {
     const change = changeSummary(points);
     return [{
       trackingGroupId,
-      name: trackingSeriesName(descriptor),
+      name: presentation.name,
       organ: descriptor.organ,
       region: descriptor.region,
       laterality: descriptor.laterality,
@@ -1101,26 +1134,45 @@ export function setMorphologyTracking(user: RequestUser, findingId: string, inpu
   const finding = findingForManage(user, findingId);
   const mode = String(input.mode || "");
   let groupId: string | null = null;
+  let targetRows: FindingRow[] = [];
+  let targetLabelFindingId: string | null = null;
   let action = finding.trackingGroupId ? "morphology.split" : "morphology.separate";
   if (mode === "existing") {
     groupId = textValue(input.trackingGroupId, 100);
     if (!groupId) throw createError({ statusCode: 400, statusMessage: "请选择要关联的变化线" });
-    const targets = getDatabase().prepare(`
-      SELECT f.laterality FROM morphology_findings f JOIN reports r ON r.id = f.report_id
-      WHERE f.tracking_group_id = ? AND r.member_id = ?
-    `).all(groupId, finding.memberId) as Array<{ laterality: MorphologyLaterality }>;
-    if (!targets.length) throw createError({ statusCode: 404, statusMessage: "目标变化线不存在" });
-    for (const target of targets) assertCompatibleLaterality(finding.laterality, target.laterality);
+    const memberRows = trackingRows(finding.memberId);
+    targetRows = memberRows.filter((row) => row.trackingGroupId === groupId);
+    if (!targetRows.length) throw createError({ statusCode: 404, statusMessage: "目标变化线不存在" });
+    for (const target of targetRows) assertCompatibleLaterality(finding.laterality, target.laterality);
+    const { descriptors } = trackingAssignments(memberRows);
+    targetLabelFindingId = trackingGroupPresentation(targetRows, descriptors)?.preferredRow.id || null;
     action = "morphology.link";
   } else if (mode === "separate") groupId = manualTrackingId();
   else if (mode !== "automatic") throw createError({ statusCode: 400, statusMessage: "关联方式无效" });
 
   const manualFields = manualFieldSet(finding);
-  if (mode === "automatic") manualFields.delete("trackingGroup");
-  else manualFields.add("trackingGroup");
+  if (mode === "automatic") {
+    manualFields.delete("trackingGroup");
+    manualFields.delete(trackingGroupLabelField);
+  } else {
+    manualFields.add("trackingGroup");
+    if (mode === "separate" || targetLabelFindingId === findingId) {
+      manualFields.add(trackingGroupLabelField);
+    } else {
+      manualFields.delete(trackingGroupLabelField);
+    }
+  }
   const db = getDatabase();
   db.exec("BEGIN IMMEDIATE");
   try {
+    for (const target of targetRows) {
+      if (target.id === findingId) continue;
+      const targetManualFields = manualFieldSet(target);
+      if (target.id === targetLabelFindingId) targetManualFields.add(trackingGroupLabelField);
+      else targetManualFields.delete(trackingGroupLabelField);
+      db.prepare(`UPDATE morphology_findings SET manual_fields_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+        .run(JSON.stringify([...targetManualFields]), target.id);
+    }
     db.prepare(`UPDATE morphology_findings SET tracking_group_id = ?, match_confidence = ?,
       manual_fields_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
       .run(groupId, groupId ? 1 : null, JSON.stringify([...manualFields]), findingId);
@@ -1158,24 +1210,28 @@ export function mergeMorphologyTrackingGroups(user: RequestUser, memberId: strin
   if (!sourceGroupId || !targetGroupId || sourceGroupId === targetGroupId) {
     throw createError({ statusCode: 400, statusMessage: "请选择两个不同的变化线" });
   }
-  const rows = getDatabase().prepare(`
-    SELECT f.id, f.tracking_group_id AS trackingGroupId, f.laterality,
-      f.manual_fields_json AS manualFieldsJson
-    FROM morphology_findings f JOIN reports r ON r.id = f.report_id
-    WHERE r.member_id = ? AND f.tracking_group_id IN (?, ?)
-  `).all(memberId, sourceGroupId, targetGroupId) as Array<{
-    id: string; trackingGroupId: string; laterality: MorphologyLaterality; manualFieldsJson: string;
-  }>;
+  const memberRows = trackingRows(memberId);
+  const rows = memberRows.filter((row) => [sourceGroupId, targetGroupId].includes(row.trackingGroupId || ""));
   const source = rows.filter((row) => row.trackingGroupId === sourceGroupId);
   const target = rows.filter((row) => row.trackingGroupId === targetGroupId);
   if (!source.length || !target.length) throw createError({ statusCode: 404, statusMessage: "变化线不存在" });
   for (const left of source) for (const right of target) assertCompatibleLaterality(left.laterality, right.laterality);
+  const { descriptors } = trackingAssignments(memberRows);
+  const targetLabelFindingId = trackingGroupPresentation(target, descriptors)?.preferredRow.id || target[0]!.id;
   const db = getDatabase();
   db.exec("BEGIN IMMEDIATE");
   try {
+    for (const row of target) {
+      const manualFields = manualFieldSet(row);
+      if (row.id === targetLabelFindingId) manualFields.add(trackingGroupLabelField);
+      else manualFields.delete(trackingGroupLabelField);
+      db.prepare(`UPDATE morphology_findings SET manual_fields_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+        .run(JSON.stringify([...manualFields]), row.id);
+    }
     for (const row of source) {
       const manualFields = manualFieldSet(row);
       manualFields.add("trackingGroup");
+      manualFields.delete(trackingGroupLabelField);
       db.prepare(`UPDATE morphology_findings SET tracking_group_id = ?, match_confidence = 1,
         manual_fields_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
         .run(targetGroupId, JSON.stringify([...manualFields]), row.id);

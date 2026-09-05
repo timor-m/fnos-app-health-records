@@ -69,6 +69,7 @@ package/
 ```text
 source=thirdparty
 platform=all
+micro_app=true
 install_dep_apps=nodejs_v22
 os_min_version=1.1.3100
 ctl_stop=true
@@ -82,6 +83,7 @@ disable_authorization_path=false
 - 统一网关应用不声明 `service_port`。
 - 最低系统版本必须反映真实测试范围。
 - 服务应用使用 `ctl_stop=true` 提供启停和状态控制。
+- 用户文件选择器依赖微应用宿主，因此声明 `micro_app=true`。
 - 健康档案允许管理员从已有 NAS 目录导入报告，因此显示系统“授权目录”设置。
 
 ## 5. 访问模型
@@ -134,7 +136,9 @@ HTTP 服务端口默认 `3334`，只由安装/配置向导设置端口号，不�
 - `config/resource` 只声明实际使用的资源。
 - 数据共享目录通常不需要给自身重复配置 `permission`，系统会授予应用用户所需 ACL。
 
-健康档案不创建用户可见的应用共享目录，因此 `config/resource` 保持 `{}`。管理员在 fnOS 应用设置中授权现有目录后，应用只通过 `TRIM_DATA_ACCESSIBLE_PATHS` 浏览这些目录；导入时会把文件复制进应用私有存储，源目录无需授予写权限。生命周期脚本会把当前授权路径同步到应用私有配置，目录选择接口每次请求都会重新读取，避免常驻 Node 进程长期使用旧环境变量。若刚修改授权后仍未显示，应在应用中心停止并重新启动健康档案，让飞牛重新注入授权环境。
+健康档案不创建用户可见的应用共享目录，但会在 `config/resource` 声明 `trim.file.userAccess` 和 `trim.file.userAcl`：前者用于当前用户选择并授权文件或目录，后者用于后端按网关 UID 检查逐路径读取权限。后端通过系统 Unix Socket 调用开放 API，并从当前进程环境读取 `TRIM_API_TOKEN`，不得持久化或发送到前端。
+
+管理员在 fnOS 应用设置中授权的共享目录仍通过 `TRIM_DATA_ACCESSIBLE_PATHS` 提供，作为固定目录和旧系统兼容入口。生命周期脚本会把共享授权路径同步到应用私有配置；个人目录授权则由 fnOS 保存，应用不建立授权表。无论哪种来源，导入时都会把文件复制进应用私有存储，源目录无需写权限。
 
 ## 7. 用户向导
 
@@ -226,6 +230,8 @@ appcenter-cli stop fnos-app-health-records
 - [环境变量](https://developer.fnnas.com/docs/core-concepts/environment-variables/)
 - [应用权限](https://developer.fnnas.com/docs/core-concepts/privilege/)
 - [应用资源](https://developer.fnnas.com/docs/core-concepts/resource/)
+- [用户个人授权路径](https://developer.fnnas.com/api/authorization/user-access)
+- [文件权限检查](https://developer.fnnas.com/api/authorization/file-acl)
 - [应用入口](https://developer.fnnas.com/docs/core-concepts/app-entry/)
 - [统一网关](https://developer.fnnas.com/docs/core-concepts/gateway-registration/)
 - [用户向导](https://developer.fnnas.com/docs/core-concepts/wizard/)

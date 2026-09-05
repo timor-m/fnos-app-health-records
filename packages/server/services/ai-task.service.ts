@@ -28,6 +28,7 @@ export async function executeAiTask(
   }
   return executeAiChatCompletion({
     provider: new URL(settings.baseUrl).host,
+    providerKey: settings.provider,
     baseUrl: settings.baseUrl,
     apiKey: settings.apiKey,
     model: settings.model

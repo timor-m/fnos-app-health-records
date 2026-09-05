@@ -16,10 +16,14 @@ import { listAiTasks, type AiTaskKey } from "./ai-task-registry";
 import { executeAiChatCompletion } from "./ai-runtime.service";
 
 const settingKey = "ai.provider";
+const defaultRequestTimeoutSeconds = 600;
+const minRequestTimeoutSeconds = 30;
+const maxRequestTimeoutSeconds = 3_600;
 
 export type AiSettings = {
   enabled: boolean;
   provider: AiProviderKey;
+  requestTimeoutSeconds: number;
   visionEnabled: boolean;
   baseUrl: string;
   textModel: string;
@@ -38,7 +42,7 @@ export type AiSettingsInput = Partial<AiSettings> & {
   taskBindings?: Partial<Record<AiTaskKey, AiTaskBinding | null>>;
 };
 
-type ProviderSettings = Omit<AiSettings, "enabled" | "provider">;
+type ProviderSettings = Pick<AiSettings, "visionEnabled" | "baseUrl" | "textModel" | "visionModel" | "apiKey">;
 type StoredProviderSettings = Omit<ProviderSettings, "apiKey"> & {
   apiKey?: string;
   apiKeyEncrypted?: string;
@@ -46,15 +50,41 @@ type StoredProviderSettings = Omit<ProviderSettings, "apiKey"> & {
 type StoredAiSettings = Partial<StoredProviderSettings> & {
   enabled?: boolean;
   provider?: string;
+  requestTimeoutSeconds?: number;
   providers?: Partial<Record<AiProviderKey, StoredProviderSettings>>;
   taskBindings?: Partial<Record<AiTaskKey, { provider?: string; model?: string }>>;
 };
 type ParsedAiSettings = {
   enabled: boolean;
   provider: AiProviderKey;
+  requestTimeoutSeconds: number;
   providers: Partial<Record<AiProviderKey, ProviderSettings>>;
   taskBindings: Partial<Record<AiTaskKey, AiTaskBinding>>;
 };
+
+function legacyRequestTimeoutSeconds() {
+  const milliseconds = Number(process.env.AI_REQUEST_TIMEOUT_MS);
+  if (!Number.isFinite(milliseconds)) return defaultRequestTimeoutSeconds;
+  return Math.min(maxRequestTimeoutSeconds, Math.max(minRequestTimeoutSeconds, Math.round(milliseconds / 1_000)));
+}
+
+function storedRequestTimeoutSeconds(value: unknown) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds)) return legacyRequestTimeoutSeconds();
+  return Math.min(maxRequestTimeoutSeconds, Math.max(minRequestTimeoutSeconds, Math.round(seconds)));
+}
+
+function submittedRequestTimeoutSeconds(value: unknown, fallback: number) {
+  if (value === undefined) return fallback;
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < minRequestTimeoutSeconds || seconds > maxRequestTimeoutSeconds) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: `AI 请求超时必须在 ${minRequestTimeoutSeconds} 至 ${maxRequestTimeoutSeconds} 秒之间`
+    });
+  }
+  return Math.round(seconds);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -115,7 +145,13 @@ function parseProviderSettings(value: StoredProviderSettings | undefined): Parti
 export function parseStoredSettings(): ParsedAiSettings {
   const row = getDatabase().prepare("SELECT value_json AS valueJson FROM app_settings WHERE setting_key = ?")
     .get(settingKey) as { valueJson: string } | undefined;
-  if (!row) return { enabled: false, provider: "deepseek", providers: {}, taskBindings: {} };
+  if (!row) return {
+    enabled: false,
+    provider: "deepseek",
+    requestTimeoutSeconds: legacyRequestTimeoutSeconds(),
+    providers: {},
+    taskBindings: {}
+  };
 
   try {
     const stored = JSON.parse(row.valueJson) as StoredAiSettings;
@@ -153,13 +189,25 @@ export function parseStoredSettings(): ParsedAiSettings {
         apiKey: providers[provider]?.apiKey ?? legacy?.apiKey ?? ""
       } as ProviderSettings;
     }
-    return { enabled: stored.enabled === true, provider, providers, taskBindings };
+    return {
+      enabled: stored.enabled === true,
+      provider,
+      requestTimeoutSeconds: storedRequestTimeoutSeconds(stored.requestTimeoutSeconds),
+      providers,
+      taskBindings
+    };
   } catch {
-    return { enabled: false, provider: "deepseek", providers: {}, taskBindings: {} };
+    return {
+      enabled: false,
+      provider: "deepseek",
+      requestTimeoutSeconds: legacyRequestTimeoutSeconds(),
+      providers: {},
+      taskBindings: {}
+    };
   }
 }
 
-function normalizeProviderBaseUrl(provider: AiProviderKey, value: string) {
+export function normalizeProviderBaseUrl(provider: AiProviderKey, value: string) {
   try {
     const parsed = new URL(value);
     if (provider === "ollama" && parsed.pathname.replace(/\/+$/, "") === "") parsed.pathname = "/v1";
@@ -195,6 +243,10 @@ function normalizeBaseUrl(value: unknown, fallback: string) {
   }
 }
 
+export function resolveAiBaseUrl(provider: AiProviderKey, value: unknown, fallback: string) {
+  return normalizeProviderBaseUrl(provider, normalizeBaseUrl(value, fallback));
+}
+
 function maskApiKey(apiKey: string) {
   if (!apiKey) return "";
   if (apiKey.length <= 8) return "••••••••";
@@ -217,6 +269,7 @@ function serializeSettings(parsed: ParsedAiSettings) {
   return {
     enabled: parsed.enabled,
     provider: parsed.provider,
+    requestTimeoutSeconds: parsed.requestTimeoutSeconds,
     providers,
     taskBindings: parsed.taskBindings
   };
@@ -240,6 +293,7 @@ function publicSettings(parsed: ParsedAiSettings) {
   return {
     enabled: parsed.enabled,
     provider: parsed.provider,
+    requestTimeoutSeconds: parsed.requestTimeoutSeconds,
     visionEnabled: active.visionEnabled,
     baseUrl: active.baseUrl,
     textModel: active.textModel,
@@ -281,6 +335,7 @@ export function getAiTaskSettings(taskKey: AiTaskKey, includeSecret = false) {
   return {
     enabled: parsed.enabled,
     taskKey,
+    requestTimeoutSeconds: parsed.requestTimeoutSeconds,
     provider,
     baseUrl: providerSettings.baseUrl,
     model: binding?.model || providerSettings.textModel,
@@ -299,17 +354,21 @@ export function saveAiSettings(input: AiSettingsInput) {
   const apiKey = input.clearApiKey === true ? "" : submittedKey || current.apiKey;
   const visionEnabled = input.visionEnabled === undefined ? current.visionEnabled : input.visionEnabled === true;
   const visionModel = String(input.visionModel ?? current.visionModel).trim();
+  if (provider === "minimax" && visionEnabled) {
+    throw createError({ statusCode: 400, statusMessage: "MiniMax M2 系列当前不支持视觉增强，请关闭视觉增强" });
+  }
   if (visionEnabled && !visionModel) {
     throw createError({ statusCode: 400, statusMessage: "已开启视觉增强，请先填写视觉模型名称" });
   }
   const next: ParsedAiSettings = {
     enabled: input.enabled === undefined ? parsed.enabled : input.enabled === true,
     provider,
+    requestTimeoutSeconds: submittedRequestTimeoutSeconds(input.requestTimeoutSeconds, parsed.requestTimeoutSeconds),
     providers: {
       ...parsed.providers,
       [provider]: {
         visionEnabled,
-        baseUrl: normalizeProviderBaseUrl(provider, normalizeBaseUrl(input.baseUrl, current.baseUrl)),
+        baseUrl: resolveAiBaseUrl(provider, input.baseUrl, current.baseUrl),
         textModel: String(input.textModel || current.textModel).trim(),
         visionModel,
         apiKey
@@ -349,6 +408,9 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
   const apiKey = typeof input.apiKey === "string" && input.apiKey.trim() ? input.apiKey.trim() : current.apiKey;
   const textModel = String(input.textModel || current.textModel).trim();
   const testVision = input.testVision === true;
+  if (provider === "minimax" && testVision) {
+    throw createError({ statusCode: 400, statusMessage: "MiniMax M2 系列当前不支持图片输入，请使用文本模型测试" });
+  }
   const model = testVision ? String(input.visionModel || current.visionModel).trim() : textModel;
   if ((aiProviderHasRequiredApiKey(provider) && !apiKey) || !model) {
     throw createError({
@@ -358,11 +420,13 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
         : `请先配置 ${aiProviderCatalog[provider].label} API Key 和${testVision ? "视觉" : "文本"}模型`
     });
   }
-  const baseUrl = normalizeProviderBaseUrl(provider, normalizeBaseUrl(input.baseUrl, current.baseUrl));
+  const baseUrl = resolveAiBaseUrl(provider, input.baseUrl, current.baseUrl);
+  const testStructuredOutput = !testVision && (provider === "ollama" || provider === "minimax");
   const started = Date.now();
   try {
-    await executeAiChatCompletion({
+    const response = await executeAiChatCompletion({
       provider,
+      providerKey: provider,
       baseUrl,
       apiKey,
       model
@@ -374,16 +438,30 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
               { type: "text", text: "Reply with OK if you can read this image." },
               { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/Sc7u7QAAAABJRU5ErkJggg==" } }
             ]
-          : "reply ok"
+          : testStructuredOutput ? "只返回 JSON 对象：{\"ok\":true}" : "reply ok"
       }],
       temperature: resolveAiTemperature(provider, model),
-      maxOutputTokens: 4,
-      timeoutMs: 15_000,
+      responseFormat: testStructuredOutput ? "json_object" : "text",
+      maxOutputTokens: testStructuredOutput ? 128 : 4,
+      timeoutMs: provider === "ollama" ? 120_000 : 15_000,
       timeoutCode: "AI_CONNECTION_TEST_TIMEOUT",
       timeoutMessage: "连接 AI 服务超时",
       networkCode: "AI_CONNECTION_TEST_NETWORK_ERROR",
       networkMessage: "NAS 无法连接 AI 服务"
     });
+    if (testStructuredOutput) {
+      try {
+        const clean = response.content.trim()
+          .replace(/^```(?:json)?\s*/i, "")
+          .replace(/\s*```$/, "");
+        const parsed = JSON.parse(clean) as { ok?: unknown };
+        if (!parsed || typeof parsed !== "object") throw new Error();
+      } catch {
+        throw Object.assign(new Error(`${aiProviderCatalog[provider].label} 模型未返回有效 JSON`), {
+          code: "AI_STRUCTURED_JSON_UNSUPPORTED"
+        });
+      }
+    }
   } catch (cause) {
     const error = cause as Error & {
       code?: string;
@@ -420,8 +498,12 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
         statusMessage: `${summary}（上游 ${error.upstreamStatus}）${suffix}`
       });
     }
-    const statusMessage = timedOut
-      ? "连接 AI 服务超时，请检查 NAS 外网连接、代理或服务地址"
+    const statusMessage = code === "AI_STRUCTURED_JSON_UNSUPPORTED"
+      ? `${aiProviderCatalog[provider].label} 服务可以连接，但当前模型无法稳定返回结构化 JSON，请检查模型名称或更换指令遵循能力更强的文本模型`
+      : timedOut
+      ? provider === "ollama"
+        ? "Ollama 模型启动或响应超时，请先在 Ollama 中运行该模型，并检查设备内存、模型名称和服务地址"
+        : "连接 AI 服务超时，请检查 NAS 外网连接、代理或服务地址"
       : dnsFailed
         ? "NAS 无法解析 AI 服务域名，请检查 DNS 和外网连接"
         : tlsFailed

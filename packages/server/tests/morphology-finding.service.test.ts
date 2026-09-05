@@ -186,6 +186,66 @@ test("keeps manual morphology edits and tracking decisions across rebuilds", () 
   }
 });
 
+test("keeps the selected morphology project name and shows manually separated pending findings", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-morphology-project-actions-"));
+  process.env.STORAGE_DIR = storageDir;
+  const owner: RequestUser = {
+    id: "owner", displayName: "管理员", provider: "development", authenticated: true, isGatewayAdmin: true
+  };
+  try {
+    const db = getDatabase();
+    db.exec(`
+      INSERT INTO users (id, display_name) VALUES ('owner', '管理员');
+      INSERT INTO health_members (id, display_name, created_by) VALUES ('member', '本人', 'owner');
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('member', 'owner', 'manager', 'owner');
+      INSERT INTO reports (id, member_id, created_by, report_type, title, status, report_issued_at) VALUES
+        ('source-report', 'member', 'owner', 'imaging', '较早报告', 'ready', '2024-01-01'),
+        ('link-report', 'member', 'owner', 'imaging', '待归入报告', 'ready', '2024-06-01'),
+        ('target-report', 'member', 'owner', 'imaging', '较新报告', 'ready', '2025-01-01'),
+        ('pending-report', 'member', 'owner', 'imaging', '待确认报告', 'ready', '2026-01-01');
+      INSERT INTO morphology_findings (
+        id, report_id, organ, region, laterality, finding_type, finding_name,
+        raw_text, tracking_group_id, match_confidence, manual_fields_json
+      ) VALUES
+        ('source', 'source-report', '肾脏', '下极', 'left', '囊肿', '左肾下极囊肿',
+          '左肾下极囊肿', 'source-group', 1, '["trackingGroup"]'),
+        ('target', 'target-report', '肾脏', '上极', 'left', '囊肿', '左肾上极囊肿',
+          '左肾上极囊肿', 'target-group', 1, '["trackingGroup"]'),
+        ('link', 'link-report', '肾脏', '中部', 'left', '囊肿', '左肾中部囊肿',
+          '左肾中部囊肿', NULL, NULL, '[]'),
+        ('pending', 'pending-report', NULL, NULL, 'unspecified', '检查发现', '低回声区',
+          '低回声区待确认', NULL, NULL, '[]');
+    `);
+
+    const beforeMerge = listMorphologyTracking(owner, "member");
+    const targetName = beforeMerge.series.find((item) => item.trackingGroupId === "target-group")?.name;
+    assert.equal(targetName, "左肾上极囊肿");
+
+    const linked = setMorphologyTracking(owner, "link", {
+      mode: "existing", trackingGroupId: "target-group"
+    });
+    assert.equal(linked.series.find((item) => item.trackingGroupId === "target-group")?.name, targetName);
+
+    const merged = mergeMorphologyTrackingGroups(owner, "member", "source-group", "target-group");
+    const mergedSeries = merged.series.find((item) => item.trackingGroupId === "target-group");
+    assert.equal(mergedSeries?.name, targetName);
+    assert.deepEqual(mergedSeries?.points.map((point) => point.findingId), ["source", "link", "target"]);
+
+    const separated = setMorphologyTracking(owner, "pending", { mode: "separate" });
+    const pendingSeries = separated.series.find((item) =>
+      item.points.some((point) => point.findingId === "pending")
+    );
+    assert.equal(pendingSeries?.name, "低回声区");
+    assert.equal(pendingSeries?.pointCount, 1);
+    assert.ok(!separated.untracked.some((item) => item.findingId === "pending"));
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
 test("preserves matched manual morphology fields when AI extraction is persisted again", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-morphology-ai-protection-"));
   process.env.STORAGE_DIR = storageDir;

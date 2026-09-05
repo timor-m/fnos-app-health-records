@@ -66,6 +66,7 @@
 .datetime-picker-wheels {
   display: flex; gap: 8px; padding: 16px 12px;
   height: 280px; overflow: hidden;
+  touch-action: pan-y;
   background: var(--surface, #ffffff);
 }
 
@@ -82,12 +83,16 @@
 
 .wheel-scroll-wrapper {
   flex: 1; position: relative; overflow: hidden;
+  touch-action: pan-y;
   --datetime-wheel-center-offset: 95px;
 }
 
 .wheel-scroll {
   height: 100%;
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior-x: none;
+  touch-action: pan-y;
   padding-block: var(--datetime-wheel-center-offset);
   box-sizing: border-box;
   -webkit-overflow-scrolling: touch;

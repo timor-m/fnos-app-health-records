@@ -1,4 +1,4 @@
-export type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "ollama";
+export type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "minimax" | "ollama";
 
 export type AiProviderOption = {
   label: string;
@@ -54,13 +54,22 @@ export const aiProviderCatalog: Record<AiProviderKey, AiProviderOption> = {
     defaultMaxOutputTokens: 32_768,
     modelHint: "火山方舟如要求使用推理接入点，请填写控制台中的 ep-... 接入点 ID"
   },
+  minimax: {
+    label: "MiniMax",
+    defaultBaseUrl: "https://api.minimaxi.com/v1",
+    defaultTextModel: "MiniMax-M2.7",
+    defaultVisionModel: "",
+    defaultMaxOutputTokens: 2_048,
+    modelHint: "中国大陆使用 api.minimaxi.com；MiniMax M2 系列当前仅作为文本模型使用"
+  },
   ollama: {
     label: "Ollama",
     defaultBaseUrl: "http://127.0.0.1:11434/v1",
     defaultTextModel: "",
     defaultVisionModel: "",
     defaultMaxOutputTokens: 8_192,
-    modelHint: "填写本机已安装的 Ollama 模型名称，例如 qwen2.5:7b、qwen2.5vl:7b；Ollama 默认不需要 API Key"
+    apiKeyRequired: false,
+    modelHint: "文本模型可填写 qwen2.5:7b；视觉模型必须使用明确支持图片输入的模型。Ollama 默认不需要 API Key"
   }
 };
 
@@ -88,6 +97,6 @@ export function resolveAiTemperature(
   requestedTemperature = 0
 ) {
   // Kimi's OpenAI-compatible endpoint currently accepts temperature=1 only.
-  if (provider === "kimi" || /^kimi-/i.test(model.trim())) return 1;
+  if (provider === "kimi" || provider === "minimax" || /^kimi-/i.test(model.trim()) || /^minimax-/i.test(model.trim())) return 1;
   return Number.isFinite(requestedTemperature) ? requestedTemperature : 0;
 }

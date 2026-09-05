@@ -1,6 +1,6 @@
 {
   "name": "fnos-app-health-records",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Family health report archive and AI-assisted record management for fnOS",
   "type": "module",
   "author": {
@@ -58,10 +58,12 @@
   },
   "dependencies": {
     "@lucide/vue": "^1.25.0",
+    "@trimjs/web-app": "^0.4.2",
     "@vitejs/plugin-vue": "^6.0.7",
     "concurrently": "^9.2.4",
     "h3": "2.0.1-rc.22",
     "nitro": "3.0.260610-beta",
+    "undici": "^7.29.0",
     "vite": "^8.0.16",
     "vue": "^3.5.38",
     "vue-router": "^4.6.3"
