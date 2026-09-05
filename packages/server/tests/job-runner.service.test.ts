@@ -6,6 +6,7 @@ import test from "node:test";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
 import type { RequestUser } from "../domain/request-user.ts";
 import {
+  cancelReportProcessing,
   claimNextJob,
   getProcessingJobEventDetail,
   listProcessingJobEvents,
@@ -2716,4 +2717,60 @@ test("keeps scalar indicators separate from structured morphology findings", () 
       { name: "肝右叶囊肿", type: "囊肿", length: 3.2, width: 2.8, unit: "cm" },
     ],
   );
+});
+
+test("cancels queued and processing jobs on user request and reconciles report status", async () => {
+  await withDatabase(async () => {
+    const upload = createUpload(manager, "runner-member", [
+      { originalName: "report.png", data: pngBytes() },
+    ]);
+    const db = getDatabase();
+    db.prepare(
+      "UPDATE processing_jobs SET status = 'processing' WHERE report_id = ? AND job_type = 'ocr'",
+    ).run(upload.reportId);
+
+    const result = cancelReportProcessing(manager, upload.reportId);
+    assert.ok(result.cancelled >= 1);
+    assert.equal(
+      (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM processing_jobs WHERE report_id = ? AND status IN ('queued', 'processing')",
+          )
+          .get(upload.reportId) as { n: number }
+      ).n,
+      0,
+    );
+    assert.equal(
+      (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM processing_jobs WHERE report_id = ? AND status = 'cancelled'",
+          )
+          .get(upload.reportId) as { n: number }
+      ).n,
+      result.cancelled,
+    );
+    const cancelEvent = db
+      .prepare(
+        `SELECT message, detail_json FROM processing_job_events
+         WHERE report_id = ? AND event_type = 'cancelled' ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(upload.reportId) as { message: string; detail_json: string };
+    assert.equal(cancelEvent.message, "用户手动中断任务");
+    assert.match(cancelEvent.detail_json, /user_cancel/);
+    /* 首次处理即被中断、没有可用结果的报告回到 failed，可重新触发 */
+    assert.equal(
+      (
+        db
+          .prepare("SELECT status FROM reports WHERE id = ?")
+          .get(upload.reportId) as { status: string }
+      ).status,
+      "failed",
+    );
+    assert.throws(
+      () => cancelReportProcessing(manager, upload.reportId),
+      /没有排队或处理中的任务/,
+    );
+  });
 });

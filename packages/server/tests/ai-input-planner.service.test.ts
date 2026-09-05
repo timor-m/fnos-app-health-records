@@ -9,6 +9,7 @@ const test = (name: string, fn: () => void) =>
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
 import {
   aiInputPlanningPolicy,
+  localObservationsForLine,
   patientSexFromOcrText,
   planRebuiltOcrPages,
   rebuildOcrPages,
@@ -352,6 +353,97 @@ test("reconstructs OCR table cells by coordinates and attaches dictionary candid
       (fact) => fact.displayName === "总胆固醇",
     ),
   );
+});
+
+/*
+ * 微量元素类检验报告常见“序号 | 项目 | 结果 | 参考范围 | 单位”五列表格：
+ * 序号占首格、项目名是单字（钙/镁/铁），部分行单位还会被 OCR 识别坏。
+ * 这些行必须保持 scalar 候选资格，否则 AI 提取的正确结果会在证据校验阶段
+ * 被全部拒绝，最终报告没有任何指标。
+ */
+test("keeps serial-numbered single-character laboratory rows as scalar candidates", () => {
+  const cell = (id: string, text: string, left: number, top: number) => ({
+    id,
+    text,
+    confidence: 0.98,
+    box: [
+      [left, top],
+      [left + 80, top],
+      [left + 80, top + 18],
+      [left, top + 18],
+    ],
+  });
+  const tableRow = (rowIndex: number, cells: string[]) =>
+    cells.map((text, cellIndex) =>
+      cell(`r${rowIndex}c${cellIndex}`, text, 40 + cellIndex * 120, 100 + rowIndex * 28),
+    );
+  const rebuilt = rebuildOcrPages([
+    {
+      pageId: "page-trace-elements",
+      pageNumber: 1,
+      linesJson: JSON.stringify([
+        ...tableRow(0, ["序号", "检测项目", "结果", "提示参考范围", "单位"]),
+        ...tableRow(1, ["1", "钙", "1.626", "1.4-2.08", "mmol/L"]),
+        ...tableRow(2, ["2", "镁", "1.983", "1.2-2.2", "mmol/L"]),
+        ...tableRow(3, ["8", "钼", "8660", "<3.3", "μ8/"]),
+        ...tableRow(4, ["10", "铅", "2.818", "<100", "ug/L"]),
+      ]),
+    },
+  ]);
+
+  const lines = rebuilt[0].lines;
+  const calcium = lines.find((line) => line.text.includes("钙"));
+  assert.equal(calcium?.candidateKind, "scalar");
+  assert.ok(
+    calcium?.dictionaryFacts.some((fact) => fact.displayName === "钙"),
+  );
+  assert.ok(
+    localObservationsForLine(calcium!).some(
+      (observation) =>
+        observation.itemName === "钙" && observation.resultText === "1.626",
+    ),
+  );
+  /* 单位被 OCR 识别坏（μ8/）的单字项目行仍保留候选资格，交 AI 与证据校验把关 */
+  const molybdenum = lines.find((line) => line.text.includes("钼"));
+  assert.equal(molybdenum?.candidateKind, "scalar");
+  for (const text of ["镁", "铅"]) {
+    assert.equal(
+      lines.find((line) => line.text.includes(text))?.candidateKind,
+      "scalar",
+      text,
+    );
+  }
+});
+
+test("does not shift purely numeric leading cells into false candidates", () => {
+  const cell = (id: string, text: string, left: number, top: number) => ({
+    id,
+    text,
+    confidence: 0.98,
+    box: [
+      [left, top],
+      [left + 80, top],
+      [left + 80, top + 18],
+      [left, top + 18],
+    ],
+  });
+  const rebuilt = rebuildOcrPages([
+    {
+      pageId: "page-numeric-rows",
+      pageNumber: 1,
+      linesJson: JSON.stringify([
+        cell("n1", "3", 40, 100),
+        cell("n2", "150", 160, 100),
+        cell("n3", "98", 280, 100),
+        cell("n4", "120", 40, 140),
+        cell("n5", "80", 160, 140),
+      ]),
+    },
+  ]);
+
+  for (const line of rebuilt[0].lines) {
+    assert.equal(line.candidateKind, null, line.text);
+  }
 });
 
 test("detects candidate rows with units supplied only by the indicator dictionary", () => {
@@ -4542,5 +4634,103 @@ test("keeps only nine trend-ready observations from the real body-composition pa
         );
       }
     }
+  }
+});
+
+test("defaults to the detailed extraction depth and records it on the plan", () => {
+  const plan = planRebuiltOcrPages(
+    "depth-default",
+    rebuildOcrPages([
+      page(1, [
+        "检验报告单",
+        "项目 | 结果 | 单位 | 参考范围",
+        "总胆固醇 | 4.8 | mmol/L | <5.2",
+      ]),
+    ]),
+  );
+  assert.equal(plan.extractionDepth, "detailed");
+});
+
+test("overview depth keeps scalar and morphology extraction but drops narrative units", () => {
+  const rows = [
+    page(1, [
+      "出院小结",
+      "住院号：ZY-20260730",
+      "住院经过：患者入院后完成相关检查并接受治疗。",
+      "出院医嘱：按门诊安排复诊。",
+    ]),
+    page(2, [
+      "血脂",
+      "总胆固醇 5.3 mmol/L 参考范围 0-5.2",
+      "超声检查",
+      "右肾见囊肿，大小约 8×6 mm",
+    ]),
+  ];
+  const detailed = planRebuiltOcrPages("depth-routes", rebuildOcrPages(rows));
+  const overview = planRebuiltOcrPages(
+    "depth-routes",
+    rebuildOcrPages(rows),
+    "overview",
+  );
+
+  assert.equal(detailed.extractionDepth, "detailed");
+  assert.ok(detailed.units.some((unit) => unit.route === "narrative"));
+  assert.ok(detailed.units.some((unit) => unit.route === "morphology"));
+
+  assert.equal(overview.extractionDepth, "overview");
+  assert.deepEqual(
+    overview.units.map((unit) => unit.route).sort(),
+    ["document", "morphology", "scalar"],
+  );
+  const overviewScalar = overview.units.find(
+    (unit) => unit.route === "scalar",
+  );
+  assert.ok(overviewScalar);
+  assert.ok(overviewScalar.candidateRowCount >= 1);
+  assert.notEqual(overview.planHash, detailed.planHash);
+});
+
+test("overview depth packs scalar pages under doubled limits", () => {
+  const candidateCounts = [
+    1, 16, 2, 8, 1, 25, 4, 1, 23, 71, 41, 40, 47, 3, 1, 2, 1, 14, 1, 9, 18, 2,
+    1, 1,
+  ];
+  const rows = candidateCounts.map((count, pageIndex) =>
+    page(pageIndex + 1, [
+      `第 ${pageIndex + 1} 页检查`,
+      "项目 | 结果 | 单位 | 参考范围",
+      ...Array.from(
+        { length: count },
+        (_, itemIndex) =>
+          `指标${pageIndex + 1}-${itemIndex + 1} ${itemIndex + 1}.2 mmol/L 参考范围 1.0-200.0`,
+      ),
+    ]),
+  );
+  const detailed = planRebuiltOcrPages("depth-packing", rebuildOcrPages(rows));
+  const overview = planRebuiltOcrPages(
+    "depth-packing",
+    rebuildOcrPages(rows),
+    "overview",
+  );
+
+  const detailedScalars = detailed.units.filter(
+    (unit) => unit.route === "scalar",
+  );
+  const overviewScalars = overview.units.filter(
+    (unit) => unit.route === "scalar",
+  );
+  assert.ok(detailedScalars.length >= 2);
+  assert.ok(overviewScalars.length < detailedScalars.length);
+  assert.equal(
+    overviewScalars.flatMap((unit) => unit.pageNumbers).join(","),
+    candidateCounts.map((_, index) => index + 1).join(","),
+  );
+  for (const unit of overviewScalars) {
+    assert.ok(
+      unit.pageNumbers.length <= aiInputPlanningPolicy.maxPagesPerUnit * 2,
+    );
+    assert.ok(
+      unit.characterCount <= aiInputPlanningPolicy.targetCharacters * 2,
+    );
   }
 });

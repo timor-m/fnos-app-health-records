@@ -53,6 +53,7 @@ import { getAppConfig } from "../utils/runtime-config";
 import { createId } from "../utils/identifier";
 import { schemaVersion } from "../database/schema";
 import { assertMemberAccess, assertMemberManage } from "./member.service";
+import { assessReportMemberIdentity } from "./report-member-identity.service";
 import {
   defaultOcrPdfRenderScale,
   requestWorker,
@@ -2044,6 +2045,7 @@ export function getReportDetail(
     structuredSections,
     manualFieldKeys: [...listManualReportFieldKeys(reportId)],
     duplicateCandidates: findDuplicateCandidates(row),
+    memberIdentityAssessment: assessReportMemberIdentity(user, reportId),
   };
 }
 

@@ -2,7 +2,7 @@
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import {
   ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Clock3, Download,
-  FileImage, FileText, LoaderCircle, Maximize2, Pencil, Plus, RefreshCw, RotateCw, ScrollText, Search,
+  CircleStop, FileImage, FileText, LoaderCircle, Maximize2, Pencil, Plus, RefreshCw, RotateCw, ScrollText, Search,
   Sparkles, Trash2, X
 } from "@lucide/vue";
 import ClinicalFactEditor from "./ClinicalFactEditor.vue";
@@ -95,6 +95,7 @@ const ocrCompareImage = ref<HTMLImageElement | null>(null);
 const confirming = ref(false);
 const triggeringAi = ref(false);
 const reprocessingReport = ref(false);
+const cancellingJobs = ref(false);
 const trashingReport = ref(false);
 const editOpen = ref(false);
 const morphologyEditItem = ref<ReportDetail["morphologyFindings"][number] | null>(null);
@@ -1344,6 +1345,142 @@ function triggerAiExtraction() {
   requestAiExtraction(false);
 }
 
+async function queueCancelProcessing() {
+  if (cancellingJobs.value || !hasRunningJobs.value) return;
+  cancellingJobs.value = true;
+  jobsError.value = "";
+  try {
+    await request(`reports/${encodeURIComponent(props.reportId)}/cancel-processing`, { method: "POST" });
+    await refreshJobs();
+    toast.show("已中断，正在执行的任务会在当前步骤结束后停止");
+  } catch (cause) {
+    failJobsAction(cause, "中断任务失败");
+  } finally {
+    cancellingJobs.value = false;
+  }
+}
+
+function requestCancelProcessing() {
+  if (cancellingJobs.value || !hasRunningJobs.value) return;
+  const title = source.value?.title || "当前报告";
+  confirmDialog.ask({
+    title: "中断处理",
+    message: `确认中断「${title}」的当前处理任务？\n\n排队中的任务会立即停止；正在执行的任务会在当前步骤结束后停止，不会发起新的 AI 请求。已保存的报告数据和趋势不受影响，之后可以随时重新整理。`,
+    confirmText: "中断任务",
+    run: queueCancelProcessing
+  });
+}
+
+const memberIdentityAssessment = computed(() => currentDetail.value?.memberIdentityAssessment || null);
+const mismatchRelationshipLabels: Record<string, string> = {
+  self: "本人", spouse: "配偶", child: "子女", parent: "父母", sibling: "兄弟姐妹", other: "其他"
+};
+const memberPatientInfo = computed(() => {
+  const assessment = memberIdentityAssessment.value;
+  if (!assessment) return "";
+  const parts: string[] = [];
+  if (assessment.patientSex) parts.push(assessment.patientSex === "male" ? "男" : "女");
+  if (assessment.patientBirthDate) parts.push(`出生于 ${assessment.patientBirthDate}`);
+  else if (assessment.patientAgeText) parts.push(`年龄 ${assessment.patientAgeText}`);
+  return parts.join(" · ") || "未识别";
+});
+const memberMismatchFieldLabels = computed(() =>
+  (memberIdentityAssessment.value?.mismatchedFields || [])
+    .map((field) => (field === "sex" ? "性别" : "出生日期/年龄"))
+    .join("和")
+);
+const assigningMember = ref(false);
+const dismissingMismatch = ref(false);
+const memberCreateOpen = ref(false);
+const memberCreateSaving = ref(false);
+const memberCreateError = ref("");
+const memberCreateForm = ref({ displayName: "", relationship: "other", sex: "", birthDate: "" });
+
+async function postMemberAssignment(body: Record<string, unknown>, successMessage: string) {
+  await request(`reports/${encodeURIComponent(props.reportId)}/assign-member`, {
+    method: "POST",
+    body: JSON.stringify(body)
+  });
+  await loadDetail(props.reportId, true);
+  emit("updated");
+  toast.show(successMessage);
+}
+
+function assignToCandidate(candidate: { id: string; displayName: string }) {
+  if (assigningMember.value) return;
+  const title = source.value?.title || "当前报告";
+  confirmDialog.ask({
+    title: "归属报告",
+    message: `确认把「${title}」归属到成员「${candidate.displayName}」？\n\n报告的指标、趋势和形态发现会一并转移到该成员的档案下。`,
+    confirmText: "确认归属",
+    run: async () => {
+      assigningMember.value = true;
+      try {
+        await postMemberAssignment({ memberId: candidate.id }, `已归属到「${candidate.displayName}」`);
+      } catch (cause) {
+        failJobsAction(cause, "归属失败");
+      } finally {
+        assigningMember.value = false;
+      }
+    }
+  });
+}
+
+function openMemberCreate() {
+  const assessment = memberIdentityAssessment.value;
+  memberCreateForm.value = {
+    displayName: "",
+    relationship: "other",
+    sex: assessment?.patientSex || "",
+    birthDate: assessment?.patientBirthDate || assessment?.patientApproxBirthDate || ""
+  };
+  memberCreateError.value = "";
+  memberCreateOpen.value = true;
+}
+
+async function submitMemberCreate() {
+  if (memberCreateSaving.value) return;
+  const displayName = memberCreateForm.value.displayName.trim();
+  if (!displayName) {
+    memberCreateError.value = "请填写成员姓名";
+    return;
+  }
+  memberCreateSaving.value = true;
+  memberCreateError.value = "";
+  try {
+    await postMemberAssignment(
+      {
+        newMember: {
+          displayName,
+          relationship: memberCreateForm.value.relationship,
+          sex: memberCreateForm.value.sex || null,
+          birthDate: memberCreateForm.value.birthDate || null
+        }
+      },
+      `已创建成员「${displayName}」并完成归属`
+    );
+    memberCreateOpen.value = false;
+  } catch (cause) {
+    memberCreateError.value = cause instanceof Error ? cause.message : "创建成员失败";
+  } finally {
+    memberCreateSaving.value = false;
+  }
+}
+
+async function dismissMemberMismatch() {
+  if (dismissingMismatch.value) return;
+  dismissingMismatch.value = true;
+  try {
+    await request(`reports/${encodeURIComponent(props.reportId)}/dismiss-member-mismatch`, { method: "POST" });
+    await loadDetail(props.reportId, true);
+    toast.show("已忽略这份报告的成员提醒");
+  } catch (cause) {
+    failJobsAction(cause, "操作失败");
+  } finally {
+    dismissingMismatch.value = false;
+  }
+}
+
 function runReprocessNoticeAction() {
   if (reprocessNotice.value?.action === "retry_ai") {
     triggerAiExtraction();
@@ -1720,6 +1857,51 @@ onActivated(() => {
           </div>
         </div>
       </section>
+      <section v-if="memberIdentityAssessment" class="duplicate-warning member-mismatch-notice">
+        <CircleAlert :size="18" />
+        <div>
+          <strong>这份报告可能不属于当前成员</strong>
+          <p>报告患者信息（{{ memberPatientInfo }}）与当前成员资料的{{ memberMismatchFieldLabels }}不一致，可能上传时选错了成员。核对后可以一键归属，或创建新成员并归属。</p>
+          <div class="duplicate-actions member-mismatch-actions">
+            <button
+              v-for="candidate in memberIdentityAssessment.candidates"
+              :key="candidate.id"
+              class="duplicate-confirm-button"
+              type="button"
+              :disabled="assigningMember"
+              @click="assignToCandidate(candidate)"
+            >
+              <LoaderCircle v-if="assigningMember" class="spin-icon" :size="15" />
+              <CheckCircle2 v-else :size="15" />
+              归属到「{{ candidate.displayName }}」（{{ mismatchRelationshipLabels[candidate.relationship] || "其他" }}）
+            </button>
+            <button class="duplicate-confirm-button" type="button" :disabled="assigningMember" @click="openMemberCreate">
+              <Plus :size="15" />创建新成员并归属
+            </button>
+            <button class="soft-action-button" type="button" :disabled="dismissingMismatch" @click="dismissMemberMismatch">
+              {{ dismissingMismatch ? "处理中" : "忽略提醒" }}
+            </button>
+          </div>
+          <form v-if="memberCreateOpen" class="member-create-form" @submit.prevent="submitMemberCreate">
+            <input v-model="memberCreateForm.displayName" type="text" maxlength="40" placeholder="成员姓名（必填）" required />
+            <select v-model="memberCreateForm.relationship" aria-label="家庭关系">
+              <option v-for="(label, value) in mismatchRelationshipLabels" :key="value" :value="value">{{ label }}</option>
+            </select>
+            <select v-model="memberCreateForm.sex" aria-label="性别">
+              <option value="">性别未知</option>
+              <option value="male">男</option>
+              <option value="female">女</option>
+            </select>
+            <input v-model="memberCreateForm.birthDate" type="date" aria-label="出生日期" />
+            <p v-if="!memberIdentityAssessment.patientBirthDate && memberIdentityAssessment.patientApproxBirthDate" class="member-create-hint">出生日期按报告年龄推算，请核对后再保存</p>
+            <button type="submit" class="duplicate-confirm-button" :disabled="memberCreateSaving">
+              {{ memberCreateSaving ? "创建中" : "创建并归属" }}
+            </button>
+            <button type="button" class="soft-action-button" @click="memberCreateOpen = false">取消</button>
+            <p v-if="memberCreateError" class="inline-panel-error">{{ memberCreateError }}</p>
+          </form>
+        </div>
+      </section>
     </article>
 
     <article class="preview-card ai-result-card">
@@ -2001,6 +2183,17 @@ onActivated(() => {
           <p v-else>{{ jobsLoading ? "正在读取任务状态" : "这份报告暂无后台任务记录" }}</p>
         </div>
         <div class="section-title-actions">
+          <button
+            v-if="hasRunningJobs"
+            class="soft-action-button cancel-processing-button"
+            type="button"
+            :disabled="cancellingJobs"
+            @click="requestCancelProcessing"
+          >
+            <LoaderCircle v-if="cancellingJobs" class="spin-icon" :size="16" />
+            <CircleStop v-else :size="16" />
+            {{ cancellingJobs ? "中断中" : "中断" }}
+          </button>
           <button class="soft-action-button reprocess-action-button" type="button" :disabled="processingRecoveryState.reprocessDisabled" @click="reprocessCurrentReport">
             <LoaderCircle v-if="reprocessingReport || jobsLoading" class="spin-icon" :size="16" />
             <RefreshCw v-else :size="16" />

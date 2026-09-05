@@ -39,6 +39,7 @@ type AiSettings = AiProviderSettings & {
   enabled: boolean;
   provider: AiProviderKey;
   requestTimeoutSeconds: number;
+  extractionDepth: "overview" | "detailed";
   apiKey: string;
   providerSettings: Record<AiProviderKey, AiProviderSettings>;
   providers: AiProviderOption[];
@@ -50,6 +51,7 @@ const ai = ref<AiSettings>({
   enabled: false,
   provider: "deepseek",
   requestTimeoutSeconds: 600,
+  extractionDepth: "detailed",
   visionEnabled: false,
   baseUrl: "https://api.deepseek.com",
   textModel: "deepseek-v4-flash",
@@ -195,6 +197,7 @@ function aiBody() {
     enabled: ai.value.enabled,
     provider: ai.value.provider,
     requestTimeoutSeconds: ai.value.requestTimeoutSeconds,
+    extractionDepth: ai.value.extractionDepth,
     visionEnabled: ai.value.visionEnabled,
     baseUrl: ai.value.baseUrl,
     textModel: ai.value.textModel,
@@ -304,6 +307,14 @@ onUnmounted(() => {
           <span>单次请求超时（秒）</span>
           <input v-model.number="ai.requestTimeoutSeconds" type="number" min="30" max="3600" step="30" inputmode="numeric" />
           <small class="field-hint">每个报告解析单元最多等待 30～3600 秒，本地大模型建议保留默认 600 秒或适当提高</small>
+        </label>
+        <label>
+          <span>AI 解析程度</span>
+          <FormSelect v-model="ai.extractionDepth" :options="[
+            { value: 'overview', label: '概览（默认，更省 Token）' },
+            { value: 'detailed', label: '详细（含叙事章节与遗漏复核）' }
+          ]" aria-label="AI 解析程度" />
+          <small class="field-hint">概览模式仍逐项提取指标和形态发现并保留证据校验，但合并解析单元、跳过叙事章节和遗漏复核，Token 消耗更低；对新上传和重新整理的报告生效</small>
         </label>
         <div class="form-grid ai-model-grid">
           <label>

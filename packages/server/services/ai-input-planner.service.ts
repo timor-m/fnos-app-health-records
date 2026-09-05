@@ -7,6 +7,12 @@ import { createError } from "h3";
 import { getDatabase } from "../database/client";
 import type { RequestUser } from "../domain/request-user";
 import { assertMemberManage } from "./member.service";
+import {
+  resolveAiExtractionDepth,
+  getAiTaskSettings,
+  type AiExtractionDepth,
+} from "./ai-settings.service";
+import { resolveAiMaxOutputTokens } from "./ai-provider";
 import { ensureCoreDictionaryMaterialized } from "./indicator-dictionary.service";
 import { inferObservationAbnormalFlag } from "./observation-interpretation.service";
 import {
@@ -212,6 +218,7 @@ export type AiExtractionUnit = {
 
 export type AiExtractionPlan = {
   policy: typeof aiInputPlanningPolicy;
+  extractionDepth: AiExtractionDepth;
   reportId: string;
   pageCount: number;
   sourceCharacterCount: number;
@@ -506,9 +513,14 @@ function dictionaryFactsForText(
 ) {
   const firstCell = text.split(/[|｜]/)[0]?.trim() || text;
   const tableRow = /[|｜]/.test(text);
+  /* 表格行以“项目名格”做字典匹配：首列为序号时顺延到真正的名称格。 */
+  const nameCell = tableRow
+    ? skipLeadingSerialCell(splitTableCells(text).filter(Boolean))[0] ||
+      firstCell
+    : firstCell;
   // 章节标题可能包含“脂蛋白/载脂蛋白”等字典词，但没有当前结果，不能生成候选指标。
   if (!tableRow && /^【[^】]+】$/.test(firstCell.trim())) return [];
-  const compact = compactDictionaryText(tableRow ? firstCell : text);
+  const compact = compactDictionaryText(tableRow ? nameCell : text);
   if (!compact) return [];
   /*
    * “名称: 值”内联行先按冒号前的完整名称做等值匹配。这样 RV5/SV1
@@ -564,7 +576,7 @@ function dictionaryFactsForText(
      * （如 FEV1/HT）同样不能按斜杠边界误命中 FEV1 或 HT，应交给后续治理。
      */
     if (facts.size > 0) return [...facts.values()];
-    const normalizedFirstCell = firstCell.normalize("NFKC");
+    const normalizedFirstCell = nameCell.normalize("NFKC");
     if (/^[A-Z0-9.+#%]+(?:\/[A-Z0-9.+#%]+)+$/i.test(normalizedFirstCell.trim()))
       return [];
     /* 表行也可能在完整项目名中包含 ASCII 缩写（如 HbA1c），再走边界正则。 */
@@ -928,8 +940,14 @@ function isUnsupportedComplexTable(
 }
 
 function looksLikeStandardMeasurementRow(cells: string[], unitPattern: RegExp) {
-  if (cells.length < 2 || !resultCellPattern.test(cells[1])) return false;
-  return cells.slice(2).every((cell) => {
+  /* 首列序号顺延后再按“名称 | 结果 | 参考/单位/标记”的标准测量行判定。 */
+  const measurementCells = skipLeadingSerialCell(cells);
+  if (
+    measurementCells.length < 2 ||
+    !resultCellPattern.test(measurementCells[1])
+  )
+    return false;
+  return measurementCells.slice(2).every((cell) => {
     const trimmed = cell.trim();
     const pureUnit = !/\d/.test(trimmed) && unitPattern.test(trimmed);
     const reference =
@@ -2130,6 +2148,24 @@ function cleanContextLabel(value: string) {
 
 function splitTableCells(value: string) {
   return value.split(/[|｜]/).map((cell) => cell.trim());
+}
+
+/*
+ * 检验表格常在首列印序号（1、2、3…），序号不是指标名。
+ * 所有按“首格=项目名”的判定统一经这里取真正的测量单元格：
+ * 首格是 1～2 位纯数字、后面还有名称格和结果格时顺延一格，
+ * 否则“1 | 钙 | 1.626 | …”整表会退出候选，AI 提取的正确结果
+ * 也会因没有 scalar 候选行可挂而被证据校验全部拒绝。
+ * 纯数字第二格（如“120 | 80”）不可能是项目名，不做顺延。
+ */
+function skipLeadingSerialCell(cells: string[]) {
+  if (
+    cells.length >= 3 &&
+    /^\d{1,2}$/.test(cells[0].trim()) &&
+    /[\p{L}㐀-鿿]/u.test(cells[1])
+  )
+    return cells.slice(1);
+  return cells;
 }
 
 /*
@@ -4891,6 +4927,41 @@ export function estimateAiUnitOutputTokens(input: {
   );
 }
 
+/*
+ * 单元在严格证据契约下的请求侧输出量估算（不含安全余量）。
+ * 与 ai-extraction.service 的请求预算计算共用同一内核：
+ * 打包阶段据此把单元控制在当前模型的输出能力之内，
+ * 让“截断→拆分”只作为意外兜底，而不是常态路径。
+ */
+export function estimateAiUnitRequestOutput(input: {
+  pageCount: number;
+  characterCount: number;
+  candidateRowCount: number;
+  morphologyCandidateCount?: number;
+  supplement?: boolean;
+}) {
+  const supplement = input.supplement === true;
+  return (
+    (supplement ? 2_048 : 4_096) +
+    Math.max(0, input.candidateRowCount) * (supplement ? 140 : 180) +
+    Math.max(0, input.morphologyCandidateCount || 0) * (supplement ? 420 : 700) +
+    Math.max(1, input.pageCount) * (supplement ? 128 : 384) +
+    Math.min(
+      supplement ? 2_048 : 6_144,
+      Math.ceil(Math.max(0, input.characterCount) * (supplement ? 0.1 : 0.2)),
+    )
+  );
+}
+
+function unitRequestOutputEstimate(unit: AiExtractionUnit) {
+  return estimateAiUnitRequestOutput({
+    pageCount: unit.pageNumbers.length,
+    characterCount: unit.characterCount,
+    candidateRowCount: unit.candidateRowCount,
+    morphologyCandidateCount: unit.morphologyCandidateCount,
+  });
+}
+
 function unitFromRanges(
   unitType: AiExtractionUnit["unitType"],
   ranges: AiExtractionUnit["pageRanges"],
@@ -4898,6 +4969,9 @@ function unitFromRanges(
   route: AiExtractionUnit["route"],
   allowDocumentFields = false,
   documentPrimaryType?: ReportContentType | null,
+  /* 概览单请求模式：document 路由也按指标通道统计候选行，
+     使合并单元保持候选覆盖追踪与证据校验能力 */
+  documentScalarCandidates = false,
 ): AiExtractionUnit {
   const extractionMode: AiExtractionUnit["extractionMode"] =
     route === "morphology" ? "morphology" : "scalar";
@@ -5009,6 +5083,7 @@ function unitFromRanges(
       unitType,
       route,
       allowDocumentFields ? "document" : "facts",
+      documentScalarCandidates ? "with-scalars" : "",
       text,
     ].join("\u0000"),
   );
@@ -5026,23 +5101,36 @@ function unitFromRanges(
       ) || []
     );
   });
+  const scalarAiCandidateCount = selectedLines.filter(
+    (line) =>
+      line.candidateKind === "scalar" && lineNeedsAiScalarExtraction(line),
+  ).length;
   const candidateRowCount =
-    route === "scalar" || route === "morphology"
-      ? selectedLines.filter(
-          (line) =>
-            line.candidateKind === extractionMode &&
-            (route !== "scalar" || lineNeedsAiScalarExtraction(line)),
-        ).length
-      : 0;
+    route === "scalar"
+      ? scalarAiCandidateCount
+      : route === "morphology"
+        ? selectedLines.filter((line) => line.candidateKind === "morphology")
+            .length
+        : route === "document" && documentScalarCandidates
+          ? scalarAiCandidateCount
+          : 0;
   const morphologyCandidateCount =
-    route === "morphology" ? candidateRowCount : 0;
+    route === "morphology"
+      ? candidateRowCount
+      : /* 概览合并单元：形态候选计入输出量估算，保证单请求预算覆盖形态输出 */
+        route === "document" && documentScalarCandidates
+        ? selectedLines.filter((line) => line.candidateKind === "morphology")
+            .length
+        : 0;
   const localObservationCount = selectedLines.reduce(
     (sum, line) => sum + localObservationsForLine(line).length,
     0,
   );
   const pageCount = new Set(ranges.map((range) => range.pageNumber)).size;
   const candidateFacts =
-    route === "scalar" || route === "morphology"
+    route === "scalar" ||
+    route === "morphology" ||
+    (route === "document" && documentScalarCandidates)
       ? ranges.flatMap((range) => {
           const page = pages.find((item) => item.pageId === range.pageId);
           return (page?.lines || [])
@@ -5051,7 +5139,7 @@ function unitFromRanges(
                 line.index >= range.lineStart &&
                 line.index <= range.lineEnd &&
                 line.candidateKind === extractionMode &&
-                (route !== "scalar" || lineNeedsAiScalarExtraction(line)),
+                (route === "morphology" || lineNeedsAiScalarExtraction(line)),
             )
             .map((line) => ({
               pageNumber: range.pageNumber,
@@ -5282,14 +5370,19 @@ function isCandidateRow(text: string, unitPattern: RegExp) {
   ) {
     return false;
   }
-  const firstCell = trimmed.split(/[|｜]/)[0]?.trim() || "";
   const cells = trimmed
     .split(/[|｜]/)
     .map((cell) => cell.trim())
     .filter(Boolean);
+  /* 首列为序号的表格行顺延到真正的项目名格，其余行保持首格语义。 */
+  const measurementCells = skipLeadingSerialCell(cells);
+  const firstCell = measurementCells[0]?.trim() || "";
   const hasIndicatorName =
     /[\p{L}\u3400-\u9fff]{2,}/u.test(firstCell) ||
-    (/[\u3400-\u9fff]/u.test(firstCell) && unitPattern.test(text));
+    (/[\u3400-\u9fff]/u.test(firstCell) &&
+      (unitPattern.test(text) ||
+        (measurementCells.length >= 2 &&
+          resultCellPattern.test(measurementCells[1]))));
   if (!hasIndicatorName) return false;
   if (/^(?:正常|异常|阴性|阳性|未见|可见)$/.test(firstCell)) return false;
   if (text.length > 240 && !/[|｜]/.test(text)) return false;
@@ -5303,10 +5396,10 @@ function isCandidateRow(text: string, unitPattern: RegExp) {
   }
   if (isMorphologyCandidate(text)) return true;
   if (
-    cells.length >= 2 &&
+    measurementCells.length >= 2 &&
     /[\p{L}\u3400-\u9fff]{1,}/u.test(firstCell) &&
     /^(?:[-+±]+|(?:<|<=|≤|>|>=|≥)?\s*[-+]?\d+(?:\.\d+)?(?:\s|$)|阴性|阳性|弱阳性|正常|异常|未见|可见|(?:AB|A|B|O)型)/.test(
-      cells[1],
+      measurementCells[1],
     )
   )
     return true;
@@ -5763,9 +5856,91 @@ function unitFromPages(pages: RebuiltOcrPage[]): AiExtractionUnit {
   };
 }
 
+type AiUnitPackingLimits = {
+  maxPagesPerUnit: number;
+  targetCharacters: number;
+  targetOutputTokens: number;
+  maxCandidateRowsPerUnit: number;
+  /* 当前模型的请求侧输出量上限（estimateAiUnitRequestOutput 口径）；
+     undefined 表示不做预算护栏（测试与默认路径保持既有行为） */
+  maxRequestOutput?: number;
+};
+
+const defaultUnitPackingLimits: AiUnitPackingLimits = {
+  maxPagesPerUnit: aiInputPlanningPolicy.maxPagesPerUnit,
+  targetCharacters: aiInputPlanningPolicy.targetCharacters,
+  targetOutputTokens: aiInputPlanningPolicy.targetOutputTokens,
+  maxCandidateRowsPerUnit: aiInputPlanningPolicy.maxCandidateRowsPerUnit,
+};
+
+/*
+ * 概览模式放宽指标单元打包上限：单元更大、请求更少。输出超限时由 orchestrator
+ * 现有的扩容→拆分恢复路径兜底，指标单元拆分后的子单元仍保留完整指标语义。
+ */
+function overviewUnitPackingLimits(
+  maxRequestOutput: number | undefined,
+): AiUnitPackingLimits {
+  return {
+    maxPagesPerUnit: aiInputPlanningPolicy.maxPagesPerUnit * 2,
+    targetCharacters: aiInputPlanningPolicy.targetCharacters * 2,
+    targetOutputTokens: aiInputPlanningPolicy.targetOutputTokens * 2,
+    maxCandidateRowsPerUnit: aiInputPlanningPolicy.maxCandidateRowsPerUnit * 2,
+    maxRequestOutput,
+  };
+}
+
+/*
+ * 把模型的输出上限换算成打包阶段的请求侧估算上限：预留 15% 余量，
+ * 保证 calculateAiOutputTokenBudget 算出的请求预算落在模型能力之内。
+ */
+function requestOutputBudgetGuard(maxOutputTokens: number | undefined) {
+  if (!Number.isFinite(maxOutputTokens)) return undefined;
+  return Math.max(1_024, Math.floor(Number(maxOutputTokens) * 0.85));
+}
+
+/*
+ * 概览单请求模式：整份报告（文档字段 + 全部指标）合并为一个解析单元，
+ * 一次请求完成基础内容。仅当输入规模与请求侧输出估算都在模型能力之内时启用，
+ * 否则退回“文档概况 + 指标单元”的常规概览路径。
+ */
+const overviewMergedUnitMaxCharacters = 40_000;
+
+function overviewMergedUnit(
+  pages: RebuiltOcrPage[],
+  classification: ReportContentClassification,
+  maxRequestOutput: number | undefined,
+): AiExtractionUnit | null {
+  if (pages.length < 2 || maxRequestOutput === undefined) return null;
+  const unit = unitFromRanges(
+    "complete_pages",
+    pages.map((page) => ({
+      pageId: page.pageId,
+      pageNumber: page.pageNumber,
+      lineStart: page.lines[0]?.index ?? 0,
+      lineEnd: page.lines.at(-1)?.index ?? 0,
+      chunkIndex: 1,
+      chunkCount: 1,
+    })),
+    pages,
+    "document",
+    true,
+    classification.primaryType,
+    true,
+  );
+  if (unit.characterCount > overviewMergedUnitMaxCharacters) return null;
+  if (unitRequestOutputEstimate(unit) > maxRequestOutput) return null;
+  if (
+    unit.candidateRowCount >
+    aiInputPlanningPolicy.maxCandidateRowsPerUnit * 2
+  )
+    return null;
+  return unit;
+}
+
 function packScalarUnits(
   baseUnits: AiExtractionUnit[],
   pages: RebuiltOcrPage[],
+  limits: AiUnitPackingLimits = defaultUnitPackingLimits,
 ) {
   const ranges = baseUnits
     .flatMap((unit) => unit.pageRanges)
@@ -5797,12 +5972,14 @@ function packScalarUnits(
     );
     if (
       pending.length &&
-      (combined.pageNumbers.length > aiInputPlanningPolicy.maxPagesPerUnit ||
-        combined.characterCount > aiInputPlanningPolicy.targetCharacters ||
+      (combined.pageNumbers.length > limits.maxPagesPerUnit ||
+        combined.characterCount > limits.targetCharacters ||
         combined.estimatedOutputTokens >
-          aiInputPlanningPolicy.targetOutputTokens ||
+          limits.targetOutputTokens ||
         combined.candidateRowCount >
-          aiInputPlanningPolicy.maxCandidateRowsPerUnit)
+          limits.maxCandidateRowsPerUnit ||
+        (limits.maxRequestOutput !== undefined &&
+          unitRequestOutputEstimate(combined) > limits.maxRequestOutput))
     )
       flush();
     pending.push(range);
@@ -6088,6 +6265,8 @@ function documentProfileUnit(
 export function planRebuiltOcrPages(
   reportId: string,
   pages: RebuiltOcrPage[],
+  extractionDepth: AiExtractionDepth = "detailed",
+  options: { maxOutputTokens?: number } = {},
 ): AiExtractionPlan {
   const baseUnits: AiExtractionUnit[] = [];
   let pendingPages: RebuiltOcrPage[] = [];
@@ -6149,20 +6328,43 @@ export function planRebuiltOcrPages(
     pages[0].candidateRowCount <=
       aiInputPlanningPolicy.maxCandidateRowsPerUnit &&
     singlePageEstimate <= aiInputPlanningPolicy.targetOutputTokens;
-  const documentUnit = documentProfileUnit(
-    pages,
-    documentClassification,
-    includeSinglePageScalars,
-  );
-  const scalarUnits = includeSinglePageScalars
+  const maxRequestOutput = requestOutputBudgetGuard(options.maxOutputTokens);
+  /*
+   * 概览单请求模式：整份报告能装进当前模型的输出能力时，
+   * 文档字段与全部指标合并为一个单元，一次请求完成基础内容。
+   */
+  const mergedOverviewUnit =
+    extractionDepth === "overview" && !includeSinglePageScalars
+      ? overviewMergedUnit(pages, documentClassification, maxRequestOutput)
+      : null;
+  const documentUnit = mergedOverviewUnit
+    ? null
+    : documentProfileUnit(pages, documentClassification, includeSinglePageScalars);
+  const scalarUnits =
+    includeSinglePageScalars || mergedOverviewUnit
+      ? []
+      : packScalarUnits(
+          baseUnits,
+          pages,
+          extractionDepth === "overview"
+            ? overviewUnitPackingLimits(maxRequestOutput)
+            : { ...defaultUnitPackingLimits, maxRequestOutput },
+        );
+  /*
+   * 概览模式：指标仍逐行提取（与详细模式同一解析契约），并保留形态发现单元；
+   * 不生成叙事章节单元，也不做补充复核；文档概况单元保持现状。
+   * 合并单元已在同一契约内输出形态发现，不再单独生成形态单元。
+   */
+  const narrativeUnits = extractionDepth === "overview"
     ? []
-    : packScalarUnits(baseUnits, pages);
-  const units = [
-    documentUnit,
-    ...scalarUnits,
-    ...packNarrativeUnits(baseUnits, pages, documentClassification.primaryType),
-    ...packMorphologyUnits(baseUnits, pages),
-  ];
+    : packNarrativeUnits(baseUnits, pages, documentClassification.primaryType);
+  const morphologyUnits =
+    extractionDepth === "overview" && mergedOverviewUnit
+      ? []
+      : packMorphologyUnits(baseUnits, pages);
+  const units = mergedOverviewUnit
+    ? [mergedOverviewUnit]
+    : [documentUnit!, ...scalarUnits, ...narrativeUnits, ...morphologyUnits];
   const localFactsHash = sha256(
     JSON.stringify(
       pages.flatMap((page) =>
@@ -6172,12 +6374,15 @@ export function planRebuiltOcrPages(
   );
   const planHash = sha256(
     [
+      extractionDepth,
+      String(maxRequestOutput ?? "unguarded"),
       units.map((unit) => `${unit.unitKey}:${unit.inputHash}`).join("|"),
       localFactsHash,
     ].join("\u0000"),
   );
   return {
     policy: aiInputPlanningPolicy,
+    extractionDepth,
     reportId,
     pageCount: pages.length,
     sourceCharacterCount: pages.reduce(
@@ -6330,6 +6535,14 @@ export function buildAiExtractionPlan(reportId: string) {
       })),
       { patientSex },
     ),
+    resolveAiExtractionDepth(),
+    {
+      /* 规划阶段感知当前模型的输出能力：单元按预算打包，
+         避免“规划合法但请求必截断”的错配 */
+      maxOutputTokens: resolveAiMaxOutputTokens(
+        getAiTaskSettings("report_extraction").provider,
+      ),
+    },
   );
 }
 

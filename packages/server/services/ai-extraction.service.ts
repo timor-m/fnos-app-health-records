@@ -20,6 +20,7 @@ import {
 } from "./observation-field-overrides.service";
 import {
   buildAiExtractionPlan,
+  estimateAiUnitRequestOutput,
   localObservationsForLine,
   redactAiInputText,
 } from "./ai-input-planner.service";
@@ -409,16 +410,15 @@ export function calculateAiOutputTokenBudget(
   );
   const pageCount = Math.max(1, input.pageCount || 1);
   const supplement = input.promptMode === "supplement";
-  const base = supplement ? 2_048 : 4_096;
-  const estimate =
-    base +
-    candidateCount * (supplement ? 140 : 180) +
-    morphologyCandidates * (supplement ? 420 : 700) +
-    pageCount * (supplement ? 128 : 384) +
-    Math.min(
-      supplement ? 2_048 : 6_144,
-      Math.ceil(inputCharacters * (supplement ? 0.1 : 0.2)),
-    );
+  /* 估算内核与打包阶段共用（ai-input-planner.estimateAiUnitRequestOutput），
+     保证“规划出来的单元”与“这里算出的预算”口径一致 */
+  const estimate = estimateAiUnitRequestOutput({
+    pageCount,
+    characterCount: inputCharacters,
+    candidateRowCount: candidateCount,
+    morphologyCandidateCount: morphologyCandidates,
+    supplement,
+  });
   const minimum = supplement ? 4_096 : 8_192;
   const scale = Math.max(1, Math.min(8, input.outputTokenScale || 1));
   const requested = roundUp(Math.max(minimum, estimate * 1.35) * scale, 1_024);
@@ -443,6 +443,33 @@ function redactSensitiveText(value: string) {
 function textValue(value: unknown, maxLength = 4000) {
   if (typeof value !== "string") return null;
   const clean = redactSensitiveText(value).trim().slice(0, maxLength);
+  return clean || null;
+}
+
+/*
+ * 过滤 summary 中“只剩标题没有内容”的分节骨架：模型有时只照抄原报告的
+ * 章节标题（如【肝胆功能】）却丢弃了标题下的内容，直接展示会形成残缺骨架。
+ * 仅移除独占一行、且到下一个标题或文末之间没有任何内容的标题行；
+ * 同行带内容（如【肝胆功能】未见异常）或标题下有内容的保持原样。
+ */
+function sanitizeSummarySectionSkeleton(text: string | null) {
+  if (!text || !text.includes("【")) return text;
+  const lines = text.split("\n");
+  const isBareHeader = (line: string) => /^\s*【[^】]*】\s*$/.test(line);
+  const kept: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (isBareHeader(line)) {
+      let next = index + 1;
+      while (next < lines.length && !lines[next].trim()) next += 1;
+      if (next >= lines.length || isBareHeader(lines[next])) continue;
+    }
+    kept.push(line);
+  }
+  const clean = kept
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
   return clean || null;
 }
 
@@ -1158,7 +1185,7 @@ export function normalizeAiExtraction(value: unknown): {
     chiefComplaint: textValue(source.chiefComplaint),
     findings: textValue(source.findings, 12_000),
     impression: textValue(source.impression, 8000),
-    summary: textValue(source.summary, 4000),
+    summary: sanitizeSummarySectionSkeleton(textValue(source.summary, 4000)),
     recommendation: textValue(source.recommendation, 4000),
     observations,
     morphologyFindings,
@@ -1398,11 +1425,11 @@ function documentContract(input: AiExtractionInput) {
       ? `\n综合体检通常跨多个科室和部位：没有报告原文明示的单一就诊科室时省略科室字段；reportSubtype 默认省略，只有报告标题明确写出职业体检等具体子类时才填原文；bodyParts 默认省略，不能把“体检”或各专项章节汇总成一个人体部位。`
       : "";
   return `当前任务只建立整份报告的文档概况。
-允许字段：reportType、reportSubtype、title、hospitalNameRaw、hospitalBranch、city、visitType、visitDepartment、orderingDepartment、performingDepartment、reportingDepartment、inpatientWard、bodyParts、identifiers、reportIssuedAt、examinedAt、orderedAt、sampledAt、receivedAt、reviewedAt、admittedAt、dischargedAt、clinicians、clinicalDiagnosis、purpose、chiefComplaint、findings、impression、summary、recommendation、evidence、confidence${includeObservations ? "、observations" : ""}。
+允许字段：reportType、reportSubtype、title、hospitalNameRaw、hospitalBranch、city、visitType、visitDepartment、orderingDepartment、performingDepartment、reportingDepartment、inpatientWard、bodyParts、identifiers、reportIssuedAt、examinedAt、orderedAt、sampledAt、receivedAt、reviewedAt、admittedAt、dischargedAt、clinicians、clinicalDiagnosis、purpose、chiefComplaint、findings、impression、summary、recommendation、evidence、confidence${includeObservations ? "、observations、morphologyFindings" : ""}。
 reportType 只能是 physical_exam、laboratory、imaging、functional、pathology、outpatient、inpatient、prescription、receipt、vaccine、other。
 title 必须概括整份报告；泛标题应按主要项目、检查方式、部位或报告范围生成短标题，但不得生成疾病判断标题。综合体检中的专项页不能覆盖整份报告标题。
 reportSubtype 只能填写报告上明确出现的具体检查方式或子类，不得重复 reportType 的枚举值。bodyParts 只能填写报告明确涉及的实际检查部位，不得填写 physical_exam、checkup、laboratory、imaging 等内部类型词；每项使用 raw、name、parent、laterality，laterality 只能是 left、right、bilateral、unspecified。identifiers 只允许 reportNo、outpatientNo、inpatientNo、physicalExamNo、examNo、specimenNo、barcodeNo。clinicians 只允许 ordering、examining、reporting、reviewing、chief。
-summary 只能提取原报告明确存在的总结，不得为当前输入另写摘要。公共字段证据写入顶层 evidence，置信度写入 confidence。${checkupFields}${includeObservations ? `\n这是单页报告，同时逐项输出 observations，规则如下：\n${observationContract()}` : ""}`;
+summary 只能提取原报告明确存在的总结，不得为当前输入另写摘要。公共字段证据写入顶层 evidence，置信度写入 confidence。${checkupFields}${includeObservations ? `\n当前输入覆盖整份报告，同时逐项输出 observations，规则如下：\n${observationContract()}\n同时输出 morphologyFindings，规则如下：\n${morphologyContract().replace(/^当前任务只输出 morphologyFindings。/, "")}` : ""}`;
 }
 
 function observationContract() {

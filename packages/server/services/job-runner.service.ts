@@ -1271,6 +1271,7 @@ export async function processNextJob(
             provider: extraction.provider,
             model: extraction.model,
             promptVersion: extraction.promptVersion,
+            extractionDepth: execution.plan.extractionDepth,
             inputCharacters: execution.inputCharacters,
             planHash: execution.plan.planHash,
             plannedUnits: execution.plan.unitCount,
@@ -1562,6 +1563,76 @@ export function queueManualAiExtraction(user: RequestUser, reportId: string) {
     "UPDATE reports SET status = 'processing', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status <> 'trashed'",
   ).run(reportId);
   return { id: jobId, status: "queued" };
+}
+
+/*
+ * 用户主动中断报告的排队/处理中任务：排队的任务立即停止；
+ * 正在执行的任务在下一个单元边界由 shouldContinue 检查发现状态变化后安静退出，
+ * 已保存的上一版 OCR、指标和报告字段不会被覆盖。
+ */
+export function cancelReportProcessing(user: RequestUser, reportId: string) {
+  const db = getDatabase();
+  const report = db
+    .prepare(
+      `
+    SELECT id, member_id AS memberId, title, status
+    FROM reports WHERE id = ? AND status <> 'trashed'
+  `,
+    )
+    .get(reportId) as
+    { id: string; memberId: string; title: string; status: string } | undefined;
+  if (!report)
+    throw createError({ statusCode: 404, statusMessage: "报告不存在" });
+  assertMemberManage(user, report.memberId);
+  const active = db
+    .prepare(
+      `
+    SELECT id, job_type AS jobType, attempts FROM processing_jobs
+    WHERE report_id = ? AND status IN ('queued', 'processing')
+  `,
+    )
+    .all(reportId) as Array<{
+    id: string;
+    jobType: JobRow["jobType"];
+    attempts: number;
+  }>;
+  if (!active.length)
+    throw createError({
+      statusCode: 409,
+      statusMessage: "这份报告当前没有排队或处理中的任务",
+    });
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    for (const job of active) {
+      db.prepare(
+        `
+        UPDATE processing_jobs
+        SET status = 'cancelled', locked_at = NULL, lease_expires_at = NULL,
+          next_retry_at = NULL, finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
+        WHERE id = ? AND status IN ('queued', 'processing')
+      `,
+      ).run(job.id);
+      appendJobEvent({
+        jobId: job.id,
+        reportId,
+        eventType: "cancelled",
+        status: "cancelled",
+        attempt: job.attempts,
+        message: "用户手动中断任务",
+        detail: {
+          jobType: job.jobType,
+          source: "user_cancel",
+          previousReportStatus: report.status,
+        },
+      });
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  const status = reconcileReportProcessingStatus(reportId);
+  return { cancelled: active.length, status };
 }
 
 export function reprocessReportOcrAndAi(user: RequestUser, reportId: string) {

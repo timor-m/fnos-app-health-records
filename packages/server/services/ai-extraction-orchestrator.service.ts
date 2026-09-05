@@ -1286,7 +1286,11 @@ function validateResultEvidence(
       ? []
       : validatedObservations;
   const morphologyFindings =
-    unit.route === "morphology" || unit.route === "verification"
+    unit.route === "morphology" ||
+    unit.route === "verification" ||
+    /* 覆盖整份报告的 document 单元（单页报告、概览合并单元）
+       在同一契约下输出形态发现，同样需要证据校验后持久化 */
+    (unit.route === "document" && unit.candidateRowCount > 0)
       ? result.fields.morphologyFindings.flatMap((item) => {
           const evidence = exactEvidenceForMorphology(plan, unit, item);
           return evidence.length
@@ -1439,15 +1443,15 @@ function validateResultEvidence(
   const source =
     unit.route === "verification"
       ? { observations, morphologyFindings }
-      : unit.route === "morphology"
-        ? { morphologyFindings }
-        : unit.route === "document"
-          ? {
-              ...result.fields,
-              observations,
-              morphologyFindings: [],
-              ...clinicalFacts,
-            }
+        : unit.route === "morphology"
+          ? { morphologyFindings }
+          : unit.route === "document"
+            ? {
+                ...result.fields,
+                observations,
+                morphologyFindings,
+                ...clinicalFacts,
+              }
           : unit.route === "narrative"
             ? {
                 ...narrativeFields,
@@ -3179,6 +3183,7 @@ async function executeUnit(
   row: UnitRow,
   executor: AiExecutor,
   options: ExecuteOptions,
+  splitDepth = 0,
 ) {
   const stored = parseStoredResult(row);
   if (
@@ -3294,6 +3299,7 @@ async function executeUnit(
           childRow,
           executor,
           options,
+          splitDepth + 1,
         );
       },
       { stopOnError: true },
@@ -3319,6 +3325,20 @@ async function executeUnit(
         requestedMaxTokens?: number;
         modelMaxOutputTokens?: number;
       };
+      /*
+       * 拆分最多两级（单元 → 1/2 → 1/4）。低输出上限模型若仍超限，
+       * 继续拆只会把一次失败放大成几十次无效请求并拖垮服务，
+       * 这里及时止损，给出可操作的明确报错。
+       */
+      if (splitDepth >= 2) {
+        throw Object.assign(
+          new Error(
+            "解析单元已拆到最小仍超出模型输出上限：当前模型的输出能力不足以完成解析，" +
+            "请更换输出上限更高的模型，或在 AI 设置中将解析程度调为概览后重试",
+          ),
+          { code: "AI_OUTPUT_SPLIT_EXHAUSTED", cause: error },
+        );
+      }
       const canRaise =
         outputTokenScale < 2 &&
         (!truncation.requestedMaxTokens ||
@@ -3440,7 +3460,13 @@ export async function executeAiExtractionPlan(
       ),
     ),
   );
-  const supplements = supplementUnits(plan, merged);
+  /*
+   * 概览模式：主单元与确定性兜底保持现状，但不做补充复核（supplement），
+   * 未覆盖的候选行按现有 warning 逻辑留在单元审计中。
+   */
+  const supplements = plan.extractionDepth === "overview"
+    ? []
+    : supplementUnits(plan, merged);
   let effectivePlan = plan;
   if (supplements.length) {
     const units = [...plan.units, ...supplements];

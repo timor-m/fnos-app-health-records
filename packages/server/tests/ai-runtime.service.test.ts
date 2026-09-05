@@ -146,3 +146,68 @@ test("retries without json_object when a compatible service explicitly rejects i
     globalThis.fetch = originalFetch;
   }
 });
+
+test("disables DeepSeek thinking mode for structured extraction requests", async () => {
+  const originalFetch = globalThis.fetch;
+  let body: Record<string, unknown> = {};
+  globalThis.fetch = async (_input, init) => {
+    body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+    return new Response(JSON.stringify({
+      model: "deepseek-v4-flash",
+      choices: [{ finish_reason: "stop", message: { content: "{\"ok\":true}" } }]
+    }), { status: 200 });
+  };
+  try {
+    await executeAiChatCompletion({
+      provider: "api.deepseek.com",
+      providerKey: "deepseek",
+      baseUrl: "https://api.deepseek.com",
+      apiKey: "secret",
+      model: "deepseek-v4-flash"
+    }, {
+      messages: [{ role: "user", content: "test" }],
+      maxOutputTokens: 8_192,
+      timeoutMs: 15_000
+    });
+    assert.deepEqual(body.thinking, { type: "disabled" });
+    assert.equal(body.max_tokens, 8_192);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("retries without thinking when an older DeepSeek model rejects the parameter", async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+    bodies.push(body);
+    if (bodies.length === 1) {
+      return new Response(JSON.stringify({
+        error: { message: "unknown parameter: thinking" }
+      }), { status: 400 });
+    }
+    return new Response(JSON.stringify({
+      model: "deepseek-chat",
+      choices: [{ finish_reason: "stop", message: { content: "{\"ok\":true}" } }]
+    }), { status: 200 });
+  };
+  try {
+    const result = await executeAiChatCompletion({
+      provider: "api.deepseek.com",
+      providerKey: "deepseek",
+      baseUrl: "https://api.deepseek.com",
+      apiKey: "secret",
+      model: "deepseek-chat"
+    }, {
+      messages: [{ role: "user", content: "test" }],
+      maxOutputTokens: 128,
+      timeoutMs: 15_000
+    });
+    assert.deepEqual(bodies[0]?.thinking, { type: "disabled" });
+    assert.equal("thinking" in (bodies[1] || {}), false);
+    assert.equal(result.content, "{\"ok\":true}");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

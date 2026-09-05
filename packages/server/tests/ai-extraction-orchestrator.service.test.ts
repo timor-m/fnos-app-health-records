@@ -72,11 +72,19 @@ async function withReport(
 ) {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-ai-units-"));
   process.env.STORAGE_DIR = storageDir;
+  /* 打包阶段会按当前模型的输出上限做预算护栏；测试固定为高上限，
+     让单元数量只取决于报告内容而不是环境变量 */
+  const previousMaxOutputTokens = process.env.AI_MAX_OUTPUT_TOKENS;
+  process.env.AI_MAX_OUTPUT_TOKENS = "384000";
   try {
     const db = getDatabase();
     db.exec(`
       INSERT INTO users (id, display_name) VALUES ('owner', '管理员');
       INSERT INTO health_members (id, display_name, created_by) VALUES ('member', '本人', 'owner');
+      /* 本文件的用例覆盖完整解析管线（叙事章节、遗漏复核、补提取），
+         显式固定详细模式，不随全局默认值变化 */
+      INSERT INTO app_settings (setting_key, value_json)
+      VALUES ('ai.provider', '{"extractionDepth":"detailed"}');
       INSERT INTO reports (id, member_id, created_by, report_type, title, status)
       VALUES ('report', 'member', 'owner', 'checkup', '长体检报告', 'processing');
       INSERT INTO processing_jobs (
@@ -118,6 +126,8 @@ async function withReport(
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;
+    if (previousMaxOutputTokens === undefined) delete process.env.AI_MAX_OUTPUT_TOKENS;
+    else process.env.AI_MAX_OUTPUT_TOKENS = previousMaxOutputTokens;
     rmSync(storageDir, { recursive: true, force: true });
   }
 }

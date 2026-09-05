@@ -63,12 +63,17 @@ async function upstreamError(response: Response) {
 
 export function buildAiChatCompletionRequestBody(config: AiRuntimeConfig, request: AiRuntimeRequest) {
   const isMiniMax = config.providerKey === "minimax" || config.provider === "minimax";
+  /* DeepSeek v4 默认开启思考模式（effort=high），思维链与回答共享输出预算：
+     结构化提取属于誊写型任务，思考开销大且会把 max_tokens 耗尽导致 JSON 截断，
+     因此显式关闭；旧模型不认识该参数时由 400 降级逻辑兜底。 */
+  const isDeepSeek = config.providerKey === "deepseek";
   return {
     model: config.model,
     temperature: request.temperature ?? 0,
     ...(isMiniMax
       ? { max_completion_tokens: Math.min(2_048, request.maxOutputTokens), reasoning_split: true }
       : { max_tokens: request.maxOutputTokens }),
+    ...(isDeepSeek ? { thinking: { type: "disabled" as const } } : {}),
     ...(!isMiniMax && request.responseFormat === "json_object"
       ? { response_format: { type: "json_object" as const } }
       : {}),
@@ -82,7 +87,7 @@ export async function executeAiChatCompletion(
 ): Promise<AiRuntimeResponse> {
   const started = Date.now();
   const isMiniMax = config.providerKey === "minimax" || config.provider === "minimax";
-  const requestBody = buildAiChatCompletionRequestBody(config, request);
+  let requestBody = buildAiChatCompletionRequestBody(config, request);
   const endpoint = `${config.baseUrl}/chat/completions`;
   const requestOptions = {
     timeoutMs: request.timeoutMs,
@@ -100,6 +105,24 @@ export async function executeAiChatCompletion(
     body: JSON.stringify(body)
   }, requestOptions);
   let response = await send(requestBody);
+
+  if (!response.ok && response.status === 400 && "thinking" in requestBody) {
+    const detail = await upstreamError(response);
+    if (/thinking/i.test(detail)) {
+      const { thinking: _unsupported, ...fallbackBody } = requestBody;
+      requestBody = fallbackBody;
+      response = await send(requestBody);
+    } else {
+      throw Object.assign(new Error(`AI 服务返回 ${response.status}${detail ? `：${detail}` : ""}`), {
+        code: `AI_HTTP_${response.status}`,
+        upstreamStatus: response.status,
+        upstreamDetail: detail,
+        provider: config.provider,
+        model: config.model,
+        elapsedMs: Date.now() - started
+      });
+    }
+  }
 
   if (!response.ok && response.status === 400 && "response_format" in requestBody) {
     const detail = await upstreamError(response);

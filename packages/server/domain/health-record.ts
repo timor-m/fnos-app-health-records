@@ -454,6 +454,18 @@ export type ReportDetail = ReportSummary & {
   billingItems: BillingItem[];
   structuredSections: ReportStructuredSection[];
   duplicateCandidates: DuplicateReportCandidate[];
+  memberIdentityAssessment: {
+    patientSex: "male" | "female" | null;
+    patientBirthDate: string | null;
+    patientAgeText: string | null;
+    patientApproxBirthDate: string | null;
+    mismatchedFields: Array<"sex" | "birthDate">;
+    candidates: Array<{
+      id: string;
+      displayName: string;
+      relationship: string;
+    }>;
+  } | null;
   manualFieldKeys: string[];
 };
 

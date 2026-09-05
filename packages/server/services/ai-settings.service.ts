@@ -20,10 +20,20 @@ const defaultRequestTimeoutSeconds = 600;
 const minRequestTimeoutSeconds = 30;
 const maxRequestTimeoutSeconds = 3_600;
 
+export type AiExtractionDepth = "overview" | "detailed";
+const extractionDepthValues: AiExtractionDepth[] = ["overview", "detailed"];
+
+export function normalizeAiExtractionDepth(value: unknown): AiExtractionDepth {
+  return extractionDepthValues.includes(value as AiExtractionDepth)
+    ? (value as AiExtractionDepth)
+    : "overview";
+}
+
 export type AiSettings = {
   enabled: boolean;
   provider: AiProviderKey;
   requestTimeoutSeconds: number;
+  extractionDepth: AiExtractionDepth;
   visionEnabled: boolean;
   baseUrl: string;
   textModel: string;
@@ -51,6 +61,7 @@ type StoredAiSettings = Partial<StoredProviderSettings> & {
   enabled?: boolean;
   provider?: string;
   requestTimeoutSeconds?: number;
+  extractionDepth?: string;
   providers?: Partial<Record<AiProviderKey, StoredProviderSettings>>;
   taskBindings?: Partial<Record<AiTaskKey, { provider?: string; model?: string }>>;
 };
@@ -58,6 +69,7 @@ type ParsedAiSettings = {
   enabled: boolean;
   provider: AiProviderKey;
   requestTimeoutSeconds: number;
+  extractionDepth: AiExtractionDepth;
   providers: Partial<Record<AiProviderKey, ProviderSettings>>;
   taskBindings: Partial<Record<AiTaskKey, AiTaskBinding>>;
 };
@@ -149,6 +161,7 @@ export function parseStoredSettings(): ParsedAiSettings {
     enabled: false,
     provider: "deepseek",
     requestTimeoutSeconds: legacyRequestTimeoutSeconds(),
+    extractionDepth: "overview",
     providers: {},
     taskBindings: {}
   };
@@ -193,6 +206,7 @@ export function parseStoredSettings(): ParsedAiSettings {
       enabled: stored.enabled === true,
       provider,
       requestTimeoutSeconds: storedRequestTimeoutSeconds(stored.requestTimeoutSeconds),
+      extractionDepth: normalizeAiExtractionDepth(stored.extractionDepth),
       providers,
       taskBindings
     };
@@ -201,6 +215,7 @@ export function parseStoredSettings(): ParsedAiSettings {
       enabled: false,
       provider: "deepseek",
       requestTimeoutSeconds: legacyRequestTimeoutSeconds(),
+      extractionDepth: "overview",
       providers: {},
       taskBindings: {}
     };
@@ -270,6 +285,7 @@ function serializeSettings(parsed: ParsedAiSettings) {
     enabled: parsed.enabled,
     provider: parsed.provider,
     requestTimeoutSeconds: parsed.requestTimeoutSeconds,
+    extractionDepth: parsed.extractionDepth,
     providers,
     taskBindings: parsed.taskBindings
   };
@@ -294,6 +310,7 @@ function publicSettings(parsed: ParsedAiSettings) {
     enabled: parsed.enabled,
     provider: parsed.provider,
     requestTimeoutSeconds: parsed.requestTimeoutSeconds,
+    extractionDepth: parsed.extractionDepth,
     visionEnabled: active.visionEnabled,
     baseUrl: active.baseUrl,
     textModel: active.textModel,
@@ -336,6 +353,7 @@ export function getAiTaskSettings(taskKey: AiTaskKey, includeSecret = false) {
     enabled: parsed.enabled,
     taskKey,
     requestTimeoutSeconds: parsed.requestTimeoutSeconds,
+    extractionDepth: parsed.extractionDepth,
     provider,
     baseUrl: providerSettings.baseUrl,
     model: binding?.model || providerSettings.textModel,
@@ -344,6 +362,11 @@ export function getAiTaskSettings(taskKey: AiTaskKey, includeSecret = false) {
     apiKey: includeSecret ? providerSettings.apiKey : "",
     inherited: !binding
   };
+}
+
+/* AI 解析计划构建时读取当前解析程度；概览模式只减少单元数量与复核，不改变解析契约。 */
+export function resolveAiExtractionDepth(): AiExtractionDepth {
+  return parseStoredSettings().extractionDepth;
 }
 
 export function saveAiSettings(input: AiSettingsInput) {
@@ -364,6 +387,9 @@ export function saveAiSettings(input: AiSettingsInput) {
     enabled: input.enabled === undefined ? parsed.enabled : input.enabled === true,
     provider,
     requestTimeoutSeconds: submittedRequestTimeoutSeconds(input.requestTimeoutSeconds, parsed.requestTimeoutSeconds),
+    extractionDepth: normalizeAiExtractionDepth(
+      input.extractionDepth === undefined ? parsed.extractionDepth : input.extractionDepth
+    ),
     providers: {
       ...parsed.providers,
       [provider]: {

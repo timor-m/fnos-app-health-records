@@ -1050,6 +1050,29 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .duplicate-actions button:disabled { opacity: .62; cursor: not-allowed; }
 .duplicate-confirm-button { background: var(--warning-confirm-bg); color: var(--brand-strong); }
 
+.member-mismatch-actions { align-items: center; }
+.member-create-form {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding-top: 3px;
+}
+.member-create-form input,
+.member-create-form select {
+  min-height: 34px; padding: 0 10px; border: 1px solid var(--warning-btn-border);
+  border-radius: 10px; background: var(--warning-btn-bg); color: var(--ink);
+  font: inherit; font-size: 12px;
+}
+.member-create-form input[type="text"] { flex: 1 1 140px; min-width: 120px; }
+.member-create-form button {
+  min-height: 34px; padding: 0 11px; border: 0; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  font-size: 12px; font-weight: 800;
+}
+.member-create-form .inline-panel-error { flex-basis: 100%; margin: 0; }
+.member-create-hint {
+  flex-basis: 100%; margin: 0;
+  font-size: 11px; color: var(--ink-2);
+}
+
 .confirm-modal { width: min(400px, 100%); }
 .confirm-modal-body { padding: 16px 20px 4px; color: var(--ink-2); font-size: 13px; line-height: 1.65; white-space: pre-line; }
 .confirm-modal-actions { padding: 14px 16px 16px; }

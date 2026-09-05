@@ -7,6 +7,7 @@ import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
 import {
   getAiSettings,
   getAiTaskSettings,
+  resolveAiExtractionDepth,
   saveAiSettings,
   testAiConnection
 } from "../services/ai-settings.service.ts";
@@ -538,5 +539,16 @@ test("returns an actionable error when the NAS cannot resolve the AI host", asyn
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+test("defaults extraction depth to overview while preserving an explicit detailed choice", async () => {
+  await withDatabase(() => {
+    assert.equal(getAiSettings(false).extractionDepth, "overview");
+    assert.equal(resolveAiExtractionDepth(), "overview");
+    saveAiSettings({ provider: "deepseek", extractionDepth: "detailed" });
+    assert.equal(resolveAiExtractionDepth(), "detailed");
+    saveAiSettings({ provider: "deepseek" });
+    assert.equal(resolveAiExtractionDepth(), "detailed");
   });
 });
