@@ -139,8 +139,7 @@ test("keeps multi-report normalization, provenance and aggregate quality metrics
 
     const issues = listIndicatorNormalizationIssues(admin);
     assert.deepEqual(issues.map((issue) => ({ rawName: issue.rawName, status: issue.status, count: issue.count })), [
-      { rawName: "机构尿液内部评分", status: "unknown", count: 1 },
-      { rawName: "尿蛋白", status: "excluded", count: 1 }
+      { rawName: "机构尿液内部评分", status: "unknown", count: 1 }
     ]);
 
     const metrics = getIndicatorNormalizationMetrics(admin);
@@ -150,15 +149,15 @@ test("keeps multi-report normalization, provenance and aggregate quality metrics
       normalizationRows: 11,
       mapped: 10,
       trendEligible: 9,
-      needsReview: 2,
+      needsReview: 1,
       reviewed: 0,
-      issueGroups: 2,
+      issueGroups: 1,
       decisions: 0,
       userAliases: 0
     });
     assert.deepEqual(metrics.quality, { high: 9, medium: 0, low: 1, excluded: 1 });
     assert.deepEqual(metrics.reportTypes, [
-      { reportType: "laboratory", reports: 2, observations: 6, mapped: 5, trendEligible: 4, needsReview: 2 },
+      { reportType: "laboratory", reports: 2, observations: 6, mapped: 5, trendEligible: 4, needsReview: 1 },
       { reportType: "checkup", reports: 1, observations: 5, mapped: 5, trendEligible: 5, needsReview: 0 }
     ]);
     assert.equal(metrics.sourceOrigins.reduce((sum, row) => sum + row.count, 0), 11);

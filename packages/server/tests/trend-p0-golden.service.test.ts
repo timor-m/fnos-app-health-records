@@ -527,7 +527,16 @@ test("keeps the anonymized uploaded report stable under the P0 trend gate", asyn
       JOIN observations o ON o.id = occurrence.observation_id
       WHERE o.report_id = 'p0-golden-report'
     `).get() as { count: number };
-    assert.equal(governance.count, 31);
+    assert.equal(governance.count, 11);
+    const designGatedInPool = db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM indicator_unmatched_occurrences occurrence
+      JOIN observations o ON o.id = occurrence.observation_id
+      LEFT JOIN observation_normalizations n ON n.observation_id = occurrence.observation_id
+      WHERE o.report_id = 'p0-golden-report'
+        AND COALESCE(n.excluded_reason, '') LIKE '%不默认进入折线趋势%'
+    `).get() as { count: number };
+    assert.equal(designGatedInPool.count, 0, "按字典定义不进入折线趋势的定性结果不应留在治理池");
   } finally {
     globalThis.fetch = originalFetch;
     closeDatabaseForTests();

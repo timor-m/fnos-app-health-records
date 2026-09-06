@@ -31,7 +31,7 @@ function pick(id: string) {
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="sheet-backdrop" @mousedown.self="emit('close')">
+    <div v-if="open" class="sheet-backdrop" @click.self="emit('close')">
       <section class="sheet-panel member-sheet" role="dialog" aria-modal="true" aria-label="切换成员">
         <span class="sheet-grabber" aria-hidden="true"></span>
         <header class="sheet-header">

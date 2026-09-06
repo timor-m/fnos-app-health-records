@@ -34,6 +34,10 @@
 
 - 所有用户可感知的新功能、重要修复、部署行为变化和兼容性变化，都要在当前 `CHANGELOG.md` 的 `x.y.z - Unreleased` 区块中简要记录。
 - 条目按 `Added`、`Changed`、`Fixed` 分类，描述用户能感知的结果；数据库变化必须写明 schema 版本变化和升级影响。
+- 条目记录规则：
+  - 指标字典调整（新增指标、别名、分类、快照 revision 等）不纳入 changelog，字典变更以字典自身的 revision 和 manifest 为准。
+  - UI 调整细节不逐条展开，合并为一条“优化 UI：……”概述即可。
+  - 条目只罗列核心功能点和用户可感知的结果，不描述问题成因、排查和修复过程。
 - 不要为了普通功能修改而提前创建正式版本章节；未发布内容统一进入当前版本的 `Unreleased` 区块。
 - 检查 `template.config.json` 的 `releaseNotes` 是否仍准确，特别是摘要、亮点、目标数据库版本和部署方式。
 
@@ -94,4 +98,3 @@ npm run dictionary:build
 - 执行了哪些测试和构建检查。
 - 哪些检查因环境、网络或外部服务未执行。
 - 是否存在需要用户在 fnOS、Docker、远程字典服务或 GitHub Actions 中继续验证的事项。
-

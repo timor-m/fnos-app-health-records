@@ -14,7 +14,7 @@ import {
 import { assertMemberManage } from "./member.service";
 
 export function activeIndicatorNormalizationVersion() {
-  return `indicator-normalization-p8-observation-noise-v1-${activeIndicatorDictionaryVersion()}`;
+  return `indicator-normalization-p9-unit-ocr-noise-v1-${activeIndicatorDictionaryVersion()}`;
 }
 
 function normalizationVersion() {
@@ -407,12 +407,21 @@ function normalizeUnit(value: string | null | undefined) {
     .replace(/[／⁄]/g, "/")
     .replace(/[×xX*]/g, "×")
     .replace(/[μµ]/g, "μ")
-    .replace(/﹪/g, "%");
+    .replace(/﹪/g, "%")
+    /* OCR 噪声：科学计数指数的上标或分隔符常丢失/误读（10⁹→109、10°9、10~6），
+       在“10 + 指数 + /”的单位语境下统一补回 ^，如 ×109/L→×10^9/L、10~6/L→10^6/L */
+    .replace(/^(×?)10[°˚~^]([1-9]\d?)(?=\/)/, "$110^$2")
+    .replace(/^(×)10([1-9]\d?)(?=\/)/, "$110^$2")
+    .replace(/^10([1-9]\d?)(?=\/[lμ])/i, "10^$1");
   const lower = unit.toLocaleLowerCase();
   const aliases: Record<string, string> = {
     "mmol/l": "mmol/L",
     "μmol/l": "μmol/L",
     "umol/l": "μmol/L",
+    /* OCR 形近字：umo1/L（数字 1 代替字母 l）等 */
+    "umo1/l": "μmol/L",
+    "μmo1/l": "μmol/L",
+    "mmo1/l": "mmol/L",
     "mg/dl": "mg/dL",
     "mg/l": "mg/L",
     "g/l": "g/L",
@@ -469,6 +478,8 @@ function normalizeUnit(value: string | null | undefined) {
     "/hpf": "/HPF",
     "cell/hp": "/HPF",
     "/lpf": "/LPF",
+    "/ul": "/μL",
+    "/μl": "/μL",
     "cast/lp": "/LPF",
     "个/lpf": "/LPF",
     "个/hpf": "/HPF",
@@ -760,6 +771,9 @@ function canConvertIndicatorUnit(canonicalKey: string, fromUnit: string, toUnit:
     && ["μg/L->ng/mL", "ng/mL->μg/L"].includes(pair)) return true;
   if (canonicalKey === "laboratory_testosterone"
     && ["ng/dL->ng/mL", "ng/mL->ng/dL"].includes(pair)) return true;
+  if (canonicalKey === "c_peptide_postprandial_2h"
+    && ["μg/L->ng/mL", "ng/mL->μg/L", "ng/mL->nmol/L", "nmol/L->ng/mL",
+      "μg/L->nmol/L", "nmol/L->μg/L"].includes(pair)) return true;
   return false;
 }
 
@@ -847,6 +861,13 @@ export function convertUnit(canonicalKey: string, value: number, fromUnit: strin
     && ((fromUnit === "μg/L" && toUnit === "ng/mL") || (fromUnit === "ng/mL" && toUnit === "μg/L"))) return value;
   if (canonicalKey === "laboratory_testosterone" && fromUnit === "ng/dL" && toUnit === "ng/mL") return value / 100;
   if (canonicalKey === "laboratory_testosterone" && fromUnit === "ng/mL" && toUnit === "ng/dL") return value * 100;
+  if (canonicalKey === "c_peptide_postprandial_2h"
+    && ((fromUnit === "μg/L" && toUnit === "ng/mL") || (fromUnit === "ng/mL" && toUnit === "μg/L"))) return value;
+  // C 肽换算按分子量 3020：1 ng/mL（= 1 μg/L）= 0.331 nmol/L
+  if (canonicalKey === "c_peptide_postprandial_2h"
+    && (fromUnit === "ng/mL" || fromUnit === "μg/L") && toUnit === "nmol/L") return value * 0.331;
+  if (canonicalKey === "c_peptide_postprandial_2h"
+    && fromUnit === "nmol/L" && (toUnit === "ng/mL" || toUnit === "μg/L")) return value / 0.331;
   if (["body_height", "body_waist_circumference", "body_hip_circumference"].includes(canonicalKey)
     && fromUnit === "m" && toUnit === "cm") return value * 100;
   if (["body_height", "body_waist_circumference", "body_hip_circumference"].includes(canonicalKey)
@@ -876,6 +897,14 @@ function exclusionReason(row: ObservationRow, indicator: AliasRow, unitCompatibl
   if ((row.numericValue ?? parseNumericResultText(row.resultText)) === null) return "没有可靠数值";
   if (!unitCompatible) return "单位与标准指标不兼容";
   return null;
+}
+
+/**
+ * 已命中字典、但按指标定义（状态/文本型或非数值型）不进入折线趋势的结果。
+ * 这是字典的既定守门而非待治理缺口，与 OCR 证据失败一样豁免出治理池。
+ */
+function isDesignGatedQualitativeExclusion(excludedReason: string | null | undefined) {
+  return Boolean(excludedReason && excludedReason.includes("不默认进入折线趋势"));
 }
 
 export function ensureBuiltinIndicatorCatalog() {
@@ -1121,13 +1150,28 @@ function normalizeObservationAutomatically(row: ObservationRow): NormalizationRe
     });
   }
 
+  /* 历史 AI 建议条目（ai_suggestion）与内置条目同名时不构成竞争：内置条目优先。
+     这些重复条目是字典更新前自动建标的遗留，若与内置候选同时保留会触发多义守门，
+     把本可高置信匹配的指标挡在趋势外。仅压制品名相同的 AI 建议候选，无内置同名时保留。 */
+  const builtinDisplayNames = new Set(
+    scoredCandidates
+      .filter((candidate) => candidate.alias.aliasSource === "builtin")
+      .map((candidate) => compactIndicatorKey(candidate.alias.displayName))
+  );
+  const effectiveCandidates = builtinDisplayNames.size === 0
+    ? scoredCandidates
+    : scoredCandidates.filter((candidate) =>
+      candidate.alias.aliasSource !== "ai_suggestion"
+      || !builtinDisplayNames.has(compactIndicatorKey(candidate.alias.displayName))
+    );
+
   const sourcePriority: Record<AliasCandidate["sourceOrigin"], number> = {
     item_name: 4,
     item_code: 3,
     combined: 2,
     ai_normalized_name: 1
   };
-  scoredCandidates.sort((left, right) =>
+  effectiveCandidates.sort((left, right) =>
     right.score - left.score
     || sourcePriority[right.sourceOrigin] - sourcePriority[left.sourceOrigin]
     || right.alias.confidence - left.alias.confidence
@@ -1136,7 +1180,7 @@ function normalizeObservationAutomatically(row: ObservationRow): NormalizationRe
     || left.alias.indicatorId.localeCompare(right.alias.indicatorId, "en")
   );
   const bestCandidateByCanonical = new Map<string, ScoredCandidate>();
-  for (const candidate of scoredCandidates) {
+  for (const candidate of effectiveCandidates) {
     /* scoredCandidates 已按最佳证据优先排序；同一 canonical 只保留首个候选，
        禁止后续较弱的 AI 预整理名称或低优先级来源反向覆盖原始项目名命中。 */
     if (!bestCandidateByCanonical.has(candidate.alias.canonicalKey)) {
@@ -1566,7 +1610,8 @@ function upsertNormalization(result: NormalizationResult) {
   );
   const governedOrPolicyResolved = result.reviewStatus !== "unreviewed"
     || isPolicyFilteredNormalization(result.matchedBy)
-    || Boolean(result.canonicalKey && ["high", "medium"].includes(result.quality));
+    || Boolean(result.canonicalKey && ["high", "medium"].includes(result.quality))
+    || Boolean(result.canonicalKey && isDesignGatedQualitativeExclusion(result.excludedReason));
   updateUnmatchedNameOccurrence(
     result.observationId,
     governedOrPolicyResolved ? result.canonicalKey || result.matchedBy || result.reviewStatus : null
@@ -1688,6 +1733,7 @@ function synchronizeUnmatchedNamePool() {
         OR n.excluded_reason LIKE '%OCR 证据%'
         OR n.excluded_reason = '结构化数值与结果文本不一致，禁止进入默认趋势'
         OR n.excluded_reason = '参考范围上下界反向，禁止进入默认趋势'
+        OR n.excluded_reason LIKE '%不默认进入折线趋势%'
         OR (n.canonical_key IS NOT NULL AND n.quality IN ('high', 'medium'))
     )
   `).run();
@@ -1703,6 +1749,7 @@ function synchronizeUnmatchedNamePool() {
         AND COALESCE(n.excluded_reason, '') NOT LIKE '%OCR 证据%'
         AND COALESCE(n.excluded_reason, '') <> '结构化数值与结果文本不一致，禁止进入默认趋势'
         AND COALESCE(n.excluded_reason, '') <> '参考范围上下界反向，禁止进入默认趋势'
+        AND COALESCE(n.excluded_reason, '') NOT LIKE '%不默认进入折线趋势%'
         AND (n.canonical_key IS NULL OR n.quality IN ('low', 'excluded'))
       ))
   `).all() as Array<{ id: string }>;
@@ -2013,6 +2060,7 @@ export async function normalizeAllObservationsFromDictionary(
 export function getIndicatorNormalizationMetrics(user: RequestUser): IndicatorNormalizationMetrics {
   if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可查看指标质量统计" });
   const db = getDatabase();
+  synchronizeUnmatchedNamePool();
   const totalsRow = db.prepare(`
     SELECT
       COUNT(DISTINCT report.id) AS reports,
@@ -2033,6 +2081,7 @@ export function getIndicatorNormalizationMetrics(user: RequestUser): IndicatorNo
             AND COALESCE(normalization.excluded_reason, '') NOT LIKE '%OCR 证据%'
             AND COALESCE(normalization.excluded_reason, '') <> '结构化数值与结果文本不一致，禁止进入默认趋势'
             AND COALESCE(normalization.excluded_reason, '') <> '参考范围上下界反向，禁止进入默认趋势'
+            AND COALESCE(normalization.excluded_reason, '') NOT LIKE '%不默认进入折线趋势%'
           )
         THEN 1 ELSE 0 END) AS needsReview,
       SUM(CASE WHEN normalization.review_status IN ('confirmed', 'excluded') THEN 1 ELSE 0 END) AS reviewed,
@@ -2088,6 +2137,7 @@ export function getIndicatorNormalizationMetrics(user: RequestUser): IndicatorNo
             AND COALESCE(normalization.excluded_reason, '') NOT LIKE '%OCR 证据%'
             AND COALESCE(normalization.excluded_reason, '') <> '结构化数值与结果文本不一致，禁止进入默认趋势'
             AND COALESCE(normalization.excluded_reason, '') <> '参考范围上下界反向，禁止进入默认趋势'
+            AND COALESCE(normalization.excluded_reason, '') NOT LIKE '%不默认进入折线趋势%'
           )
         THEN 1 ELSE 0 END) AS needsReview
     FROM reports report

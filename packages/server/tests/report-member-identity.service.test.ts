@@ -11,6 +11,7 @@ import {
   dismissReportMemberIdentity,
   patientAgeFromOcrText,
   patientBirthDateFromOcrText,
+  patientNameFromOcrText,
 } from "../services/report-member-identity.service.ts";
 
 const manager: RequestUser = {
@@ -168,6 +169,39 @@ test("flags age mismatch for age-only reports and suggests age-matched members",
       memberBirthDate: "2026-01-20",
       ocrLines: childReportOcr,
     },
+  );
+});
+
+test("extracts patient name only next to an explicit label", () => {
+  assert.equal(
+    patientNameFromOcrText([ocrLinesJson(["姓名：杨璟宸"])]),
+    "杨璟宸",
+  );
+  /* 空值、OCR 噪声、无标签提及都不采信 */
+  assert.equal(patientNameFromOcrText([ocrLinesJson(["姓名："])]), null);
+  assert.equal(patientNameFromOcrText([ocrLinesJson(["姓名：张3"])]), null);
+  assert.equal(patientNameFromOcrText([ocrLinesJson(["患者姓名一栏"])]), null);
+});
+
+test("suggests members whose display name matches the patient name", async () => {
+  await withDatabase(
+    ({ reportId }) => {
+      const db = getDatabase();
+      db.exec(`
+        INSERT INTO health_members (id, display_name, relationship, sex, birth_date, created_by)
+        VALUES ('member-namesake', '张三', 'child', NULL, NULL, 'identity-manager');
+        INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+        VALUES ('member-namesake', 'identity-manager', 'manager', 'identity-manager');
+      `);
+      const assessment = assessReportMemberIdentity(manager, reportId);
+      assert.ok(assessment);
+      assert.equal(assessment.patientName, "张三");
+      assert.deepEqual(
+        assessment.candidates.map((candidate) => candidate.displayName),
+        ["张三"],
+      );
+    },
+    { memberSex: "female" },
   );
 });
 

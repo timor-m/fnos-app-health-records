@@ -1140,6 +1140,7 @@ export type ReportDetail = ReportSummary & {
   structuredSections: ReportStructuredSection[];
   duplicateCandidates: DuplicateReportCandidate[];
   memberIdentityAssessment: {
+    patientName: string | null;
     patientSex: "male" | "female" | null;
     patientBirthDate: string | null;
     patientAgeText: string | null;

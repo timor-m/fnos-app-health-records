@@ -491,6 +491,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
   width: 100%; min-width: 0; height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px;
   background: var(--surface); color: var(--ink); font: inherit; font-size: 12px;
 }
+.duplicate-filter-grid .form-select-trigger { height: 38px; border-color: var(--line); border-radius: 9px; font-size: 12px; }
 .duplicate-batch-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .duplicate-batch-bar > span { color: var(--muted); font-size: 12px; flex: 1 1 180px; }
 .duplicate-batch-bar > div { display: flex; gap: 7px; flex-wrap: wrap; }
@@ -790,7 +791,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
   position: fixed; inset: 0; z-index: 69; background: transparent;
 }
 .back-to-top {
-  position: fixed; right: 18px; bottom: 24px; z-index: 35;
+  position: fixed; right: 18px; bottom: 100px; z-index: 35;
   width: 40px; height: 40px; border: 0; border-radius: 50%; padding: 0;
   background: var(--brand-gradient); color: #fff; cursor: pointer;
   display: grid; place-items: center;
@@ -1061,6 +1062,10 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
   border-radius: 10px; background: var(--warning-btn-bg); color: var(--ink);
   font: inherit; font-size: 12px;
 }
+.member-create-form .form-select { flex: 1 1 130px; width: auto; min-width: 120px; }
+.member-create-form .form-select-trigger {
+  height: 34px; border-color: var(--warning-btn-border); background: var(--warning-btn-bg); font-size: 12px;
+}
 .member-create-form input[type="text"] { flex: 1 1 140px; min-width: 120px; }
 .member-create-form button {
   min-height: 34px; padding: 0 11px; border: 0; border-radius: 999px;
@@ -1071,6 +1076,12 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .member-create-hint {
   flex-basis: 100%; margin: 0;
   font-size: 11px; color: var(--ink-2);
+}
+/* 通用日期选择器在提醒横幅表单里保持紧凑（组件 scoped 样式全宽，这里覆盖） */
+.member-create-form .datetime-picker.datetime-picker { flex: 0 1 180px; width: auto; }
+.member-create-form .datetime-picker .datetime-picker-trigger {
+  min-height: 34px; padding: 0 10px; font-size: 12px;
+  border-color: var(--warning-btn-border); background: var(--warning-btn-bg);
 }
 
 .confirm-modal { width: min(400px, 100%); }
@@ -1103,7 +1114,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .observation-panel > header, .morphology-panel > header, .clinical-fact-panel > header {
   display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
 }
-.observation-panel > header strong, .morphology-panel > header strong, .clinical-fact-panel > header strong { font-size: 14px; }
+.observation-panel > header strong, .morphology-panel > header strong, .clinical-fact-panel > header strong { flex: 0 0 auto; font-size: 14px; white-space: nowrap; }
 .observation-panel > header span, .morphology-panel > header span, .clinical-fact-panel > header span { color: var(--muted); font-size: 12px; }
 .clinical-fact-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 7px; }
 .clinical-fact-list > article {
@@ -2029,6 +2040,48 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .ai-task-bindings > article strong { color: var(--ink); font-size: 12px; }
 .ai-task-bindings > article span { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .ai-task-bindings .form-select, .ai-task-bindings input { min-width: 0; }
+
+/* ---------- AI 连接配置 ---------- */
+.ai-profile-list { display: grid; }
+.ai-profile-row {
+  min-height: 64px; padding: 12px 18px; border-bottom: 1px solid var(--line);
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px;
+}
+.ai-profile-row:last-child { border-bottom: 0; }
+.ai-profile-summary { min-width: 0; display: grid; gap: 4px; }
+.ai-profile-summary strong {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px;
+}
+.ai-profile-summary span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-profile-badge {
+  flex: 0 0 auto; height: 20px; padding: 0 7px; border-radius: 999px; font-style: normal;
+  background: var(--brand-softer); color: var(--brand-strong); font-size: 10px; font-weight: 700;
+  display: inline-flex; align-items: center;
+}
+.ai-profile-badge.vision { background: var(--amber-soft); color: var(--amber); }
+.ai-profile-actions { display: flex; gap: 4px; }
+.ai-profile-actions button {
+  width: 34px; height: 34px; border: 0; border-radius: 9px; background: transparent;
+  color: var(--ink-2); display: grid; place-items: center; transition: background .15s;
+}
+.ai-profile-actions button:hover { background: var(--fill-3); }
+.ai-profile-actions .danger-action:hover { color: var(--danger); }
+.ai-profile-empty { padding: 18px 20px; color: var(--muted); font-size: 13px; text-align: center; }
+.ai-profile-add { padding: 12px 18px 16px; display: flex; }
+.ai-profile-editor-form { padding: 18px 20px 6px; display: grid; gap: 14px; }
+.ai-clear-key { border: 0; background: transparent; color: var(--brand-strong); font: inherit; padding: 0; cursor: pointer; }
+.ai-clear-key:hover { text-decoration: underline; }
+.ai-editor-tests { margin: 0 20px; }
+.ai-editor-message { padding: 0 20px; }
+.ai-editor-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px 20px 18px; }
+.ai-editor-footer .spacer { flex: 1 1 auto; }
+.ai-editor-footer > button:not(.soft-action-button):not(.primary-button) {
+  min-height: 38px; padding: 0 14px; border: 0; border-radius: 999px; background: var(--fill-1);
+  color: var(--ink); font-weight: 600; transition: background .15s;
+}
+.ai-editor-footer > button:not(.soft-action-button):not(.primary-button):hover { background: var(--brand-softer); }
+
 .form-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .form-actions button {
   min-height: 42px; border: 0; border-radius: 999px; background: var(--fill-1);
@@ -2111,6 +2164,13 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .form-select-option:hover:not(:disabled) { background: var(--fill-4); }
 .form-select-option.selected { background: var(--brand-softer); color: var(--brand-strong); font-weight: 600; }
 .form-select-option > svg { color: var(--brand); flex: 0 0 auto; }
+
+/* PC（宽屏+精确指针）下按桌面表单密度收紧，移动端保持 44px 触控目标 */
+@media (min-width: 761px) and (pointer: fine) {
+  .form-select-trigger { height: 36px; font-size: 13px; }
+  .form-select-panel { max-height: 240px; }
+  .form-select-option { min-height: 34px; font-size: 13px; }
+}
 
 input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: pointer; }
 
@@ -2638,7 +2698,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
     display: grid; grid-template-columns: repeat(5, 1fr);
   }
   .mobile-nav a { min-width: 0; color: var(--muted); display: grid; justify-items: center; align-content: center; gap: 3px; font-size: 11px; font-weight: 600; }
-  .back-to-top { right: 14px; bottom: calc(66px + var(--safe-bottom) + 14px); }
+  .back-to-top { right: 14px; bottom: calc(66px + var(--safe-bottom) + 28px); }
   .mobile-nav a.router-link-active { color: var(--brand-strong); }
   .mobile-nav-icon { position: relative; width: 40px; height: 28px; display: grid; place-items: center; border-radius: 999px; transition: background .15s; }
   .mobile-nav-icon .nav-badge { right: -5px; top: -7px; border-color: rgba(255, 255, 255, .9); }
@@ -3604,12 +3664,14 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
 .indicator-governance-options { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .indicator-governance-options label { display: flex; align-items: center; gap: 7px; color: var(--ink); font-size: 12px; }
 .indicator-governance-options select { width: auto; min-width: 170px; }
+.indicator-governance-options .form-select { width: auto; min-width: 200px; }
 .indicator-governance-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .danger-soft-action { color: var(--danger) !important; }
 @media (max-width: 720px) {
   .indicator-catalog-search { grid-template-columns: minmax(0, 1fr); }
   .indicator-governance-options { align-items: stretch; }
   .indicator-governance-options select { width: 100%; }
+  .indicator-governance-options .form-select { width: 100%; min-width: 0; }
 }
 
 /* ---------- P2 指标质量可观测性 ---------- */

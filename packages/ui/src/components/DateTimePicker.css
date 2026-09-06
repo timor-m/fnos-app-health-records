@@ -4,7 +4,6 @@
   position: fixed; inset: 0; z-index: 140;
   background: rgba(0, 0, 0, 0.4);
   display: block;
-  pointer-events: none;
   animation: fade-in .16s ease;
 }
 
@@ -141,7 +140,6 @@
     align-items: flex-end;
     justify-content: center;
     padding: 0;
-    pointer-events: auto;
   }
 
   .datetime-picker-panel {
@@ -173,6 +171,20 @@
   .datetime-picker-wheels { gap: 0; padding-inline: 4px; }
   .datetime-wheel-label { font-size: 11px; }
   .datetime-wheel-item { font-size: 15px; }
+}
+
+/*
+ * PC（宽屏+精确指针）下面板按桌面弹层尺寸收紧：
+ * 宽度 460→340、滚轮区 280→232，居中偏移同步折算
+ *（滚轮区高 - 上下内边距 - 标签行 ≈ 190，(190-40)/2 = 75）。
+ * 移动端保持底部大滚轮不变。
+ */
+@media (min-width: 761px) and (pointer: fine) {
+  .datetime-picker-panel { width: min(340px, calc(100vw - 32px)); }
+  .datetime-picker-header { padding: 10px 14px; }
+  .datetime-picker-wheels { height: 232px; padding-block: 12px; }
+  .wheel-scroll-wrapper { --datetime-wheel-center-offset: 75px; }
+  .datetime-wheel-item { font-size: 16px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

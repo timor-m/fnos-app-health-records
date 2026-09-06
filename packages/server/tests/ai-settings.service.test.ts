@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
 import {
+  getAiProfileSecrets,
   getAiSettings,
   getAiTaskSettings,
   resolveAiExtractionDepth,
@@ -27,7 +28,13 @@ async function withDatabase(run: () => Promise<void> | void) {
   }
 }
 
-test("migrates the legacy flat AI configuration into the selected provider", async () => {
+function storedSettingsJson() {
+  return (getDatabase().prepare(
+    "SELECT value_json AS valueJson FROM app_settings WHERE setting_key = 'ai.provider'"
+  ).get() as { valueJson: string }).valueJson;
+}
+
+test("migrates the legacy flat AI configuration into a connection profile", async () => {
   await withDatabase(() => {
     saveAiSettings({
       enabled: true,
@@ -38,20 +45,18 @@ test("migrates the legacy flat AI configuration into the selected provider", asy
       visionModel: "legacy-vision",
       apiKey: "legacy-secret-key"
     });
-    const db = getDatabase();
-    const row = db.prepare("SELECT value_json AS valueJson FROM app_settings WHERE setting_key = 'ai.provider'")
-      .get() as { valueJson: string };
-    const modern = JSON.parse(row.valueJson) as {
-      providers: { deepseek: { apiKeyEncrypted: string } };
+    const modern = JSON.parse(storedSettingsJson()) as {
+      profiles: Array<{ apiKeyEncrypted: string }>;
     };
-    db.prepare("UPDATE app_settings SET value_json = ? WHERE setting_key = 'ai.provider'").run(JSON.stringify({
+    // 模拟最早版本的扁平存储（无 profiles 列表），确认读取时自动升级
+    getDatabase().prepare("UPDATE app_settings SET value_json = ? WHERE setting_key = 'ai.provider'").run(JSON.stringify({
       enabled: true,
       provider: "deepseek",
       visionEnabled: true,
       baseUrl: "https://legacy.example.com/v1",
       textModel: "legacy-text",
       visionModel: "legacy-vision",
-      apiKeyEncrypted: modern.providers.deepseek.apiKeyEncrypted
+      apiKeyEncrypted: modern.profiles[0].apiKeyEncrypted
     }));
 
     const settings = getAiSettings(true);
@@ -63,112 +68,251 @@ test("migrates the legacy flat AI configuration into the selected provider", asy
     assert.equal(settings.requestTimeoutSeconds, 600);
     assert.equal(settings.apiKey, "legacy-secret-key");
     assert.equal(settings.apiKeyMasked.includes("legacy-secret-key"), false);
+    assert.equal(settings.defaultProfileId, "legacy_deepseek");
+    assert.deepEqual(settings.profiles.map((profile) => profile.id), ["legacy_deepseek"]);
+    assert.equal(settings.profiles[0].name, "DeepSeek");
+    assert.equal(getAiProfileSecrets().get("legacy_deepseek"), "legacy-secret-key");
+
+    // 迁移结果已回写为新结构，且不含明文 Key
+    const rewritten = JSON.parse(storedSettingsJson()) as { profiles?: unknown; providers?: unknown };
+    assert.equal(Array.isArray(rewritten.profiles), true);
+    assert.equal(rewritten.providers, undefined);
+    assert.equal(storedSettingsJson().includes("legacy-secret-key"), false);
   });
 });
 
-test("retains independent provider configurations when switching models", async () => {
+test("migrates the v1 per-provider map into stable connection profiles", async () => {
   await withDatabase(() => {
     saveAiSettings({
       enabled: true,
       provider: "deepseek",
-      visionEnabled: false,
+      baseUrl: "https://api.deepseek.com",
+      textModel: "deepseek-v4-flash",
+      apiKey: "deepseek-map-key"
+    });
+    const encrypted = (JSON.parse(storedSettingsJson()) as {
+      profiles: Array<{ apiKeyEncrypted: string }>;
+    }).profiles[0].apiKeyEncrypted;
+    // 模拟 v1 按服务商存储的结构（含场景绑定）
+    getDatabase().prepare("UPDATE app_settings SET value_json = ? WHERE setting_key = 'ai.provider'").run(JSON.stringify({
+      enabled: true,
+      provider: "deepseek",
+      requestTimeoutSeconds: 900,
+      extractionDepth: "detailed",
+      providers: {
+        deepseek: {
+          visionEnabled: true,
+          baseUrl: "https://ds.example.com/v1",
+          textModel: "ds-text",
+          visionModel: "ds-vision",
+          apiKeyEncrypted: encrypted
+        },
+        qwen: {
+          baseUrl: "https://qwen.example.com/v1",
+          textModel: "qwen-text",
+          apiKey: "qwen-plain-key"
+        }
+      },
+      taskBindings: {
+        report_extraction: { provider: "qwen", model: "qwen-report" }
+      }
+    }));
+
+    const first = getAiSettings(true);
+    assert.deepEqual(first.profiles.map((profile) => profile.id), ["legacy_deepseek", "legacy_qwen"]);
+    assert.equal(first.defaultProfileId, "legacy_deepseek");
+    assert.equal(first.requestTimeoutSeconds, 900);
+    assert.equal(first.extractionDepth, "detailed");
+    const deepseek = first.profiles.find((profile) => profile.id === "legacy_deepseek");
+    assert.equal(deepseek?.baseUrl, "https://ds.example.com/v1");
+    assert.equal(deepseek?.visionModel, "ds-vision");
+    assert.equal(getAiProfileSecrets().get("legacy_deepseek"), "deepseek-map-key");
+
+    const task = getAiTaskSettings("report_extraction", true);
+    assert.equal(task.provider, "qwen");
+    assert.equal(task.profileId, "legacy_qwen");
+    assert.equal(task.baseUrl, "https://qwen.example.com/v1");
+    assert.equal(task.model, "qwen-report");
+    assert.equal(task.apiKey, "qwen-plain-key");
+    assert.equal(task.inherited, false);
+
+    // id 稳定：多次读取迁移结果一致
+    const second = getAiSettings(false);
+    assert.deepEqual(second.profiles.map((profile) => profile.id), ["legacy_deepseek", "legacy_qwen"]);
+    assert.equal(storedSettingsJson().includes("qwen-plain-key"), false);
+  });
+});
+
+test("keeps the same model on two platforms as separate connection profiles", async () => {
+  await withDatabase(() => {
+    const saved = saveAiSettings({
+      enabled: true,
+      profiles: [
+        {
+          name: "DeepSeek 官方",
+          provider: "deepseek",
+          baseUrl: "https://api.deepseek.com",
+          textModel: "deepseek-v4-flash",
+          apiKey: "official-secret-key"
+        },
+        {
+          name: "聚合平台",
+          provider: "custom",
+          baseUrl: "https://api.siliconflow.cn/v1",
+          textModel: "deepseek-v4-flash",
+          visionModel: "glm-4.5v",
+          visionEnabled: true,
+          apiKey: "aggregator-secret-key"
+        }
+      ]
+    });
+
+    assert.equal(saved.profiles.length, 2);
+    const [official, aggregator] = saved.profiles;
+    assert.ok(official.id && aggregator.id && official.id !== aggregator.id);
+    assert.equal(saved.defaultProfileId, official.id);
+    assert.equal(official.providerLabel, "DeepSeek");
+    assert.equal(aggregator.name, "聚合平台");
+    assert.equal(aggregator.visionEnabled, true);
+
+    // 全量提交时不重复填写 Key，已保存的 Key 保留；场景绑定引用具体配置
+    const bound = saveAiSettings({
+      profiles: saved.profiles.map((profile) => ({
+        id: profile.id,
+        name: profile.name,
+        provider: profile.provider,
+        visionEnabled: profile.visionEnabled,
+        baseUrl: profile.baseUrl,
+        textModel: profile.textModel,
+        visionModel: profile.visionModel
+      })),
+      taskBindings: {
+        report_extraction: { profileId: aggregator.id }
+      }
+    });
+    assert.equal(bound.profiles.find((profile) => profile.id === aggregator.id)?.apiKeyConfigured, true);
+
+    const task = getAiTaskSettings("report_extraction", true);
+    assert.equal(task.provider, "custom");
+    assert.equal(task.profileId, aggregator.id);
+    assert.equal(task.profileName, "聚合平台");
+    assert.equal(task.baseUrl, "https://api.siliconflow.cn/v1");
+    assert.equal(task.model, "deepseek-v4-flash");
+    assert.equal(task.apiKey, "aggregator-secret-key");
+
+    assert.equal(storedSettingsJson().includes("official-secret-key"), false);
+    assert.equal(storedSettingsJson().includes("aggregator-secret-key"), false);
+  });
+});
+
+test("rejects dangling references when replacing the profile list", async () => {
+  await withDatabase(() => {
+    const saved = saveAiSettings({
+      enabled: true,
+      profiles: [
+        { name: "主配置", provider: "deepseek", baseUrl: "https://api.deepseek.com", textModel: "deepseek-v4-flash", apiKey: "main-key" },
+        { name: "备用配置", provider: "qwen", baseUrl: "https://qwen.example.com/v1", textModel: "qwen-plus", apiKey: "backup-key" }
+      ]
+    });
+    const [main, backup] = saved.profiles;
+    const mainInput = {
+      id: main.id, name: main.name, provider: main.provider,
+      baseUrl: main.baseUrl, textModel: main.textModel, visionModel: ""
+    };
+    saveAiSettings({
+      profiles: [mainInput, { id: backup.id, name: backup.name, provider: backup.provider, baseUrl: backup.baseUrl, textModel: backup.textModel }],
+      taskBindings: { report_extraction: { profileId: backup.id } }
+    });
+
+    // 删除仍被场景引用的配置被拒绝
+    assert.throws(
+      () => saveAiSettings({
+        profiles: [mainInput],
+        taskBindings: { report_extraction: { profileId: backup.id } }
+      }),
+      (error: unknown) => (error as { status?: number }).status === 400
+    );
+    // 删除默认配置却仍引用它为默认被拒绝
+    assert.throws(
+      () => saveAiSettings({
+        profiles: [mainInput],
+        defaultProfileId: backup.id,
+        taskBindings: { report_extraction: null }
+      }),
+      (error: unknown) => (error as { status?: number }).status === 400
+    );
+    // 先解除绑定再删除即可成功，Key 保留、默认回落到剩余配置
+    const removed = saveAiSettings({
+      profiles: [mainInput],
+      taskBindings: { report_extraction: null }
+    });
+    assert.equal(removed.profiles.length, 1);
+    assert.equal(removed.defaultProfileId, main.id);
+    assert.equal(getAiTaskSettings("report_extraction", true).apiKey, "main-key");
+
+    // 启用状态下不允许没有连接配置
+    assert.throws(
+      () => saveAiSettings({ enabled: true, profiles: [] }),
+      (error: unknown) => (error as { status?: number }).status === 400
+    );
+  });
+});
+
+test("legacy provider saves upsert one profile per provider and switch the default", async () => {
+  await withDatabase(() => {
+    saveAiSettings({
+      enabled: true,
+      provider: "deepseek",
       baseUrl: "https://deepseek.example.com/v1",
       textModel: "deepseek-health",
-      visionModel: "",
-      apiKey: "deepseek-secret-key"
+      apiKey: "deepseek-key"
     });
     const qwen = saveAiSettings({
       enabled: true,
       provider: "qwen",
-      visionEnabled: true,
       baseUrl: "https://qwen.example.com/v1",
       textModel: "qwen-health",
       visionModel: "qwen-vl-health",
-      apiKey: "qwen-secret-key"
+      visionEnabled: true,
+      apiKey: "qwen-key"
     });
     assert.equal(qwen.provider, "qwen");
-    assert.equal(qwen.providerSettings.deepseek.textModel, "deepseek-health");
-    assert.equal(qwen.providerSettings.deepseek.apiKeyConfigured, true);
-    assert.equal(qwen.providerSettings.qwen.visionModel, "qwen-vl-health");
+    const deepseekProfile = qwen.profiles.find((profile) => profile.provider === "deepseek");
+    const qwenProfile = qwen.profiles.find((profile) => profile.provider === "qwen");
+    assert.equal(deepseekProfile?.textModel, "deepseek-health");
+    assert.equal(deepseekProfile?.apiKeyConfigured, true);
+    assert.equal(qwenProfile?.visionModel, "qwen-vl-health");
+    assert.equal(qwen.defaultProfileId, qwenProfile?.id);
 
-    const deepseek = saveAiSettings({
-      enabled: true,
-      provider: "deepseek",
-      visionEnabled: qwen.providerSettings.deepseek.visionEnabled,
-      baseUrl: qwen.providerSettings.deepseek.baseUrl,
-      textModel: qwen.providerSettings.deepseek.textModel,
-      visionModel: qwen.providerSettings.deepseek.visionModel
-    });
-    assert.equal(deepseek.provider, "deepseek");
+    // 旧版“切回服务商”语义：再次保存 deepseek 时配置和 Key 都还在
+    const deepseek = saveAiSettings({ provider: "deepseek" });
     assert.equal(deepseek.textModel, "deepseek-health");
     assert.equal(deepseek.apiKeyConfigured, true);
-    assert.equal(deepseek.providerSettings.qwen.textModel, "qwen-health");
-    assert.equal(deepseek.providerSettings.qwen.apiKeyMasked.endsWith("-key"), true);
-    assert.equal(isAiExtractionConfigured(), true);
+    assert.equal(deepseek.defaultProfileId, deepseekProfile?.id);
+    assert.equal(deepseek.profiles.find((profile) => profile.provider === "qwen")?.textModel, "qwen-health");
 
-    const stored = JSON.parse((getDatabase().prepare(
-      "SELECT value_json AS valueJson FROM app_settings WHERE setting_key = 'ai.provider'"
-    ).get() as { valueJson: string }).valueJson) as Record<string, unknown>;
-    assert.equal("apiKey" in stored, false);
-    assert.equal(JSON.stringify(stored).includes("deepseek-secret-key"), false);
-    assert.equal(JSON.stringify(stored).includes("qwen-secret-key"), false);
+    const stored = storedSettingsJson();
+    assert.equal(stored.includes("deepseek-key"), false);
+    assert.equal(stored.includes("qwen-key"), false);
   });
 });
 
 test("stores a global AI request timeout and exposes it to task execution", async () => {
   await withDatabase(() => {
-    assert.equal(getAiSettings(false).requestTimeoutSeconds, 600);
-    const saved = saveAiSettings({ requestTimeoutSeconds: 900 });
-    assert.equal(saved.requestTimeoutSeconds, 900);
-    assert.equal(getAiTaskSettings("report_extraction", false).requestTimeoutSeconds, 900);
-
-    assert.throws(
-      () => saveAiSettings({ requestTimeoutSeconds: 29 }),
-      (error: unknown) => `${(error as { statusText?: string; message?: string }).statusText} ${(error as Error).message}`
-        .includes("30 至 3600 秒")
-    );
-  });
-});
-
-test("retains independent OpenAI and Doubao configurations when switching providers", async () => {
-  await withDatabase(() => {
     saveAiSettings({
       enabled: true,
-      provider: "openai",
-      baseUrl: "https://api.openai.com/v1",
-      textModel: "gpt-4.1-mini",
-      visionModel: "gpt-4.1-mini",
-      apiKey: "openai-secret-key"
+      provider: "deepseek",
+      baseUrl: "https://deepseek.example.com/v1",
+      textModel: "deepseek-default",
+      apiKey: "deepseek-secret",
+      requestTimeoutSeconds: 1_800
     });
-    const doubao = saveAiSettings({
-      enabled: true,
-      provider: "doubao",
-      baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
-      textModel: "ep-doubao-text",
-      visionModel: "ep-doubao-vision",
-      apiKey: "doubao-secret-key"
-    });
-
-    assert.equal(doubao.providerSettings.openai.textModel, "gpt-4.1-mini");
-    assert.equal(doubao.providerSettings.openai.apiKeyConfigured, true);
-    assert.equal(doubao.providerSettings.doubao.textModel, "ep-doubao-text");
-    assert.equal(doubao.providerSettings.doubao.apiKeyConfigured, true);
-
-    const openai = saveAiSettings({
-      provider: "openai",
-      baseUrl: doubao.providerSettings.openai.baseUrl,
-      textModel: doubao.providerSettings.openai.textModel,
-      visionModel: doubao.providerSettings.openai.visionModel
-    });
-    assert.equal(openai.provider, "openai");
-    assert.equal(openai.apiKeyConfigured, true);
-    assert.equal(openai.providerSettings.doubao.textModel, "ep-doubao-text");
-
-    const stored = (getDatabase().prepare(
-      "SELECT value_json AS valueJson FROM app_settings WHERE setting_key = 'ai.provider'"
-    ).get() as { valueJson: string }).valueJson;
-    assert.equal(stored.includes("openai-secret-key"), false);
-    assert.equal(stored.includes("doubao-secret-key"), false);
+    const settings = getAiTaskSettings("report_extraction", true);
+    assert.equal(settings.requestTimeoutSeconds, 1_800);
+    assert.throws(
+      () => saveAiSettings({ provider: "deepseek", requestTimeoutSeconds: 10 }),
+      (error: unknown) => (error as { status?: number }).status === 400
+    );
   });
 });
 
@@ -207,10 +351,7 @@ test("routes an AI task to its own provider and model without duplicating creden
       inherited: false
     });
 
-    const stored = JSON.parse((getDatabase().prepare(
-      "SELECT value_json AS valueJson FROM app_settings WHERE setting_key = 'ai.provider'"
-    ).get() as { valueJson: string }).valueJson) as Record<string, unknown>;
-    assert.equal(JSON.stringify(stored).includes("qwen-secret"), false);
+    assert.equal(storedSettingsJson().includes("qwen-secret"), false);
 
     const reset = saveAiSettings({
       provider: "qwen",
@@ -242,7 +383,7 @@ test("tests the selected provider with unsaved form values", async () => {
       assert.equal(result.provider, "qwen");
       assert.equal(requestedUrl, "https://unsaved.example.com/v1/chat/completions");
       assert.equal(requestedModel, "unsaved-qwen-model");
-      assert.equal(getAiSettings(false).providerSettings.qwen.apiKeyConfigured, false);
+      assert.equal(getAiSettings(false).profiles.length, 0);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -308,7 +449,7 @@ test("keeps MiniMax configuration independent and validates structured text outp
       });
       assert.equal(saved.baseUrl, "https://api.minimaxi.com/v1");
       assert.equal(saved.textModel, "MiniMax-M2.7");
-      assert.equal(saved.providerSettings.minimax.apiKeyConfigured, true);
+      assert.equal(saved.profiles.find((profile) => profile.provider === "minimax")?.apiKeyConfigured, true);
       const result = await testAiConnection({ provider: "minimax" });
       assert.equal(result.model, "MiniMax-M2.7");
       assert.equal(requestBody.temperature, 1);

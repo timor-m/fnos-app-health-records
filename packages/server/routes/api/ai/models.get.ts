@@ -2,7 +2,7 @@ import { createError, defineEventHandler, getQuery } from "h3";
 import { ok } from "../../../utils/api-response";
 import { getRequestUser } from "../../../utils/request-user";
 import { isAdministrator } from "../../../domain/request-user";
-import { parseStoredSettings, resolveAiBaseUrl, resolveProvider } from "../../../services/ai-settings.service";
+import { findAiProfile, parseStoredSettings, resolveActiveProfile, resolveAiBaseUrl } from "../../../services/ai-settings.service";
 import { normalizeAiProvider, aiProviderCatalog } from "../../../services/ai-provider";
 import { fetchWithTimeout } from "../../../utils/outbound-request";
 
@@ -10,9 +10,13 @@ export default defineEventHandler(async (event) => {
   if (!isAdministrator(getRequestUser(event))) throw createError({ statusCode: 403, statusMessage: "仅管理员可获取模型列表" });
 
   const query = getQuery(event);
-  const provider = normalizeAiProvider(query.provider);
   const parsed = parseStoredSettings();
-  const current = resolveProvider(provider, parsed);
+  // profileId 指向已保存的连接配置时复用其地址和 Key；否则按查询参数测试未保存的编辑内容
+  const profile = typeof query.profileId === "string" ? findAiProfile(parsed, query.profileId.trim()) : null;
+  const provider = normalizeAiProvider(query.provider || profile?.provider || resolveActiveProfile(parsed)?.provider);
+  const fallback = profile
+    || (query.provider ? parsed.profiles.find((item) => item.provider === provider) : resolveActiveProfile(parsed));
+  const current = fallback || { baseUrl: aiProviderCatalog[provider].defaultBaseUrl, apiKey: "" };
 
   // 获取 API Key（优先使用查询参数，否则使用已保存的配置）
   const apiKey = typeof query.apiKey === "string" && query.apiKey.trim()

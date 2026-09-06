@@ -1,11 +1,25 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { Bot, LoaderCircle, Save, TestTubeDiagonal, RefreshCw, CheckCircle, XCircle, AlertCircle } from "@lucide/vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
+import {
+  AlertCircle,
+  Bot,
+  CheckCircle,
+  LoaderCircle,
+  Pencil,
+  Plug,
+  Plus,
+  RefreshCw,
+  Save,
+  TestTubeDiagonal,
+  Trash2,
+  X,
+  XCircle
+} from "@lucide/vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import FormSelect from "../../components/FormSelect.vue";
 import { request } from "../../utils/api";
 
-type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "minimax" | "ollama";
+type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "minimax" | "ollama" | "custom";
 type AiProviderOption = {
   key: AiProviderKey;
   label: string;
@@ -15,7 +29,11 @@ type AiProviderOption = {
   modelHint?: string;
   apiKeyRequired?: boolean;
 };
-type AiProviderSettings = {
+type AiProfile = {
+  id: string;
+  name: string;
+  provider: AiProviderKey;
+  providerLabel: string;
   visionEnabled: boolean;
   baseUrl: string;
   textModel: string;
@@ -30,18 +48,17 @@ type AiTaskOption = {
   implemented: boolean;
 };
 type AiTaskBinding = {
-  provider: AiProviderKey | "";
+  profileId: string;
   model: string;
   inherited: boolean;
   implemented: boolean;
 };
-type AiSettings = AiProviderSettings & {
+type AiSettings = {
   enabled: boolean;
-  provider: AiProviderKey;
   requestTimeoutSeconds: number;
   extractionDepth: "overview" | "detailed";
-  apiKey: string;
-  providerSettings: Record<AiProviderKey, AiProviderSettings>;
+  defaultProfileId: string;
+  profiles: AiProfile[];
   providers: AiProviderOption[];
   tasks: AiTaskOption[];
   taskBindings: Record<string, AiTaskBinding>;
@@ -49,17 +66,10 @@ type AiSettings = AiProviderSettings & {
 
 const ai = ref<AiSettings>({
   enabled: false,
-  provider: "deepseek",
   requestTimeoutSeconds: 600,
-  extractionDepth: "detailed",
-  visionEnabled: false,
-  baseUrl: "https://api.deepseek.com",
-  textModel: "deepseek-v4-flash",
-  visionModel: "",
-  apiKey: "",
-  apiKeyConfigured: false,
-  apiKeyMasked: "",
-  providerSettings: {} as Record<AiProviderKey, AiProviderSettings>,
+  extractionDepth: "overview",
+  defaultProfileId: "",
+  profiles: [],
   providers: [],
   tasks: [],
   taskBindings: {}
@@ -68,29 +78,62 @@ const message = ref("");
 const loading = ref(true);
 const loadError = ref("");
 const saving = ref(false);
-const testing = ref(false);
-const currentProvider = computed(() => ai.value.providers.find((item) => item.key === ai.value.provider));
-const supportsVision = computed(() => ai.value.provider !== "minimax");
 
-// 模型列表相关
+// 编辑器里输入但尚未保存的 Key，以及明确要求清除的 Key
+const apiKeyDrafts = ref<Record<string, string>>({});
+const clearKeyFlags = ref<Record<string, boolean>>({});
+// 已在服务端保存过的配置 id，用于测试连接时复用已存 Key
+const persistedIds = ref<Set<string>>(new Set());
+
+const implementedTasks = computed(() => ai.value.tasks.filter((task) => task.implemented));
+const defaultProfile = computed(() => ai.value.profiles.find((profile) => profile.id === ai.value.defaultProfileId) || null);
+
+function hostOf(baseUrl: string) {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return baseUrl || "未填写地址";
+  }
+}
+
+/* ---------- 连接配置编辑器 ---------- */
+const editorOpen = ref(false);
+const editorId = ref("");
+const editorMessage = ref("");
+const testing = ref(false);
+const editor = ref({
+  name: "",
+  provider: "deepseek" as AiProviderKey,
+  baseUrl: "",
+  textModel: "",
+  visionModel: "",
+  visionEnabled: false,
+  apiKey: "",
+  apiKeyConfigured: false,
+  apiKeyMasked: ""
+});
+const currentEditorProvider = computed(() =>
+  ai.value.providers.find((provider) => provider.key === editor.value.provider) || null
+);
+const supportsVision = computed(() => editor.value.provider !== "minimax");
+
 const modelListLoading = ref(false);
 const textModelList = ref<Array<{ id: string; name: string }>>([]);
 const visionModelList = ref<Array<{ id: string; name: string }>>([]);
 const showTextModelDropdown = ref(false);
 const showVisionModelDropdown = ref(false);
 
-// 增强测试相关
 const enhancedTesting = ref(false);
 const testSteps = ref<Array<{ name: string; status: string; message: string; elapsedMs?: number }>>([]);
-const implementedTasks = computed(() => ai.value.tasks.filter((task) => task.implemented));
+
 const visionModelHint = computed(() => {
   if (!supportsVision.value) return "MiniMax M2 系列当前仅支持文本整理，不能用于视觉增强";
-  const model = ai.value.visionModel.trim().toLowerCase();
+  const model = editor.value.visionModel.trim().toLowerCase();
   if (!model) return "请填写视觉模型名称";
-  if (ai.value.textModel.trim() && model === ai.value.textModel.trim().toLowerCase()) {
+  if (editor.value.textModel.trim() && model === editor.value.textModel.trim().toLowerCase()) {
     return "视觉模型与文本模型相同，请确认该模型确实支持图片输入";
   }
-  if (ai.value.provider === "ollama" && /^qwen2\.5(?::|$)/i.test(model) && !/vl/i.test(model)) {
+  if (editor.value.provider === "ollama" && /^qwen2\.5(?::|$)/i.test(model) && !/vl/i.test(model)) {
     return "qwen2.5 是文本模型，不能用于视觉增强；请关闭视觉增强或改用明确支持图片输入的模型";
   }
   if (/(\b|[-_:])(vl|vision|visual|llava|moondream|internvl|minicpm[-_]?v|idefics|pixtral|qwen[\w.-]*vl|gemma[\w.-]*3)(\b|[-_:])/i.test(model)) {
@@ -102,22 +145,151 @@ const visionModelHint = computed(() => {
   return "无法仅根据模型名称确认视觉能力，请点击“测试视觉模型”验证";
 });
 
-// 获取模型列表
+function newProfileId() {
+  let id = "";
+  do {
+    id = `pf_${Math.random().toString(16).slice(2, 10)}`;
+  } while (ai.value.profiles.some((profile) => profile.id === id));
+  return id;
+}
+
+function openEditor(profile?: AiProfile) {
+  testSteps.value = [];
+  editorMessage.value = "";
+  showTextModelDropdown.value = false;
+  showVisionModelDropdown.value = false;
+  if (profile) {
+    editorId.value = profile.id;
+    editor.value = {
+      name: profile.name,
+      provider: profile.provider,
+      baseUrl: profile.baseUrl,
+      textModel: profile.textModel,
+      visionModel: profile.visionModel,
+      visionEnabled: profile.visionEnabled,
+      apiKey: apiKeyDrafts.value[profile.id] || "",
+      apiKeyConfigured: profile.apiKeyConfigured,
+      apiKeyMasked: profile.apiKeyMasked
+    };
+  } else {
+    editorId.value = newProfileId();
+    const preset = ai.value.providers.find((provider) => provider.key === "deepseek") || ai.value.providers[0];
+    editor.value = {
+      name: "",
+      provider: preset?.key || "deepseek",
+      baseUrl: preset?.defaultBaseUrl || "",
+      textModel: preset?.defaultTextModel || "",
+      visionModel: preset?.defaultVisionModel || "",
+      visionEnabled: false,
+      apiKey: "",
+      apiKeyConfigured: false,
+      apiKeyMasked: ""
+    };
+  }
+  editorOpen.value = true;
+}
+
+function closeEditor() {
+  editorOpen.value = false;
+}
+
+function changeEditorProvider() {
+  const preset = currentEditorProvider.value;
+  if (!preset) return;
+  editor.value.baseUrl = preset.defaultBaseUrl;
+  editor.value.textModel = preset.defaultTextModel;
+  editor.value.visionModel = preset.defaultVisionModel;
+  if (preset.key === "minimax") editor.value.visionEnabled = false;
+  testSteps.value = [];
+}
+
+function clearSavedKey() {
+  clearKeyFlags.value[editorId.value] = true;
+  delete apiKeyDrafts.value[editorId.value];
+  editor.value.apiKey = "";
+  editor.value.apiKeyConfigured = false;
+  editor.value.apiKeyMasked = "";
+}
+
+function maskLocal(apiKey: string) {
+  if (apiKey.length <= 8) return "••••••••";
+  return `${apiKey.slice(0, 3)}••••${apiKey.slice(-4)}`;
+}
+
+function applyEditor() {
+  editorMessage.value = "";
+  if (!editor.value.baseUrl.trim()) {
+    editorMessage.value = "请填写 API 地址";
+    return;
+  }
+  const label = currentEditorProvider.value?.label || "自定义";
+  const typedKey = editor.value.apiKey.trim();
+  if (typedKey) delete clearKeyFlags.value[editorId.value];
+  const cleared = clearKeyFlags.value[editorId.value] === true && !typedKey;
+  const profile: AiProfile = {
+    id: editorId.value,
+    name: editor.value.name.trim() || label,
+    provider: editor.value.provider,
+    providerLabel: label,
+    visionEnabled: editor.value.visionEnabled,
+    baseUrl: editor.value.baseUrl.trim(),
+    textModel: editor.value.textModel.trim(),
+    visionModel: editor.value.visionModel.trim(),
+    apiKeyConfigured: cleared ? false : editor.value.apiKeyConfigured || Boolean(typedKey),
+    apiKeyMasked: cleared ? "" : typedKey ? maskLocal(typedKey) : editor.value.apiKeyMasked
+  };
+  const index = ai.value.profiles.findIndex((item) => item.id === profile.id);
+  if (index >= 0) ai.value.profiles.splice(index, 1, profile);
+  else ai.value.profiles.push(profile);
+  if (typedKey) apiKeyDrafts.value[profile.id] = typedKey;
+  if (!ai.value.defaultProfileId) ai.value.defaultProfileId = profile.id;
+  editorOpen.value = false;
+  message.value = "连接配置已更新，点击“保存配置”后生效";
+}
+
+function removeProfile(profile: AiProfile) {
+  if (profile.id === ai.value.defaultProfileId) {
+    message.value = "请先把默认连接切换到其他配置，再删除这一项";
+    return;
+  }
+  ai.value.profiles = ai.value.profiles.filter((item) => item.id !== profile.id);
+  for (const binding of Object.values(ai.value.taskBindings)) {
+    if (binding.profileId === profile.id) {
+      binding.profileId = "";
+      binding.model = "";
+      binding.inherited = true;
+    }
+  }
+  delete apiKeyDrafts.value[profile.id];
+  delete clearKeyFlags.value[profile.id];
+  persistedIds.value.delete(profile.id);
+  message.value = "连接配置已移除，点击“保存配置”后生效";
+}
+
+/* ---------- 编辑器内的连接测试 ---------- */
+function editorBody() {
+  return {
+    ...(persistedIds.value.has(editorId.value) ? { profileId: editorId.value } : {}),
+    provider: editor.value.provider,
+    baseUrl: editor.value.baseUrl,
+    textModel: editor.value.textModel,
+    visionModel: editor.value.visionModel,
+    visionEnabled: editor.value.visionEnabled,
+    ...(editor.value.apiKey.trim() ? { apiKey: editor.value.apiKey.trim() } : {})
+  };
+}
+
 async function fetchModelList(type: "text" | "vision") {
   modelListLoading.value = true;
   try {
-    // 构建查询参数
     const params = new URLSearchParams();
-    params.set("provider", ai.value.provider);
-    params.set("baseUrl", ai.value.baseUrl);
-    if (ai.value.apiKey.trim()) {
-      params.set("apiKey", ai.value.apiKey.trim());
-    }
-    
+    params.set("provider", editor.value.provider);
+    params.set("baseUrl", editor.value.baseUrl);
+    if (editor.value.apiKey.trim()) params.set("apiKey", editor.value.apiKey.trim());
+    if (persistedIds.value.has(editorId.value)) params.set("profileId", editorId.value);
     const result = await request<{ models: Array<{ id: string; name: string }>; total: number }>(`ai/models?${params.toString()}`, {
       method: "GET"
     });
-
     if (type === "text") {
       textModelList.value = result.models;
       showTextModelDropdown.value = true;
@@ -126,29 +298,52 @@ async function fetchModelList(type: "text" | "vision") {
       showVisionModelDropdown.value = true;
     }
   } catch (error) {
-    message.value = error instanceof Error ? error.message : "获取模型列表失败";
+    editorMessage.value = error instanceof Error ? error.message : "获取模型列表失败";
   } finally {
     modelListLoading.value = false;
   }
 }
 
-// 选择模型
 function selectModel(type: "text" | "vision", modelId: string) {
   if (type === "text") {
-    ai.value.textModel = modelId;
+    editor.value.textModel = modelId;
     showTextModelDropdown.value = false;
   } else {
-    ai.value.visionModel = modelId;
+    editor.value.visionModel = modelId;
     showVisionModelDropdown.value = false;
   }
 }
 
-// 增强版测试连接
+async function test() {
+  testing.value = true; editorMessage.value = "";
+  try {
+    const result = await request<{ model: string; elapsedMs: number }>("ai/test", {
+      method: "POST",
+      body: JSON.stringify(editorBody())
+    });
+    editorMessage.value = `${result.model} 连接正常，耗时 ${result.elapsedMs} ms`;
+  }
+  catch (error) { editorMessage.value = error instanceof Error ? error.message : "连接失败"; }
+  finally { testing.value = false; }
+}
+
+async function testVision() {
+  testing.value = true; editorMessage.value = "";
+  try {
+    const result = await request<{ model: string; elapsedMs: number }>("ai/test", {
+      method: "POST",
+      body: JSON.stringify({ ...editorBody(), testVision: true })
+    });
+    editorMessage.value = `${result.model} 视觉模型可用，耗时 ${result.elapsedMs} ms`;
+  }
+  catch (error) { editorMessage.value = error instanceof Error ? error.message : "视觉模型测试失败"; }
+  finally { testing.value = false; }
+}
+
 async function testEnhanced() {
   enhancedTesting.value = true;
   testSteps.value = [];
-  message.value = "";
-
+  editorMessage.value = "";
   try {
     const result = await request<{
       provider: string;
@@ -157,123 +352,93 @@ async function testEnhanced() {
       totalElapsedMs: number;
     }>("ai/test-enhanced", {
       method: "POST",
-      body: JSON.stringify(aiBody())
+      body: JSON.stringify(editorBody())
     });
-
     testSteps.value = result.steps;
-    message.value = result.overallSuccess
+    editorMessage.value = result.overallSuccess
       ? `全部测试通过，总耗时 ${result.totalElapsedMs} ms`
       : `部分测试失败，请查看详细结果`;
   } catch (error) {
-    message.value = error instanceof Error ? error.message : "测试失败";
+    editorMessage.value = error instanceof Error ? error.message : "测试失败";
   } finally {
     enhancedTesting.value = false;
   }
 }
 
-function editableSettings(value: AiSettings) {
+/* ---------- 载入与保存 ---------- */
+function editableSettings(value: AiSettings): AiSettings {
   return {
     ...value,
     taskBindings: Object.fromEntries(Object.entries(value.taskBindings || {}).map(([key, binding]) => [
       key,
-      binding.inherited
-        ? { ...binding, provider: "" as const, model: "" }
-        : binding
+      binding.inherited ? { ...binding, profileId: "", model: "" } : binding
     ]))
   };
 }
 
-function aiBody() {
-  const taskBindings = Object.fromEntries(implementedTasks.value.map((task) => {
-    const binding = ai.value.taskBindings[task.key];
-    return [
-      task.key,
-      !binding?.provider
-        ? null
-        : { provider: binding.provider, ...(binding.model.trim() ? { model: binding.model.trim() } : {}) }
-    ];
-  }));
-  return {
-    enabled: ai.value.enabled,
-    provider: ai.value.provider,
-    requestTimeoutSeconds: ai.value.requestTimeoutSeconds,
-    extractionDepth: ai.value.extractionDepth,
-    visionEnabled: ai.value.visionEnabled,
-    baseUrl: ai.value.baseUrl,
-    textModel: ai.value.textModel,
-    visionModel: ai.value.visionModel,
-    taskBindings,
-    ...(ai.value.apiKey.trim() ? { apiKey: ai.value.apiKey.trim() } : {})
-  };
+function applyLoadedSettings(value: AiSettings) {
+  ai.value = editableSettings(value);
+  persistedIds.value = new Set(value.profiles.map((profile) => profile.id));
+  apiKeyDrafts.value = {};
+  clearKeyFlags.value = {};
 }
-function changeProvider() {
-  const provider = currentProvider.value;
-  if (!provider) return;
-  const saved = ai.value.providerSettings[provider.key];
-  ai.value.visionEnabled = supportsVision.value ? saved?.visionEnabled ?? false : false;
-  ai.value.baseUrl = saved?.baseUrl || provider.defaultBaseUrl;
-  ai.value.textModel = saved?.textModel || provider.defaultTextModel;
-  ai.value.visionModel = saved?.visionModel || provider.defaultVisionModel;
-  ai.value.apiKeyConfigured = Boolean(saved?.apiKeyConfigured);
-  ai.value.apiKeyMasked = saved?.apiKeyMasked || "";
-  ai.value.apiKey = "";
-  message.value = provider.apiKeyRequired === false
-    ? `已载入 ${provider.label} 配置，API Key 可留空`
-    : saved?.apiKeyConfigured
-    ? `已载入 ${provider.label} 保存的配置`
-    : `${provider.label} 尚未配置 API Key`;
-}
+
 async function save() {
   saving.value = true; message.value = "";
   try {
-    ai.value = editableSettings(await request<AiSettings>("ai/settings", {
-      method: "PUT",
-      body: JSON.stringify(aiBody())
+    const taskBindings = Object.fromEntries(implementedTasks.value.map((task) => {
+      const binding = ai.value.taskBindings[task.key];
+      return [
+        task.key,
+        binding?.profileId
+          ? { profileId: binding.profileId, ...(binding.model.trim() ? { model: binding.model.trim() } : {}) }
+          : null
+      ];
     }));
-    message.value = `${currentProvider.value?.label || "AI"} 配置已保存`;
+    const body = {
+      enabled: ai.value.enabled,
+      requestTimeoutSeconds: ai.value.requestTimeoutSeconds,
+      extractionDepth: ai.value.extractionDepth,
+      defaultProfileId: ai.value.defaultProfileId,
+      profiles: ai.value.profiles.map((profile) => ({
+        id: profile.id,
+        name: profile.name,
+        provider: profile.provider,
+        visionEnabled: profile.visionEnabled,
+        baseUrl: profile.baseUrl,
+        textModel: profile.textModel,
+        visionModel: profile.visionModel,
+        ...(apiKeyDrafts.value[profile.id]?.trim() ? { apiKey: apiKeyDrafts.value[profile.id].trim() } : {}),
+        ...(clearKeyFlags.value[profile.id] && !apiKeyDrafts.value[profile.id]?.trim() ? { clearApiKey: true } : {})
+      })),
+      taskBindings
+    };
+    applyLoadedSettings(await request<AiSettings>("ai/settings", {
+      method: "PUT",
+      body: JSON.stringify(body)
+    }));
+    message.value = "AI 配置已保存";
   }
   catch (error) { message.value = error instanceof Error ? error.message : "保存失败"; }
   finally { saving.value = false; }
 }
-async function test() {
-  testing.value = true; message.value = "";
-  try {
-    const result = await request<{ model: string; elapsedMs: number }>("ai/test", {
-      method: "POST",
-      body: JSON.stringify(aiBody())
-    });
-    message.value = `${result.model} 连接正常，耗时 ${result.elapsedMs} ms`;
-  }
-  catch (error) { message.value = error instanceof Error ? error.message : "连接失败"; }
-  finally { testing.value = false; }
-}
-async function testVision() {
-  testing.value = true; message.value = "";
-  try {
-    const result = await request<{ model: string; elapsedMs: number }>("ai/test", {
-      method: "POST",
-      body: JSON.stringify({ ...aiBody(), testVision: true })
-    });
-    message.value = `${result.model} 视觉模型可用，耗时 ${result.elapsedMs} ms`;
-  }
-  catch (error) { message.value = error instanceof Error ? error.message : "视觉模型测试失败"; }
-  finally { testing.value = false; }
-}
+
 async function loadSettings() {
   loading.value = true;
   loadError.value = "";
   try {
-    ai.value = editableSettings(await request<AiSettings>("ai/settings"));
+    applyLoadedSettings(await request<AiSettings>("ai/settings"));
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : "AI 配置加载失败";
   } finally {
     loading.value = false;
   }
 }
-// 点击外部关闭下拉框
+
+// 点击外部关闭模型下拉框
 const handleClickOutside = (event: MouseEvent) => {
   const target = event.target as HTMLElement;
-  if (!target.closest('.model-input-group')) {
+  if (!target.closest(".model-input-group")) {
     showTextModelDropdown.value = false;
     showVisionModelDropdown.value = false;
   }
@@ -281,149 +446,223 @@ const handleClickOutside = (event: MouseEvent) => {
 
 onMounted(() => {
   void loadSettings();
-  document.addEventListener('click', handleClickOutside);
+  document.addEventListener("click", handleClickOutside);
 });
 
 onUnmounted(() => {
-  document.removeEventListener('click', handleClickOutside);
+  document.removeEventListener("click", handleClickOutside);
 });
 </script>
 
 <template>
   <section class="settings-page">
     <SubPageHeader title="AI 解析模型" description="原图仅在视觉增强开启后发送" />
-    <section class="settings-band">
-      <header><Bot :size="21" /><div><h3>模型配置</h3><p>使用兼容 Chat Completions 的服务</p></div></header>
-      <div v-if="loading" class="loading-list"><span v-for="index in 3" :key="index"></span></div>
-      <p v-else-if="loadError" class="inline-panel-error">
-        {{ loadError }}<button class="error-retry" type="button" @click="loadSettings">重试</button>
-      </p>
-      <div v-else class="settings-form">
-        <label class="toggle-row"><div><strong>启用 AI 整理</strong><span>识别后的文本由 AI 整理为结构化字段</span></div><input v-model="ai.enabled" class="switch" type="checkbox" /></label>
-        <label><span>AI 服务商</span><FormSelect v-model="ai.provider" :options="ai.providers.map((provider) => ({ value: provider.key, label: provider.label }))" aria-label="AI 服务商" @change="changeProvider" /></label>
-        <label class="toggle-row"><div><strong>视觉增强</strong><span>{{ supportsVision ? "复杂表格可发送处理后的页面副本" : "MiniMax M2 系列当前仅支持文本整理" }}</span></div><input v-model="ai.visionEnabled" class="switch" type="checkbox" :disabled="!supportsVision" /></label>
-        <label><span>API 地址</span><input v-model.trim="ai.baseUrl" :placeholder="currentProvider?.defaultBaseUrl || 'https://api.example.com/v1'" /></label>
-        <label>
-          <span>单次请求超时（秒）</span>
-          <input v-model.number="ai.requestTimeoutSeconds" type="number" min="30" max="3600" step="30" inputmode="numeric" />
-          <small class="field-hint">每个报告解析单元最多等待 30～3600 秒，本地大模型建议保留默认 600 秒或适当提高</small>
-        </label>
-        <label>
-          <span>AI 解析程度</span>
-          <FormSelect v-model="ai.extractionDepth" :options="[
-            { value: 'overview', label: '概览（默认，更省 Token）' },
-            { value: 'detailed', label: '详细（含叙事章节与遗漏复核）' }
-          ]" aria-label="AI 解析程度" />
-          <small class="field-hint">概览模式仍逐项提取指标和形态发现并保留证据校验，但合并解析单元、跳过叙事章节和遗漏复核，Token 消耗更低；对新上传和重新整理的报告生效</small>
-        </label>
-        <div class="form-grid ai-model-grid">
-          <label>
-            <span>文本模型</span>
-            <div class="model-input-group">
-              <input v-model.trim="ai.textModel" :placeholder="currentProvider?.defaultTextModel" />
-              <button type="button" class="model-refresh-btn" :disabled="modelListLoading" @click="fetchModelList('text')" title="获取模型列表">
-                <LoaderCircle v-if="modelListLoading" class="spin-icon" :size="14" />
-                <RefreshCw v-else :size="14" />
-              </button>
-              <div v-if="showTextModelDropdown && textModelList.length" class="model-dropdown">
-                <div class="model-dropdown-header">
-                  <span>可用模型 ({{ textModelList.length }})</span>
-                  <button type="button" @click="showTextModelDropdown = false">×</button>
-                </div>
-                <div class="model-dropdown-list">
-                  <div v-for="model in textModelList" :key="model.id" class="model-dropdown-item" @click="selectModel('text', model.id)">
-                    <span class="model-id">{{ model.id }}</span>
-                    <span v-if="model.name !== model.id" class="model-name">{{ model.name }}</span>
-                  </div>
-                </div>
-              </div>
+    <div v-if="loading" class="settings-band"><div class="loading-list"><span v-for="index in 3" :key="index"></span></div></div>
+    <p v-else-if="loadError" class="settings-band inline-panel-error">
+      {{ loadError }}<button class="error-retry" type="button" @click="loadSettings">重试</button>
+    </p>
+    <template v-else>
+      <section class="settings-band">
+        <header><Plug :size="21" /><div><h3>连接配置</h3><p>每份配置包含地址、Key 和模型，可添加任意多份</p></div></header>
+        <div v-if="ai.profiles.length" class="ai-profile-list">
+          <article v-for="profile in ai.profiles" :key="profile.id" class="ai-profile-row">
+            <div class="ai-profile-summary">
+              <strong>{{ profile.name }}<em v-if="profile.id === ai.defaultProfileId" class="ai-profile-badge">默认</em></strong>
+              <span>{{ profile.providerLabel }} · {{ hostOf(profile.baseUrl) }} · {{ profile.textModel || "未设置模型" }}</span>
             </div>
-            <small v-if="currentProvider?.modelHint" class="field-hint">{{ currentProvider.modelHint }}</small>
-          </label>
-          <label>
-            <span>视觉模型</span>
-            <div class="model-input-group">
-              <input v-model.trim="ai.visionModel" :disabled="!supportsVision" :placeholder="supportsVision ? currentProvider?.defaultVisionModel || '填写支持图片输入的模型' : 'MiniMax M2 系列不支持图片输入'" />
-              <button type="button" class="model-refresh-btn" :disabled="modelListLoading || !supportsVision" @click="fetchModelList('vision')" title="获取模型列表">
-                <LoaderCircle v-if="modelListLoading" class="spin-icon" :size="14" />
-                <RefreshCw v-else :size="14" />
-              </button>
-              <div v-if="showVisionModelDropdown && visionModelList.length" class="model-dropdown">
-                <div class="model-dropdown-header">
-                  <span>可用模型 ({{ visionModelList.length }})</span>
-                  <button type="button" @click="showVisionModelDropdown = false">×</button>
-                </div>
-                <div class="model-dropdown-list">
-                  <div v-for="model in visionModelList" :key="model.id" class="model-dropdown-item" @click="selectModel('vision', model.id)">
-                    <span class="model-id">{{ model.id }}</span>
-                    <span v-if="model.name !== model.id" class="model-name">{{ model.name }}</span>
-                  </div>
-                </div>
-              </div>
+            <span v-if="profile.visionEnabled" class="ai-profile-badge vision">视觉</span>
+            <div class="ai-profile-actions">
+              <button type="button" title="编辑" aria-label="编辑连接配置" @click="openEditor(profile)"><Pencil :size="16" /></button>
+              <button type="button" class="danger-action" title="删除" aria-label="删除连接配置" @click="removeProfile(profile)"><Trash2 :size="16" /></button>
             </div>
-          </label>
-          <small class="field-hint vision-hint-grid" :class="{ 'field-warning': !visionModelHint.includes('可能支持') }">{{ visionModelHint }}</small>
-        </div>
-        <label><span>API Key <small v-if="currentProvider?.apiKeyRequired === false">（可选）</small></span><input v-model="ai.apiKey" type="password" autocomplete="new-password" :placeholder="currentProvider?.apiKeyRequired === false ? 'Ollama 默认无需填写' : ai.apiKeyConfigured ? `已配置 ${ai.apiKeyMasked}` : '输入 API Key'" /></label>
-        <section v-if="implementedTasks.length" class="ai-task-bindings">
-          <header><strong>场景模型</strong><span>默认继承上方模型，也可为单个场景独立指定</span></header>
-          <article v-for="task in implementedTasks" :key="task.key">
-            <div><strong>{{ task.label }}</strong><span>{{ task.description }}</span></div>
-            <FormSelect
-              v-model="ai.taskBindings[task.key].provider"
-              :options="[
-                { value: '', label: '继承默认模型' },
-                ...ai.providers.map((provider) => ({ value: provider.key, label: provider.label }))
-              ]"
-              :aria-label="`${task.label}服务商`"
-            />
-            <input
-              v-if="ai.taskBindings[task.key].provider"
-              v-model.trim="ai.taskBindings[task.key].model"
-              placeholder="留空使用该服务商默认文本模型"
-              :aria-label="`${task.label}模型`"
-            />
           </article>
-        </section>
-        <p v-if="message" class="form-message">{{ message }}</p>
-        
-        <!-- 增强测试结果 -->
-        <div v-if="testSteps.length" class="test-results">
-          <div class="test-results-header">
-            <strong>测试结果</strong>
-          </div>
-          <div v-for="(step, index) in testSteps" :key="index" class="test-step" :class="`test-step--${step.status}`">
-            <div class="test-step-icon">
-              <CheckCircle v-if="step.status === 'success'" :size="16" />
-              <XCircle v-else-if="step.status === 'failed'" :size="16" />
-              <AlertCircle v-else :size="16" />
-            </div>
-            <div class="test-step-content">
-              <div class="test-step-name">{{ step.name }}</div>
-              <div class="test-step-message">{{ step.message }}</div>
-            </div>
-            <div v-if="step.elapsedMs" class="test-step-time">{{ step.elapsedMs }}ms</div>
-          </div>
         </div>
+        <p v-else class="ai-profile-empty">尚未添加连接配置，添加后即可启用 AI 整理</p>
+        <div class="ai-profile-add">
+          <button type="button" class="soft-action-button" @click="openEditor()"><Plus :size="16" />添加连接配置</button>
+        </div>
+      </section>
 
-        <div class="form-actions ai-settings-actions">
-          <button type="button" :disabled="saving || testing || enhancedTesting" @click="test">
-            <LoaderCircle v-if="testing" class="spin-icon" :size="17" />
-            <TestTubeDiagonal v-else :size="17" />
-            {{ testing ? "正在测试" : "快速测试" }}
-          </button>
-          <button type="button" :disabled="saving || testing || enhancedTesting" @click="testEnhanced">
-            <LoaderCircle v-if="enhancedTesting" class="spin-icon" :size="17" />
-            <TestTubeDiagonal v-else :size="17" />
-            {{ enhancedTesting ? "正在测试" : "完整测试" }}
-          </button>
-          <button class="primary-button" type="button" :disabled="saving || testing || enhancedTesting" @click="save">
-            <LoaderCircle v-if="saving" class="spin-icon" :size="17" />
-            <Save v-else :size="17" />
-            {{ saving ? "正在保存" : "保存" }}
-          </button>
+      <section class="settings-band">
+        <header><Bot :size="21" /><div><h3>模型配置</h3><p>使用兼容 Chat Completions 的服务</p></div></header>
+        <div class="settings-form">
+          <label class="toggle-row"><div><strong>启用 AI 整理</strong><span>识别后的文本由 AI 整理为结构化字段</span></div><input v-model="ai.enabled" class="switch" type="checkbox" /></label>
+          <label>
+            <span>默认连接</span>
+            <FormSelect
+              v-model="ai.defaultProfileId"
+              :options="ai.profiles.map((profile) => ({ value: profile.id, label: profile.name }))"
+              placeholder="请先添加连接配置"
+              aria-label="默认连接"
+            />
+            <small class="field-hint">未单独指定场景的解析任务使用此连接{{ defaultProfile ? `（${defaultProfile.providerLabel} · ${defaultProfile.textModel || "未设置模型"}）` : "" }}</small>
+          </label>
+          <label>
+            <span>单次请求超时（秒）</span>
+            <input v-model.number="ai.requestTimeoutSeconds" type="number" min="30" max="3600" step="30" inputmode="numeric" />
+            <small class="field-hint">每个报告解析单元最多等待 30～3600 秒，本地大模型建议保留默认 600 秒或适当提高</small>
+          </label>
+          <label>
+            <span>AI 解析程度</span>
+            <FormSelect v-model="ai.extractionDepth" :options="[
+              { value: 'overview', label: '概览（默认，更省 Token）' },
+              { value: 'detailed', label: '详细（含叙事章节与遗漏复核）' }
+            ]" aria-label="AI 解析程度" />
+            <small class="field-hint">概览模式仍逐项提取指标和形态发现并保留证据校验，但合并解析单元、跳过叙事章节和遗漏复核，Token 消耗更低；对新上传和重新整理的报告生效</small>
+          </label>
+          <section v-if="implementedTasks.length" class="ai-task-bindings">
+            <header><strong>场景模型</strong><span>默认继承上方默认连接，也可为单个场景指定其他连接</span></header>
+            <article v-for="task in implementedTasks" :key="task.key">
+              <div><strong>{{ task.label }}</strong><span>{{ task.description }}</span></div>
+              <FormSelect
+                v-model="ai.taskBindings[task.key].profileId"
+                :options="[
+                  { value: '', label: '继承默认连接' },
+                  ...ai.profiles.map((profile) => ({ value: profile.id, label: profile.name }))
+                ]"
+                :aria-label="`${task.label}连接`"
+              />
+              <input
+                v-if="ai.taskBindings[task.key].profileId"
+                v-model.trim="ai.taskBindings[task.key].model"
+                placeholder="留空使用该配置的文本模型"
+                :aria-label="`${task.label}模型`"
+              />
+            </article>
+          </section>
+          <p v-if="message" class="form-message">{{ message }}</p>
+          <div class="form-actions">
+            <button class="primary-button" type="button" :disabled="saving" @click="save">
+              <LoaderCircle v-if="saving" class="spin-icon" :size="17" />
+              <Save v-else :size="17" />
+              {{ saving ? "保存中" : "保存配置" }}
+            </button>
+          </div>
         </div>
+      </section>
+    </template>
+
+    <Teleport to="body">
+      <div v-if="editorOpen" class="modal-backdrop ai-profile-editor-backdrop" @click.self="closeEditor">
+        <section class="modal-panel ai-profile-editor" role="dialog" aria-modal="true" :aria-label="persistedIds.has(editorId) ? '编辑连接配置' : '添加连接配置'">
+          <span class="sheet-grabber" aria-hidden="true"></span>
+          <header>
+            <div><Plug :size="20" /><h3>{{ persistedIds.has(editorId) ? "编辑连接配置" : "添加连接配置" }}</h3></div>
+            <button type="button" title="关闭" @click="closeEditor"><X :size="19" /></button>
+          </header>
+          <div class="ai-profile-editor-form settings-form">
+            <label>
+              <span>服务商预设</span>
+              <FormSelect
+                v-model="editor.provider"
+                :options="ai.providers.map((provider) => ({ value: provider.key, label: provider.label }))"
+                aria-label="服务商预设"
+                @change="changeEditorProvider"
+              />
+              <small v-if="currentEditorProvider?.modelHint" class="field-hint">{{ currentEditorProvider.modelHint }}</small>
+            </label>
+            <label><span>配置名称</span><input v-model.trim="editor.name" maxlength="30" :placeholder="currentEditorProvider?.label || '自定义连接'" /></label>
+            <label><span>API 地址</span><input v-model.trim="editor.baseUrl" :placeholder="currentEditorProvider?.defaultBaseUrl || 'https://api.example.com/v1'" /></label>
+            <label>
+              <span>API Key <small v-if="currentEditorProvider?.apiKeyRequired === false">（可选）</small></span>
+              <input
+                v-model="editor.apiKey"
+                type="password"
+                autocomplete="new-password"
+                :placeholder="currentEditorProvider?.apiKeyRequired === false ? 'Ollama 默认无需填写' : editor.apiKeyConfigured ? `已配置 ${editor.apiKeyMasked}` : '输入 API Key'"
+              />
+              <small v-if="editor.apiKeyConfigured" class="field-hint">
+                已保存 {{ editor.apiKeyMasked }}，留空保持不变；<button type="button" class="ai-clear-key" @click="clearSavedKey">清除已保存的 Key</button>
+              </small>
+            </label>
+            <div class="form-grid ai-model-grid">
+              <label>
+                <span>文本模型</span>
+                <div class="model-input-group">
+                  <input v-model.trim="editor.textModel" :placeholder="currentEditorProvider?.defaultTextModel" />
+                  <button type="button" class="model-refresh-btn" :disabled="modelListLoading" @click="fetchModelList('text')" title="获取模型列表">
+                    <LoaderCircle v-if="modelListLoading" class="spin-icon" :size="14" />
+                    <RefreshCw v-else :size="14" />
+                  </button>
+                  <div v-if="showTextModelDropdown && textModelList.length" class="model-dropdown">
+                    <div class="model-dropdown-header">
+                      <span>可用模型 ({{ textModelList.length }})</span>
+                      <button type="button" @click="showTextModelDropdown = false">×</button>
+                    </div>
+                    <div class="model-dropdown-list">
+                      <div v-for="model in textModelList" :key="model.id" class="model-dropdown-item" @click="selectModel('text', model.id)">
+                        <span class="model-id">{{ model.id }}</span>
+                        <span v-if="model.name !== model.id" class="model-name">{{ model.name }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </label>
+              <label>
+                <span>视觉模型</span>
+                <div class="model-input-group">
+                  <input v-model.trim="editor.visionModel" :disabled="!supportsVision" :placeholder="supportsVision ? currentEditorProvider?.defaultVisionModel || '填写支持图片输入的模型' : 'MiniMax M2 系列不支持图片输入'" />
+                  <button type="button" class="model-refresh-btn" :disabled="modelListLoading || !supportsVision" @click="fetchModelList('vision')" title="获取模型列表">
+                    <LoaderCircle v-if="modelListLoading" class="spin-icon" :size="14" />
+                    <RefreshCw v-else :size="14" />
+                  </button>
+                  <div v-if="showVisionModelDropdown && visionModelList.length" class="model-dropdown">
+                    <div class="model-dropdown-header">
+                      <span>可用模型 ({{ visionModelList.length }})</span>
+                      <button type="button" @click="showVisionModelDropdown = false">×</button>
+                    </div>
+                    <div class="model-dropdown-list">
+                      <div v-for="model in visionModelList" :key="model.id" class="model-dropdown-item" @click="selectModel('vision', model.id)">
+                        <span class="model-id">{{ model.id }}</span>
+                        <span v-if="model.name !== model.id" class="model-name">{{ model.name }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </label>
+              <small class="field-hint vision-hint-grid" :class="{ 'field-warning': !visionModelHint.includes('可能支持') }">{{ visionModelHint }}</small>
+            </div>
+            <label class="toggle-row">
+              <div><strong>视觉增强</strong><span>{{ supportsVision ? "复杂表格可发送处理后的页面副本" : "MiniMax M2 系列当前仅支持文本整理" }}</span></div>
+              <input v-model="editor.visionEnabled" class="switch" type="checkbox" :disabled="!supportsVision" />
+            </label>
+          </div>
+
+          <div v-if="testSteps.length" class="test-results ai-editor-tests">
+            <div class="test-results-header"><strong>测试结果</strong></div>
+            <div v-for="(step, index) in testSteps" :key="index" class="test-step" :class="`test-step--${step.status}`">
+              <div class="test-step-icon">
+                <CheckCircle v-if="step.status === 'success'" :size="16" />
+                <XCircle v-else-if="step.status === 'failed'" :size="16" />
+                <AlertCircle v-else :size="16" />
+              </div>
+              <div class="test-step-content">
+                <strong>{{ step.name }}</strong>
+                <span>{{ step.message }}</span>
+                <small v-if="step.elapsedMs !== undefined">{{ step.elapsedMs }} ms</small>
+              </div>
+            </div>
+          </div>
+          <p v-if="editorMessage" class="form-message ai-editor-message">{{ editorMessage }}</p>
+
+          <footer class="ai-editor-footer">
+            <button type="button" class="soft-action-button" :disabled="testing" @click="test">
+              <LoaderCircle v-if="testing" class="spin-icon" :size="15" />
+              <TestTubeDiagonal v-else :size="15" />
+              快速测试
+            </button>
+            <button type="button" class="soft-action-button" :disabled="enhancedTesting" @click="testEnhanced">
+              <LoaderCircle v-if="enhancedTesting" class="spin-icon" :size="15" />
+              <TestTubeDiagonal v-else :size="15" />
+              完整测试
+            </button>
+            <button v-if="supportsVision && editor.visionModel.trim()" type="button" class="soft-action-button" :disabled="testing" @click="testVision">测试视觉</button>
+            <span class="spacer"></span>
+            <button type="button" @click="closeEditor">取消</button>
+            <button type="button" class="primary-button" @click="applyEditor">确定</button>
+          </footer>
+        </section>
       </div>
-    </section>
+    </Teleport>
   </section>
 </template>

@@ -19,12 +19,13 @@
   "runAs": "package",
   "logLevel": "info",
   "releaseNotes": {
-    "summary": "支持 fnOS 普通用户授权导入 NAS 文件，并新增 MiniMax Provider、NAS 预览及多项兼容修复。",
+    "summary": "支持 fnOS 普通用户授权导入 NAS 文件，AI 配置升级为多份连接配置，并新增 MiniMax Provider、NAS 预览及多项兼容修复。",
     "highlights": [
       "拍照、多图和 PDF 上传，支持 OCR、AI 整理和报告校对",
       "PDF 文字层不完整时自动结合高清渲染 OCR，减少清晰 PDF 漏识别",
       "AI 提取前按 OCR 页面、章节和表格边界稳定切割，并过滤患者直接个资",
       "长报告按稳定单元逐次 AI 整理，支持断点恢复、遗漏补提取和原子合并",
+      "AI 配置升级为多份连接配置，默认模型和场景绑定按配置引用，旧配置自动迁移",
       "AI 配置支持 MiniMax 文本模型，并改进 Ollama 无 API Key 和慢启动场景兼容性",
       "人工校对过的报告字段会被保护，AI 重跑和重新 OCR+AI 不会自动覆盖",
       "趋势按常见体检目录和检验子分组排序，数据节点可打开来源原图并自动定位高亮指标行",

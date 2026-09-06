@@ -2,6 +2,7 @@
 import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from "vue";
 import { CheckCircle2, Cpu, Database, Download, LoaderCircle, Save } from "@lucide/vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
+import FormSelect from "../../components/FormSelect.vue";
 import { request } from "../../utils/api";
 import { useAppContext } from "../../composables/useAppContext";
 
@@ -267,11 +268,12 @@ onActivated(syncStatusPolling);
         <div class="settings-form runtime-pip-form">
           <label>
             <span>镜像源</span>
-            <select v-model="ocrSettings.pipMirror">
-              <option v-for="mirror in ocrSettings.mirrors" :key="mirror.key" :value="mirror.key">
-                {{ mirror.label }}
-              </option>
-            </select>
+            <FormSelect
+              :model-value="ocrSettings.pipMirror"
+              :options="ocrSettings.mirrors.map((mirror) => ({ value: mirror.key, label: mirror.label }))"
+              aria-label="镜像源"
+              @update:model-value="ocrSettings.pipMirror = $event as PipMirrorKey"
+            />
           </label>
           <label v-if="ocrSettings.pipMirror === 'custom'">
             <span>自定义地址</span>

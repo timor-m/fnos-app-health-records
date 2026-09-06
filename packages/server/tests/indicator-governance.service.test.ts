@@ -284,6 +284,53 @@ test("keeps evidence-failure observations out of the dictionary governance pool"
   }
 });
 
+test("keeps design-gated qualitative indicators out of the dictionary governance pool", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-indicator-qualitative-gate-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(admin.id, admin.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('governance-member', '匿名成员', 'self', ?)
+    `).run(admin.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('governance-member', ?, 'manager', ?)
+    `).run(admin.id, admin.id);
+    insertReport("governance-qualitative-report", "2026-08-02");
+    db.prepare(`
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit
+      ) VALUES (
+        'governance-qualitative-protein', 'governance-qualitative-report', '尿常规',
+        '尿蛋白', '尿蛋白', '阴性', null, null
+      )
+    `).run();
+    normalizeReportObservations("governance-qualitative-report");
+
+    const normalized = db.prepare(`
+      SELECT canonical_key AS canonicalKey, quality, excluded_reason AS excludedReason
+      FROM observation_normalizations
+      WHERE observation_id = 'governance-qualitative-protein'
+    `).get() as { canonicalKey: string | null; quality: string; excludedReason: string | null };
+    assert.equal(normalized.canonicalKey, "urine_protein");
+    assert.equal(normalized.quality, "excluded");
+    assert.match(normalized.excludedReason || "", /不默认进入折线趋势/);
+
+    // 定性守门是字典的既定口径而非治理缺口：不入池、不计入待治理统计
+    assert.equal(listIndicatorNormalizationIssues(admin).some((item) => item.rawName === "尿蛋白"), false);
+    const metrics = getIndicatorNormalizationMetrics(admin);
+    assert.equal(metrics.totals.needsReview, 0);
+    assert.equal(metrics.totals.issueGroups, 0);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
 test("detects conflicting user aliases and records safe enable or disable changes", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-indicator-alias-conflict-"));
   process.env.STORAGE_DIR = storageDir;

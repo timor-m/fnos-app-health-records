@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { GitMerge, RefreshCw, RotateCcw, SearchCheck, ShieldCheck, ShieldX, Trash2, X } from "@lucide/vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import EmptyState from "../../components/EmptyState.vue";
+import FormSelect from "../../components/FormSelect.vue";
 import ReportDetailModal from "../../components/ReportDetailModal.vue";
 import { request } from "../../utils/api";
 import type {
@@ -34,13 +35,26 @@ const batchGoverning = ref(false);
 const error = ref("");
 const previewReportId = ref<string | null>(null);
 const searchQuery = ref("");
-const confidenceFilter = ref<"all" | "high" | "medium">("all");
+const confidenceFilter = ref("all");
 const reportTypeFilter = ref("all");
 const hospitalFilter = ref("all");
 const selectedPairKeys = ref<string[]>([]);
 const selectedDecisionPairKeys = ref<string[]>([]);
 const reportTypeOptions = ref<string[]>([]);
 const hospitalOptions = ref<string[]>([]);
+const confidenceSelectOptions = [
+  { value: "all", label: "全部" },
+  { value: "high", label: "高置信" },
+  { value: "medium", label: "中置信" }
+];
+const reportTypeSelectOptions = computed(() => [
+  { value: "all", label: "全部" },
+  ...reportTypeOptions.value.map((type) => ({ value: type, label: type }))
+]);
+const hospitalSelectOptions = computed(() => [
+  { value: "all", label: "全部" },
+  ...hospitalOptions.value.map((hospital) => ({ value: hospital, label: hospital }))
+]);
 const pagination = ref({ page: 1, pageSize: 20, totalGroups: 0, totalPairs: 0, totalPages: 1 });
 const comparisonOpen = ref(false);
 const comparisonLoading = ref(false);
@@ -354,9 +368,9 @@ async function mergeToCandidate(source: ReportSummary, target: DuplicateReportCa
     <section v-if="metrics && metrics.candidateGroups" class="settings-band duplicate-filter-panel">
       <div class="duplicate-filter-grid">
         <label><span>搜索</span><input v-model="searchQuery" type="search" placeholder="标题、医院或候选原因" @keyup.enter="scan(1)" /></label>
-        <label><span>置信度</span><select v-model="confidenceFilter" @change="scan(1)"><option value="all">全部</option><option value="high">高置信</option><option value="medium">中置信</option></select></label>
-        <label><span>报告类型</span><select v-model="reportTypeFilter" @change="scan(1)"><option value="all">全部</option><option v-for="type in reportTypeOptions" :key="type" :value="type">{{ type }}</option></select></label>
-        <label><span>医院</span><select v-model="hospitalFilter" @change="scan(1)"><option value="all">全部</option><option v-for="hospital in hospitalOptions" :key="hospital" :value="hospital">{{ hospital }}</option></select></label>
+        <label><span>置信度</span><FormSelect v-model="confidenceFilter" :options="confidenceSelectOptions" aria-label="置信度" @change="scan(1)" /></label>
+        <label><span>报告类型</span><FormSelect v-model="reportTypeFilter" :options="reportTypeSelectOptions" aria-label="报告类型" @change="scan(1)" /></label>
+        <label><span>医院</span><FormSelect v-model="hospitalFilter" :options="hospitalSelectOptions" aria-label="医院" @change="scan(1)" /></label>
         <button type="button" :disabled="loading" @click="scan(1)">应用筛选</button>
       </div>
       <div class="duplicate-batch-bar">

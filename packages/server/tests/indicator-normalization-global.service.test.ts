@@ -649,3 +649,117 @@ test("classifies reported dictionary candidates without resubmitting known or po
     rmSync(storageDir, { recursive: true, force: true });
   }
 });
+
+test("tolerates OCR noise in scientific-notation and lookalike units", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-unit-ocr-noise-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.exec(`
+      INSERT INTO users (id, display_name) VALUES ('unit-user', '用户');
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('unit-member', '本人', 'self', 'unit-user');
+      INSERT INTO reports (
+        id, member_id, created_by, report_type, title, status, report_issued_at
+      ) VALUES ('unit-report', 'unit-member', 'unit-user', 'laboratory', '检验报告', 'ready', '2026-08-01');
+      INSERT INTO processing_jobs (
+        id, report_id, job_type, status, attempts, pipeline_version, deduplication_key, finished_at
+      ) VALUES ('unit-ai-job', 'unit-report', 'ai_extract', 'completed', 1, 'test', 'unit-ai-job', CURRENT_TIMESTAMP);
+      INSERT INTO report_extractions (
+        id, report_id, job_id, provider, model, prompt_version, fields_json,
+        evidence_json, confidence_json, raw_response_json
+      ) VALUES (
+        'unit-extraction', 'unit-report', 'unit-ai-job', 'test', 'test', 'test',
+        '{}', '{}', '{}', '{}'
+      );
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text,
+        numeric_value, unit, evidence_json
+      ) VALUES
+      ('unit-obs-plt', 'unit-report', '血常规', '血小板计数', '血小板计数', '357',
+        357, '×109/L', '[{"pageNumber":1,"quote":"血小板计数 357 ×109/L"}]'),
+      ('unit-obs-neut', 'unit-report', '血常规', '中性粒细胞计数', '中性粒细胞计数', '7.19',
+        7.19, '×10°9/L', '[{"pageNumber":1,"quote":"中性粒细胞计数 7.19 ×10°9/L"}]'),
+      ('unit-obs-cr', 'unit-report', '肾功能', '肌酐', '肌酐', '78.5',
+        78.5, 'umo1/L', '[{"pageNumber":1,"quote":"肌酐 78.5 umo1/L"}]');
+    `);
+
+    normalizeReportObservations("unit-report");
+    const rows = db.prepare(`
+      SELECT observation_id AS id, canonical_key AS canonicalKey, quality,
+        canonical_unit AS canonicalUnit, excluded_reason AS excludedReason
+      FROM observation_normalizations
+    `).all() as Array<{
+      id: string; canonicalKey: string | null; quality: string;
+      canonicalUnit: string | null; excludedReason: string | null;
+    }>;
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    /* ×109/L、×10°9/L 是 10^9/L 的 OCR 噪声形态，umo1/L 是 μmol/L 的形近字误读 */
+    assert.equal(byId.get("unit-obs-plt")?.canonicalKey, "cbc_plt");
+    assert.equal(byId.get("unit-obs-plt")?.quality, "high");
+    assert.equal(byId.get("unit-obs-plt")?.canonicalUnit, "10^9/L");
+    assert.equal(byId.get("unit-obs-neut")?.canonicalKey, "cbc_neutrophil_count");
+    assert.equal(byId.get("unit-obs-neut")?.quality, "high");
+    assert.equal(byId.get("unit-obs-cr")?.canonicalKey, "renal_creatinine");
+    assert.equal(byId.get("unit-obs-cr")?.quality, "high");
+    assert.equal(byId.get("unit-obs-cr")?.canonicalUnit, "μmol/L");
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("ai suggestion duplicates of builtin indicators do not trigger ambiguity gate", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-ai-dup-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.exec(`
+      INSERT INTO users (id, display_name) VALUES ('dup-user', '用户');
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('dup-member', '本人', 'self', 'dup-user');
+      INSERT INTO reports (
+        id, member_id, created_by, report_type, title, status, report_issued_at
+      ) VALUES ('dup-report', 'dup-member', 'dup-user', 'laboratory', '检验报告', 'ready', '2026-08-01');
+      INSERT INTO processing_jobs (
+        id, report_id, job_type, status, attempts, pipeline_version, deduplication_key, finished_at
+      ) VALUES ('dup-ai-job', 'dup-report', 'ai_extract', 'completed', 1, 'test', 'dup-ai-job', CURRENT_TIMESTAMP);
+      INSERT INTO report_extractions (
+        id, report_id, job_id, provider, model, prompt_version, fields_json,
+        evidence_json, confidence_json, raw_response_json
+      ) VALUES (
+        'dup-extraction', 'dup-report', 'dup-ai-job', 'test', 'test', 'test',
+        '{}', '{}', '{}', '{}'
+      );
+      INSERT INTO indicator_catalog (
+        id, canonical_key, display_name, category, value_type, trend_enabled, source, ai_managed
+      ) VALUES ('ai-dup-sg', 'ai:numeric:尿比重', '尿比重', '尿常规', 'numeric', 1, 'user', 1);
+      INSERT INTO indicator_aliases (
+        id, indicator_id, alias_name, normalized_alias, scope, source, confidence, enabled
+      ) VALUES ('ai-dup-sg-alias', 'ai-dup-sg', '尿比重', '尿比重', 'global', 'ai_suggestion', 1, 1);
+      INSERT INTO observations (
+        id, report_id, section_name, item_name, normalized_name, result_text,
+        numeric_value, unit, evidence_json
+      ) VALUES (
+        'dup-obs-sg', 'dup-report', '三大常规', '尿比重', '尿比重', '1.018',
+        1.018, NULL, '[{"pageNumber":1,"quote":"尿比重 1.018"}]'
+      );
+    `);
+
+    normalizeReportObservations("dup-report");
+    const row = db.prepare(`
+      SELECT canonical_key AS canonicalKey, quality, excluded_reason AS excludedReason
+      FROM observation_normalizations WHERE observation_id = 'dup-obs-sg'
+    `).get() as { canonicalKey: string | null; quality: string; excludedReason: string | null };
+    /* AI 建议条目与内置「尿比重」同名，只保留内置候选，不再触发多义守门 */
+    assert.equal(row.canonicalKey, "urine_specific_gravity");
+    assert.notEqual(row.quality, "low");
+    assert.notEqual(row.quality, "excluded");
+    assert.equal(row.excludedReason, null);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});

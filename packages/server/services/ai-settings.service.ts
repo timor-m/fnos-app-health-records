@@ -29,11 +29,12 @@ export function normalizeAiExtractionDepth(value: unknown): AiExtractionDepth {
     : "overview";
 }
 
-export type AiSettings = {
-  enabled: boolean;
+/* 一份连接配置 = 服务商预设（驱动平台差异）+ 自定义名称 + 地址 + Key + 模型。
+   默认模型和场景绑定都通过 profileId 引用具体配置。 */
+export type AiProfile = {
+  id: string;
+  name: string;
   provider: AiProviderKey;
-  requestTimeoutSeconds: number;
-  extractionDepth: AiExtractionDepth;
   visionEnabled: boolean;
   baseUrl: string;
   textModel: string;
@@ -42,35 +43,87 @@ export type AiSettings = {
 };
 
 export type AiTaskBinding = {
-  provider?: AiProviderKey;
+  profileId?: string;
   model?: string;
 };
 
-export type AiSettingsInput = Partial<AiSettings> & {
+export type AiProfileInput = {
+  id?: string;
+  name?: string;
+  provider?: string;
+  visionEnabled?: boolean;
+  baseUrl?: string;
+  textModel?: string;
+  visionModel?: string;
+  apiKey?: string;
   clearApiKey?: boolean;
-  testVision?: boolean;
-  taskBindings?: Partial<Record<AiTaskKey, AiTaskBinding | null>>;
 };
 
-type ProviderSettings = Pick<AiSettings, "visionEnabled" | "baseUrl" | "textModel" | "visionModel" | "apiKey">;
-type StoredProviderSettings = Omit<ProviderSettings, "apiKey"> & {
+export type AiTaskBindingInput = {
+  profileId?: string;
+  model?: string;
+  // 兼容旧版按服务商绑定场景的写法
+  provider?: string;
+};
+
+export type AiSettingsInput = {
+  enabled?: boolean;
+  requestTimeoutSeconds?: number;
+  extractionDepth?: string;
+  defaultProfileId?: string;
+  profileId?: string;
+  profiles?: AiProfileInput[];
+  taskBindings?: Partial<Record<AiTaskKey, AiTaskBindingInput | null>>;
+  // 兼容旧版按服务商保存的表单字段
+  provider?: string;
+  visionEnabled?: boolean;
+  baseUrl?: string;
+  textModel?: string;
+  visionModel?: string;
+  apiKey?: string;
+  clearApiKey?: boolean;
+  testVision?: boolean;
+};
+
+type StoredAiProfile = {
+  id?: string;
+  name?: string;
+  provider?: string;
+  visionEnabled?: boolean;
+  baseUrl?: string;
+  textModel?: string;
+  visionModel?: string;
   apiKey?: string;
   apiKeyEncrypted?: string;
 };
-type StoredAiSettings = Partial<StoredProviderSettings> & {
+
+// 旧版（v1）按服务商存储的结构，读取时自动迁移为 profiles 列表
+type StoredProviderSettings = {
+  visionEnabled?: boolean;
+  baseUrl?: string;
+  textModel?: string;
+  visionModel?: string;
+  apiKey?: string;
+  apiKeyEncrypted?: string;
+};
+
+type StoredAiSettings = StoredProviderSettings & {
   enabled?: boolean;
-  provider?: string;
   requestTimeoutSeconds?: number;
   extractionDepth?: string;
+  defaultProfileId?: string;
+  profiles?: StoredAiProfile[];
+  provider?: string;
   providers?: Partial<Record<AiProviderKey, StoredProviderSettings>>;
-  taskBindings?: Partial<Record<AiTaskKey, { provider?: string; model?: string }>>;
+  taskBindings?: Partial<Record<AiTaskKey, { profileId?: string; provider?: string; model?: string }>>;
 };
+
 type ParsedAiSettings = {
   enabled: boolean;
-  provider: AiProviderKey;
   requestTimeoutSeconds: number;
   extractionDepth: AiExtractionDepth;
-  providers: Partial<Record<AiProviderKey, ProviderSettings>>;
+  defaultProfileId: string;
+  profiles: AiProfile[];
   taskBindings: Partial<Record<AiTaskKey, AiTaskBinding>>;
 };
 
@@ -131,7 +184,15 @@ function decrypt(value: string) {
   return Buffer.concat([decipher.update(data.subarray(28)), decipher.final()]).toString("utf8");
 }
 
-function providerDefaults(provider: AiProviderKey): ProviderSettings {
+function generateProfileId(taken: Set<string>) {
+  let id = "";
+  do {
+    id = `pf_${randomBytes(4).toString("hex")}`;
+  } while (taken.has(id));
+  return id;
+}
+
+function providerDefaults(provider: AiProviderKey) {
   const defaults = aiProviderCatalog[provider];
   return {
     visionEnabled: false,
@@ -142,84 +203,186 @@ function providerDefaults(provider: AiProviderKey): ProviderSettings {
   };
 }
 
-function parseProviderSettings(value: StoredProviderSettings | undefined): Partial<ProviderSettings> | undefined {
-  if (!value) return undefined;
-  const parsed: Partial<ProviderSettings> = {};
-  if (typeof value.visionEnabled === "boolean") parsed.visionEnabled = value.visionEnabled;
-  if (typeof value.baseUrl === "string") parsed.baseUrl = value.baseUrl;
-  if (typeof value.textModel === "string") parsed.textModel = value.textModel;
-  if (typeof value.visionModel === "string") parsed.visionModel = value.visionModel;
-  if (typeof value.apiKeyEncrypted === "string") parsed.apiKey = decrypt(value.apiKeyEncrypted);
-  else if (typeof value.apiKey === "string") parsed.apiKey = value.apiKey;
-  return parsed;
+function emptySettings(): ParsedAiSettings {
+  return {
+    enabled: false,
+    requestTimeoutSeconds: legacyRequestTimeoutSeconds(),
+    extractionDepth: "overview",
+    defaultProfileId: "",
+    profiles: [],
+    taskBindings: {}
+  };
+}
+
+function parseStoredProfile(raw: StoredAiProfile, taken: Set<string>): AiProfile | null {
+  const provider = typeof raw.provider === "string" && raw.provider in aiProviderCatalog
+    ? raw.provider as AiProviderKey
+    : null;
+  if (!provider) return null;
+  let id = typeof raw.id === "string" ? raw.id.trim() : "";
+  if (!id || taken.has(id)) id = generateProfileId(taken);
+  taken.add(id);
+  const defaults = providerDefaults(provider);
+  return {
+    id,
+    name: (typeof raw.name === "string" ? raw.name.trim() : "") || aiProviderCatalog[provider].label,
+    provider,
+    visionEnabled: raw.visionEnabled === true,
+    baseUrl: normalizeProviderBaseUrl(provider, typeof raw.baseUrl === "string" ? raw.baseUrl : defaults.baseUrl),
+    textModel: typeof raw.textModel === "string" ? raw.textModel : defaults.textModel,
+    visionModel: typeof raw.visionModel === "string" ? raw.visionModel : defaults.visionModel,
+    apiKey: typeof raw.apiKeyEncrypted === "string"
+      ? decrypt(raw.apiKeyEncrypted)
+      : typeof raw.apiKey === "string" ? raw.apiKey : ""
+  };
+}
+
+// v1 按服务商存储的配置 -> 每服务商一份连接配置，id 稳定（legacy_<provider>），
+// 保证迁移结果可回写且多次读取一致
+function migrateLegacySettings(stored: StoredAiSettings): ParsedAiSettings {
+  const selectedProvider = normalizeAiProvider(stored.provider);
+  const legacyProviders: Partial<Record<AiProviderKey, Omit<AiProfile, "id" | "name" | "provider">>> = {};
+  const parseLegacyProvider = (raw: StoredProviderSettings | undefined, provider: AiProviderKey) => {
+    if (!raw) return undefined;
+    const defaults = providerDefaults(provider);
+    return {
+      visionEnabled: raw.visionEnabled === true,
+      baseUrl: normalizeProviderBaseUrl(provider, typeof raw.baseUrl === "string" ? raw.baseUrl : defaults.baseUrl),
+      textModel: typeof raw.textModel === "string" ? raw.textModel : defaults.textModel,
+      visionModel: typeof raw.visionModel === "string" ? raw.visionModel : defaults.visionModel,
+      apiKey: typeof raw.apiKeyEncrypted === "string"
+        ? decrypt(raw.apiKeyEncrypted)
+        : typeof raw.apiKey === "string" ? raw.apiKey : ""
+    };
+  };
+  if (isRecord(stored.providers)) {
+    for (const key of Object.keys(aiProviderCatalog) as AiProviderKey[]) {
+      const parsed = parseLegacyProvider(stored.providers[key], key);
+      if (parsed) legacyProviders[key] = parsed;
+    }
+  }
+  // 更早的版本只存一份扁平配置，并入当时选中的服务商
+  const hasFlatSettings = Boolean(
+    stored.baseUrl || stored.textModel || stored.visionModel || stored.apiKey || stored.apiKeyEncrypted
+  );
+  if (hasFlatSettings) {
+    const flat = parseLegacyProvider(stored, selectedProvider);
+    const merged = legacyProviders[selectedProvider];
+    legacyProviders[selectedProvider] = {
+      visionEnabled: merged?.visionEnabled ?? flat?.visionEnabled ?? false,
+      baseUrl: merged?.baseUrl ?? flat?.baseUrl ?? "",
+      textModel: merged?.textModel ?? flat?.textModel ?? "",
+      visionModel: merged?.visionModel ?? flat?.visionModel ?? "",
+      apiKey: merged?.apiKey ?? flat?.apiKey ?? ""
+    };
+  }
+
+  const keys = new Set<AiProviderKey>();
+  for (const key of Object.keys(aiProviderCatalog) as AiProviderKey[]) {
+    if (legacyProviders[key]) keys.add(key);
+  }
+  keys.add(selectedProvider);
+
+  const taskBindings: ParsedAiSettings["taskBindings"] = {};
+  if (isRecord(stored.taskBindings)) {
+    for (const task of listAiTasks()) {
+      const raw = stored.taskBindings[task.key];
+      if (!isRecord(raw)) continue;
+      const provider = typeof raw.provider === "string" && raw.provider in aiProviderCatalog
+        ? raw.provider as AiProviderKey
+        : undefined;
+      const model = typeof raw.model === "string" ? raw.model.trim() : "";
+      if (provider) keys.add(provider);
+      if (provider || model) {
+        taskBindings[task.key] = {
+          ...(provider ? { profileId: `legacy_${provider}` } : {}),
+          ...(model ? { model } : {})
+        };
+      }
+    }
+  }
+
+  const profiles: AiProfile[] = [...keys].map((key) => ({
+    id: `legacy_${key}`,
+    name: aiProviderCatalog[key].label,
+    provider: key,
+    ...(legacyProviders[key] || providerDefaults(key))
+  }));
+
+  return {
+    enabled: stored.enabled === true,
+    requestTimeoutSeconds: storedRequestTimeoutSeconds(stored.requestTimeoutSeconds),
+    extractionDepth: normalizeAiExtractionDepth(stored.extractionDepth),
+    defaultProfileId: `legacy_${selectedProvider}`,
+    profiles,
+    taskBindings
+  };
+}
+
+function persistSettings(parsed: ParsedAiSettings) {
+  getDatabase().prepare(`
+    INSERT INTO app_settings (setting_key, value_json) VALUES (?, ?)
+    ON CONFLICT(setting_key) DO UPDATE SET value_json = excluded.value_json, updated_at = CURRENT_TIMESTAMP
+  `).run(settingKey, JSON.stringify(serializeSettings(parsed)));
 }
 
 export function parseStoredSettings(): ParsedAiSettings {
   const row = getDatabase().prepare("SELECT value_json AS valueJson FROM app_settings WHERE setting_key = ?")
     .get(settingKey) as { valueJson: string } | undefined;
-  if (!row) return {
-    enabled: false,
-    provider: "deepseek",
-    requestTimeoutSeconds: legacyRequestTimeoutSeconds(),
-    extractionDepth: "overview",
-    providers: {},
-    taskBindings: {}
-  };
+  if (!row) return emptySettings();
 
   try {
     const stored = JSON.parse(row.valueJson) as StoredAiSettings;
-    const provider = normalizeAiProvider(stored.provider);
-    const providers: ParsedAiSettings["providers"] = {};
-    if (isRecord(stored.providers)) {
-      for (const key of Object.keys(aiProviderCatalog) as AiProviderKey[]) {
-        const raw = stored.providers[key];
-        if (isRecord(raw)) providers[key] = parseProviderSettings(raw as StoredProviderSettings) as ProviderSettings;
+    // 旧格式（v1 按服务商存储或更早的扁平配置）一次性迁移并回写为新结构
+    if (!Array.isArray(stored.profiles)) {
+      const migrated = migrateLegacySettings(stored);
+      try {
+        persistSettings(migrated);
+      } catch {
+        // 回写失败不阻塞读取，下次保存时仍会落盘
       }
+      return migrated;
     }
+
+    const taken = new Set<string>();
+    const profiles = stored.profiles
+      .map((raw) => isRecord(raw) ? parseStoredProfile(raw as StoredAiProfile, taken) : null)
+      .filter((profile): profile is AiProfile => Boolean(profile));
     const taskBindings: ParsedAiSettings["taskBindings"] = {};
     if (isRecord(stored.taskBindings)) {
       for (const task of listAiTasks()) {
         const raw = stored.taskBindings[task.key];
         if (!isRecord(raw)) continue;
-        const provider = typeof raw.provider === "string" && raw.provider in aiProviderCatalog
-          ? raw.provider as AiProviderKey
-          : undefined;
+        const profileId = typeof raw.profileId === "string" ? raw.profileId.trim() : "";
         const model = typeof raw.model === "string" ? raw.model.trim() : "";
-        if (provider || model) taskBindings[task.key] = { provider, ...(model ? { model } : {}) };
+        if (profileId || model) {
+          taskBindings[task.key] = { ...(profileId ? { profileId } : {}), ...(model ? { model } : {}) };
+        }
       }
     }
-
-    // The original release stored one flat provider configuration. Merge it into
-    // the selected provider so upgrading never discards its models or API key.
-    const hasLegacySettings = Boolean(
-      stored.baseUrl || stored.textModel || stored.visionModel || stored.apiKey || stored.apiKeyEncrypted
-    );
-    if (hasLegacySettings) {
-      const legacy = parseProviderSettings(stored as StoredProviderSettings);
-      providers[provider] = {
-        ...legacy,
-        ...providers[provider],
-        apiKey: providers[provider]?.apiKey ?? legacy?.apiKey ?? ""
-      } as ProviderSettings;
-    }
+    let defaultProfileId = typeof stored.defaultProfileId === "string" ? stored.defaultProfileId.trim() : "";
+    if (defaultProfileId && !profiles.some((profile) => profile.id === defaultProfileId)) defaultProfileId = "";
+    if (!defaultProfileId) defaultProfileId = profiles[0]?.id || "";
     return {
       enabled: stored.enabled === true,
-      provider,
       requestTimeoutSeconds: storedRequestTimeoutSeconds(stored.requestTimeoutSeconds),
       extractionDepth: normalizeAiExtractionDepth(stored.extractionDepth),
-      providers,
+      defaultProfileId,
+      profiles,
       taskBindings
     };
   } catch {
-    return {
-      enabled: false,
-      provider: "deepseek",
-      requestTimeoutSeconds: legacyRequestTimeoutSeconds(),
-      extractionDepth: "overview",
-      providers: {},
-      taskBindings: {}
-    };
+    return emptySettings();
   }
+}
+
+export function findAiProfile(parsed: ParsedAiSettings, profileId: string | undefined) {
+  if (!profileId) return null;
+  return parsed.profiles.find((profile) => profile.id === profileId) || null;
+}
+
+export function resolveActiveProfile(parsed: ParsedAiSettings) {
+  return findAiProfile(parsed, parsed.defaultProfileId) || parsed.profiles[0] || null;
 }
 
 export function normalizeProviderBaseUrl(provider: AiProviderKey, value: string) {
@@ -237,14 +400,6 @@ export function normalizeProviderBaseUrl(provider: AiProviderKey, value: string)
   } catch {
     return value;
   }
-}
-
-export function resolveProvider(provider: AiProviderKey, parsed: ParsedAiSettings): ProviderSettings {
-  const resolved = { ...providerDefaults(provider), ...parsed.providers[provider] };
-  return {
-    ...resolved,
-    baseUrl: normalizeProviderBaseUrl(provider, resolved.baseUrl)
-  };
 }
 
 function normalizeBaseUrl(value: unknown, fallback: string) {
@@ -269,65 +424,68 @@ function maskApiKey(apiKey: string) {
 }
 
 function serializeSettings(parsed: ParsedAiSettings) {
-  const providers: Partial<Record<AiProviderKey, StoredProviderSettings>> = {};
-  for (const key of Object.keys(aiProviderCatalog) as AiProviderKey[]) {
-    const value = parsed.providers[key];
-    if (!value) continue;
-    providers[key] = {
-      visionEnabled: value.visionEnabled === true,
-      baseUrl: value.baseUrl,
-      textModel: value.textModel,
-      visionModel: value.visionModel,
-      apiKeyEncrypted: encrypt(value.apiKey)
-    };
-  }
   return {
     enabled: parsed.enabled,
-    provider: parsed.provider,
     requestTimeoutSeconds: parsed.requestTimeoutSeconds,
     extractionDepth: parsed.extractionDepth,
-    providers,
+    defaultProfileId: parsed.defaultProfileId,
+    profiles: parsed.profiles.map((profile) => ({
+      id: profile.id,
+      name: profile.name,
+      provider: profile.provider,
+      visionEnabled: profile.visionEnabled,
+      baseUrl: profile.baseUrl,
+      textModel: profile.textModel,
+      visionModel: profile.visionModel,
+      apiKeyEncrypted: encrypt(profile.apiKey)
+    })),
     taskBindings: parsed.taskBindings
   };
 }
 
+function publicProfile(profile: AiProfile) {
+  return {
+    id: profile.id,
+    name: profile.name,
+    provider: profile.provider,
+    providerLabel: aiProviderCatalog[profile.provider].label,
+    visionEnabled: profile.visionEnabled,
+    baseUrl: profile.baseUrl,
+    textModel: profile.textModel,
+    visionModel: profile.visionModel,
+    apiKeyConfigured: Boolean(profile.apiKey),
+    apiKeyMasked: maskApiKey(profile.apiKey)
+  };
+}
+
+function bindingProfile(parsed: ParsedAiSettings, binding: AiTaskBinding | undefined) {
+  return findAiProfile(parsed, binding?.profileId) || resolveActiveProfile(parsed);
+}
+
 function publicSettings(parsed: ParsedAiSettings) {
-  const active = resolveProvider(parsed.provider, parsed);
-  const providerSettings = Object.fromEntries(
-    (Object.keys(aiProviderCatalog) as AiProviderKey[]).map((key) => {
-      const value = resolveProvider(key, parsed);
-      return [key, {
-        visionEnabled: value.visionEnabled,
-        baseUrl: value.baseUrl,
-        textModel: value.textModel,
-        visionModel: value.visionModel,
-        apiKeyConfigured: Boolean(value.apiKey),
-        apiKeyMasked: maskApiKey(value.apiKey)
-      }];
-    })
-  );
+  const active = resolveActiveProfile(parsed);
   return {
     enabled: parsed.enabled,
-    provider: parsed.provider,
     requestTimeoutSeconds: parsed.requestTimeoutSeconds,
     extractionDepth: parsed.extractionDepth,
-    visionEnabled: active.visionEnabled,
-    baseUrl: active.baseUrl,
-    textModel: active.textModel,
-    visionModel: active.visionModel,
-    apiKey: "",
-    apiKeyConfigured: Boolean(active.apiKey),
-    apiKeyMasked: maskApiKey(active.apiKey),
-    providerSettings,
+    defaultProfileId: active?.id || "",
+    // 旧版平铺字段镜像当前默认连接，兼容仍在读取旧字段的调用方
+    provider: active?.provider || "deepseek",
+    visionEnabled: active?.visionEnabled === true,
+    baseUrl: active?.baseUrl || "",
+    textModel: active?.textModel || "",
+    visionModel: active?.visionModel || "",
+    apiKeyConfigured: Boolean(active?.apiKey),
+    apiKeyMasked: maskApiKey(active?.apiKey || ""),
+    profiles: parsed.profiles.map(publicProfile),
     providers: Object.entries(aiProviderCatalog).map(([key, value]) => ({ key, ...value })),
     tasks: listAiTasks(),
     taskBindings: Object.fromEntries(listAiTasks().map((task) => {
       const binding = parsed.taskBindings[task.key];
-      const provider = binding?.provider || parsed.provider;
-      const providerSettings = resolveProvider(provider, parsed);
+      const profile = bindingProfile(parsed, binding);
       return [task.key, {
-        provider,
-        model: binding?.model || providerSettings.textModel,
+        profileId: profile?.id || "",
+        model: binding?.model || profile?.textModel || "",
         inherited: !binding,
         implemented: task.implemented
       }];
@@ -335,31 +493,41 @@ function publicSettings(parsed: ParsedAiSettings) {
   };
 }
 
+type PublicAiSettings = ReturnType<typeof publicSettings>;
+
+export function getAiSettings(includeSecret?: false): PublicAiSettings;
+export function getAiSettings(includeSecret: true): PublicAiSettings & { apiKey: string };
 export function getAiSettings(includeSecret = false) {
   const parsed = parseStoredSettings();
-  const active = resolveProvider(parsed.provider, parsed);
+  const settings = publicSettings(parsed);
+  if (!includeSecret) return settings;
   return {
-    ...publicSettings(parsed),
-    apiKey: includeSecret ? active.apiKey : ""
+    ...settings,
+    apiKey: resolveActiveProfile(parsed)?.apiKey || ""
   };
+}
+
+export function getAiProfileSecrets() {
+  return new Map(parseStoredSettings().profiles.map((profile) => [profile.id, profile.apiKey]));
 }
 
 export function getAiTaskSettings(taskKey: AiTaskKey, includeSecret = false) {
   const parsed = parseStoredSettings();
   const binding = parsed.taskBindings[taskKey];
-  const provider = binding?.provider || parsed.provider;
-  const providerSettings = resolveProvider(provider, parsed);
+  const profile = bindingProfile(parsed, binding);
   return {
     enabled: parsed.enabled,
     taskKey,
     requestTimeoutSeconds: parsed.requestTimeoutSeconds,
     extractionDepth: parsed.extractionDepth,
-    provider,
-    baseUrl: providerSettings.baseUrl,
-    model: binding?.model || providerSettings.textModel,
-    visionModel: providerSettings.visionModel,
-    visionEnabled: providerSettings.visionEnabled,
-    apiKey: includeSecret ? providerSettings.apiKey : "",
+    provider: profile?.provider || "deepseek",
+    profileId: profile?.id || "",
+    profileName: profile?.name || "",
+    baseUrl: profile?.baseUrl || "",
+    model: binding?.model || profile?.textModel || "",
+    visionModel: profile?.visionModel || "",
+    visionEnabled: profile?.visionEnabled === true,
+    apiKey: includeSecret ? profile?.apiKey || "" : "",
     inherited: !binding
   };
 }
@@ -369,68 +537,187 @@ export function resolveAiExtractionDepth(): AiExtractionDepth {
   return parseStoredSettings().extractionDepth;
 }
 
-export function saveAiSettings(input: AiSettingsInput) {
-  const parsed = parseStoredSettings();
-  const provider = normalizeAiProvider(input.provider || parsed.provider);
-  const current = resolveProvider(provider, parsed);
-  const submittedKey = typeof input.apiKey === "string" ? input.apiKey.trim() : "";
-  const apiKey = input.clearApiKey === true ? "" : submittedKey || current.apiKey;
-  const visionEnabled = input.visionEnabled === undefined ? current.visionEnabled : input.visionEnabled === true;
-  const visionModel = String(input.visionModel ?? current.visionModel).trim();
+function hasLegacySaveFields(input: AiSettingsInput) {
+  return !Array.isArray(input.profiles) && (
+    typeof input.provider === "string"
+    || input.baseUrl !== undefined
+    || input.textModel !== undefined
+    || input.visionModel !== undefined
+    || input.visionEnabled !== undefined
+    || typeof input.apiKey === "string"
+    || input.clearApiKey === true
+  );
+}
+
+function applyProfileInput(
+  raw: AiProfileInput,
+  existing: AiProfile | undefined,
+  taken: Set<string>
+): AiProfile {
+  const provider = typeof raw.provider === "string" && raw.provider in aiProviderCatalog
+    ? raw.provider as AiProviderKey
+    : existing?.provider;
+  if (!provider) {
+    throw createError({ statusCode: 400, statusMessage: "连接配置的服务商类型无效" });
+  }
+  let id = typeof raw.id === "string" ? raw.id.trim() : "";
+  if (id && existing && id !== existing.id) id = "";
+  if (!id || taken.has(id)) id = generateProfileId(taken);
+  taken.add(id);
+  const defaults = providerDefaults(provider);
+  // 新提交的 Key 优先；明确要求清除且没有新 Key 时清空；否则保留已存 Key
+  const submittedKey = typeof raw.apiKey === "string" ? raw.apiKey.trim() : "";
+  const apiKey = submittedKey || (raw.clearApiKey === true ? "" : existing?.apiKey || "");
+  const visionEnabled = raw.visionEnabled === undefined ? existing?.visionEnabled === true : raw.visionEnabled === true;
+  const visionModel = String(raw.visionModel ?? existing?.visionModel ?? defaults.visionModel).trim();
   if (provider === "minimax" && visionEnabled) {
     throw createError({ statusCode: 400, statusMessage: "MiniMax M2 系列当前不支持视觉增强，请关闭视觉增强" });
   }
   if (visionEnabled && !visionModel) {
     throw createError({ statusCode: 400, statusMessage: "已开启视觉增强，请先填写视觉模型名称" });
   }
+  return {
+    id,
+    name: (typeof raw.name === "string" ? raw.name.trim() : "") || existing?.name || aiProviderCatalog[provider].label,
+    provider,
+    visionEnabled,
+    baseUrl: resolveAiBaseUrl(provider, raw.baseUrl, existing?.baseUrl || defaults.baseUrl),
+    textModel: String(raw.textModel || existing?.textModel || defaults.textModel).trim(),
+    visionModel,
+    apiKey
+  };
+}
+
+function applyTaskBindings(
+  input: AiSettingsInput["taskBindings"],
+  next: ParsedAiSettings,
+  taken: Set<string>
+) {
+  if (!input) return;
+  for (const task of listAiTasks()) {
+    if (!(task.key in input)) continue;
+    const value = input[task.key];
+    if (!value) {
+      delete next.taskBindings[task.key];
+      continue;
+    }
+    let profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
+    // 兼容旧版按服务商绑定：映射到该服务商的连接配置，缺省时按默认配置补建
+    if (!profileId && typeof value.provider === "string" && value.provider in aiProviderCatalog) {
+      const provider = value.provider as AiProviderKey;
+      let profile = next.profiles.find((item) => item.provider === provider);
+      if (!profile) {
+        profile = {
+          id: generateProfileId(taken),
+          name: aiProviderCatalog[provider].label,
+          provider,
+          ...providerDefaults(provider)
+        };
+        taken.add(profile.id);
+        next.profiles.push(profile);
+      }
+      profileId = profile.id;
+    }
+    const model = String(value.model || "").trim();
+    if (profileId && !next.profiles.some((profile) => profile.id === profileId)) {
+      throw createError({ statusCode: 400, statusMessage: `场景“${task.label}”引用的连接配置不存在` });
+    }
+    if (!profileId && !model) {
+      delete next.taskBindings[task.key];
+      continue;
+    }
+    next.taskBindings[task.key] = {
+      ...(profileId ? { profileId } : {}),
+      ...(model ? { model } : {})
+    };
+  }
+}
+
+function validateAndPersist(next: ParsedAiSettings) {
+  if (next.enabled && !next.defaultProfileId) {
+    throw createError({ statusCode: 400, statusMessage: "启用 AI 整理前请先添加连接配置" });
+  }
+  persistSettings(next);
+  return publicSettings(next);
+}
+
+export function saveAiSettings(input: AiSettingsInput) {
+  const parsed = parseStoredSettings();
+  const taken = new Set(parsed.profiles.map((profile) => profile.id));
   const next: ParsedAiSettings = {
     enabled: input.enabled === undefined ? parsed.enabled : input.enabled === true,
-    provider,
     requestTimeoutSeconds: submittedRequestTimeoutSeconds(input.requestTimeoutSeconds, parsed.requestTimeoutSeconds),
     extractionDepth: normalizeAiExtractionDepth(
       input.extractionDepth === undefined ? parsed.extractionDepth : input.extractionDepth
     ),
-    providers: {
-      ...parsed.providers,
-      [provider]: {
-        visionEnabled,
-        baseUrl: resolveAiBaseUrl(provider, input.baseUrl, current.baseUrl),
-        textModel: String(input.textModel || current.textModel).trim(),
-        visionModel,
-        apiKey
-      }
-    },
+    defaultProfileId: parsed.defaultProfileId,
+    profiles: [...parsed.profiles],
     taskBindings: { ...parsed.taskBindings }
   };
-  if (input.taskBindings) {
-    for (const task of listAiTasks()) {
-      if (!(task.key in input.taskBindings)) continue;
-      const value = input.taskBindings[task.key];
-      if (!value) {
-        delete next.taskBindings[task.key];
-        continue;
-      }
-      const bindingProvider = value.provider
-        ? normalizeAiProvider(value.provider)
-        : undefined;
-      const model = String(value.model || "").trim();
-      next.taskBindings[task.key] = {
-        ...(bindingProvider ? { provider: bindingProvider } : {}),
-        ...(model ? { model } : {})
-      };
-    }
+
+  if (Array.isArray(input.profiles)) {
+    // 全量提交：列表即最终状态，未出现的配置视为删除
+    const existingById = new Map(parsed.profiles.map((profile) => [profile.id, profile]));
+    const submitted = new Set<string>();
+    next.profiles = input.profiles.map((raw) => {
+      const existing = typeof raw.id === "string" ? existingById.get(raw.id.trim()) : undefined;
+      const profile = applyProfileInput(raw, existing, submitted);
+      return profile;
+    });
+    taken.clear();
+    for (const profile of next.profiles) taken.add(profile.id);
+    next.defaultProfileId = "";
+  } else if (hasLegacySaveFields(input)) {
+    // 旧版表单：按服务商更新或新建一份连接配置，并把它设为默认（旧版“当前服务商”语义）
+    const provider = normalizeAiProvider(
+      input.provider || resolveActiveProfile(parsed)?.provider || "deepseek"
+    );
+    const existing = next.profiles.find((profile) => profile.provider === provider);
+    if (existing) taken.delete(existing.id);
+    const updated = applyProfileInput(
+      {
+        id: existing?.id,
+        provider,
+        visionEnabled: input.visionEnabled,
+        baseUrl: input.baseUrl,
+        textModel: input.textModel,
+        visionModel: input.visionModel,
+        apiKey: input.apiKey,
+        clearApiKey: input.clearApiKey
+      },
+      existing,
+      taken
+    );
+    next.profiles = existing
+      ? next.profiles.map((profile) => (profile.id === updated.id ? updated : profile))
+      : [...next.profiles, updated];
+    next.defaultProfileId = updated.id;
   }
-  getDatabase().prepare(`
-    INSERT INTO app_settings (setting_key, value_json) VALUES (?, ?)
-    ON CONFLICT(setting_key) DO UPDATE SET value_json = excluded.value_json, updated_at = CURRENT_TIMESTAMP
-  `).run(settingKey, JSON.stringify(serializeSettings(next)));
-  return publicSettings(next);
+
+  if (input.defaultProfileId !== undefined) {
+    const defaultProfileId = String(input.defaultProfileId || "").trim();
+    if (defaultProfileId && !next.profiles.some((profile) => profile.id === defaultProfileId)) {
+      throw createError({ statusCode: 400, statusMessage: "默认连接配置不存在" });
+    }
+    next.defaultProfileId = defaultProfileId;
+  }
+  if (!next.defaultProfileId || !next.profiles.some((profile) => profile.id === next.defaultProfileId)) {
+    next.defaultProfileId = next.profiles[0]?.id || "";
+  }
+
+  applyTaskBindings(input.taskBindings, next, taken);
+  return validateAndPersist(next);
 }
 
 export async function testAiConnection(input: AiSettingsInput = {}) {
   const parsed = parseStoredSettings();
-  const provider = normalizeAiProvider(input.provider || parsed.provider);
-  const current = resolveProvider(provider, parsed);
+  const byId = typeof input.profileId === "string" ? findAiProfile(parsed, input.profileId.trim()) : null;
+  const provider = normalizeAiProvider(
+    input.provider || byId?.provider || resolveActiveProfile(parsed)?.provider || "deepseek"
+  );
+  const fallbackProfile = byId
+    || (input.provider ? parsed.profiles.find((profile) => profile.provider === provider) : resolveActiveProfile(parsed));
+  const current = fallbackProfile || { ...providerDefaults(provider) };
   const apiKey = typeof input.apiKey === "string" && input.apiKey.trim() ? input.apiKey.trim() : current.apiKey;
   const textModel = String(input.textModel || current.textModel).trim();
   const testVision = input.testVision === true;

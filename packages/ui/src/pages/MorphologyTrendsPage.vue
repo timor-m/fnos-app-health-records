@@ -362,6 +362,10 @@ function compatibleMergeSeries(item: MorphologyTrackingSeries) {
   );
 }
 
+function seriesSelectOptions(list: MorphologyTrackingSeries[]) {
+  return list.map((series) => ({ value: series.trackingGroupId, label: `${series.name} · ${series.pointCount} 次记录` }));
+}
+
 async function mergeTracking() {
   const memberId = app.selectedMemberId.value;
   if (!mergeSeries.value || !memberId) return;
@@ -672,7 +676,7 @@ async function editorSaved() {
           <div class="compact-action-body">
             <div class="compact-finding-summary"><strong>{{ untrackedMeta(processingFinding) }}</strong><span>{{ processingFinding.reason }}</span><p>{{ processingFinding.rawText }}</p></div>
             <p>将记录归入已有项目后，会与该项目的历年报告一起展示；不会修改或删除原报告。</p>
-            <label v-if="compatibleSeries(processingFinding).length" class="settings-form"><span>归入已有项目</span><select v-model="selectedTrackingGroup"><option v-for="series in compatibleSeries(processingFinding)" :key="series.trackingGroupId" :value="series.trackingGroupId">{{ series.name }} · {{ series.pointCount }} 次记录</option></select></label>
+            <label v-if="compatibleSeries(processingFinding).length" class="settings-form"><span>归入已有项目</span><FormSelect v-model="selectedTrackingGroup" :options="seriesSelectOptions(compatibleSeries(processingFinding))" aria-label="归入已有项目" /></label>
             <p v-if="actionError" class="inline-panel-error">{{ actionError }}</p>
           </div>
           <footer class="compact-action-footer">
@@ -689,7 +693,7 @@ async function editorSaved() {
           <header><div><Link2 :size="19" /><span><strong>归为同一项目</strong><small>{{ mergeSeries.name }}</small></span></div><button class="plain-icon-button" type="button" @click="mergeSeries = null"><X :size="18" /></button></header>
           <div class="compact-action-body">
             <p>选择后，“{{ mergeSeries.name }}”的全部历年记录会归入目标项目；只调整展示关联，不修改或删除原报告。</p>
-            <label class="settings-form"><span>目标项目</span><select v-model="selectedMergeTarget"><option value="" disabled>选择要归入的项目</option><option v-for="series in compatibleMergeSeries(mergeSeries)" :key="series.trackingGroupId" :value="series.trackingGroupId">{{ series.name }} · {{ series.pointCount }} 次记录</option></select></label>
+            <label class="settings-form"><span>目标项目</span><FormSelect v-model="selectedMergeTarget" :options="seriesSelectOptions(compatibleMergeSeries(mergeSeries))" placeholder="选择要归入的项目" aria-label="目标项目" /></label>
             <p v-if="actionError" class="inline-panel-error">{{ actionError }}</p>
           </div>
           <footer class="compact-action-footer"><button type="button" @click="mergeSeries = null">取消</button><button class="primary-button" type="button" :disabled="actionLoading || !selectedMergeTarget" @click="mergeTracking"><LoaderCircle v-if="actionLoading" class="spin-icon" :size="16" />确认归入</button></footer>

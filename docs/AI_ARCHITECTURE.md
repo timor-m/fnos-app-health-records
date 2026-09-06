@@ -35,8 +35,8 @@
 
 `packages/server/services/ai-task.service.ts`
 
-- 根据 `taskKey` 读取该场景绑定的 Provider 和模型。
-- 未单独绑定时继承当前默认 Provider 和文本模型。
+- 根据 `taskKey` 读取该场景绑定的连接配置（profileId）和模型。
+- 未单独绑定时继承默认连接配置和其文本模型。
 - 校验场景开关、API Key 和模型配置。
 - 将通用请求交给 AI Runtime 执行。
 
@@ -94,13 +94,13 @@ OCR 重建后的每一行会先标记为元数据、表头、章节标题、定�
 
 ## 配置与凭据
 
-Provider 配置和场景绑定存储在现有 `app_settings` 的 `ai.provider` JSON 中：
+连接配置和场景绑定存储在现有 `app_settings` 的 `ai.provider` JSON 中：
 
-- API 地址、API Key、默认文本模型和视觉模型按 Provider 独立保存；Ollama 默认使用本地 OpenAI-compatible 地址且不要求 API Key。
+- 连接配置以 `profiles` 列表保存，每份包含 id、名称、Provider 预设 key、API 地址、文本模型、视觉模型和加密后的 API Key；Provider 预设 key 用于驱动平台差异（如 MiniMax 视觉限制、Ollama 免 Key）。
 - API Key 继续使用应用私有密钥加密，场景绑定不会复制密钥。
-- 场景只保存可选的 `provider` 和 `model`。
-- 切换默认 Provider 或场景模型不会删除其他 Provider 的配置。
-- 未设置场景绑定时，旧版本配置会自然继承，不需要数据库迁移。
+- 场景只保存可选的 `profileId` 和 `model`，默认模型通过 `defaultProfileId` 引用具体配置。
+- 删除连接配置时校验是否仍被默认模型或场景绑定引用，避免悬空引用。
+- 旧版本按 Provider 独立保存的配置在读取时自动迁移为 `legacy_<provider>` 稳定 id 的连接配置并回写，场景绑定的 `provider` 映射为 `profileId`，不需要数据库迁移。
 
 ## 新增 AI 场景
 

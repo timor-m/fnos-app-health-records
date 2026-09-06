@@ -233,7 +233,7 @@ npm run release:notes
 
 - GitHub CI 在 push 和 pull request 时执行 `npm run release:ci`。
 - GitHub Release 在 tag 或手动触发时执行严格发布校验、测试和打包；tag 版本必须与 `package.json` 版本一致。
-- Release notes 会自动读取 `CHANGELOG.md` 当前版本段落、`package.json`、`template.config.json` 和迁移注册表，输出本版本变更、应用版本、应用 ID、目标 schema 和数据库升级说明。
+- Release notes 会自动读取 `CHANGELOG.md` 当前版本段落、`package.json`、`template.config.json` 和迁移注册表，输出本版本变更、发布摘要（含应用 ID 与目标 schema）、发布产物和 Docker 镜像信息；`releaseNotes.highlights` 仅保留给 `release:info` 检查和发布校验，不再写入 GitHub Release 正文。
 - 包结构校验会确认 manifest 版本、sub_version、应用介绍、changelog 和图标尺寸。
 - `vX.Y.Z` Tag 先构建 fnOS `.fpk`，再通过 Buildx 发布 `linux/amd64`、`linux/arm64` 的 Docker Hub 多架构镜像，最后创建同时包含 `.fpk`、镜像地址和 digest 的 GitHub Release。
 - Docker 镜像标签包含精确版本 `X.Y.Z`、`vX.Y.Z`、`X.Y` 和短提交 SHA；稳定版本额外更新 `latest`。镜像版本与 `.fpk` 版本都只取自同一个 `package.json`。

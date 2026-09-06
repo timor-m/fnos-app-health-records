@@ -2,7 +2,7 @@
   "$schema": "../schemas/taxonomy.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 11,
+  "revision": 14,
   "groups": [],
   "categories": [
     {
@@ -22,6 +22,24 @@
         "凝血",
         "凝血四项",
         "凝血五项"
+      ]
+    },
+    {
+      "key": "semen_analysis",
+      "name": "精液分析",
+      "groupKey": "laboratory",
+      "subgroupKey": "laboratory_other",
+      "order": 96,
+      "aliases": [
+        "精液分析",
+        "精液常规",
+        "精液检查"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液检查",
+        "精液"
       ]
     }
   ]

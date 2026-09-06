@@ -7,12 +7,13 @@ import { assertMemberManage, createMember } from "./member.service";
 
 /*
  * 报告患者身份与成员档案匹配：上传时选错成员是家庭场景的高发误操作。
- * 系统刻意不存储患者姓名，因此只用性别和出生日期两个弱标识信号：
- * 二者均可在本地从 OCR 提取，与成员资料冲突时给出提醒，
+ * 姓名、性别、出生日期、年龄都只在本地从原始 OCR 文本提取（脱敏只发生在
+ * 发给 AI 的输入阶段，原始 OCR 不出库），与成员资料冲突时给出提醒，
  * 并支持一键归属到匹配成员或创建新成员后归属。
  */
 
 export type PatientIdentity = {
+  name: string | null;
   sex: "male" | "female" | null;
   birthDate: string | null;
   age: PatientAgeSignal | null;
@@ -30,6 +31,7 @@ export type PatientAgeSignal = {
 };
 
 export type MemberIdentityAssessment = {
+  patientName: string | null;
   patientSex: "male" | "female" | null;
   patientBirthDate: string | null;
   patientAgeText: string | null;
@@ -137,6 +139,36 @@ export function patientAgeFromOcrText(
   return null;
 }
 
+/*
+ * 患者姓名只在显式“姓名”标签旁采信。姓名不发给 AI（AI 输入在规划阶段脱敏），
+ * 但原始 OCR 文本本就保存在本地，这里直接本地提取用于成员归属提醒和
+ * 创建成员表单的预填，数据不出库。
+ */
+export function patientNameFromOcrText(
+  linesJsonValues: Array<string | null>,
+): string | null {
+  for (const value of linesJsonValues.slice(0, 3)) {
+    let lines: Array<{ text?: unknown }> = [];
+    try {
+      const parsed = JSON.parse(value || "[]") as unknown;
+      if (Array.isArray(parsed)) lines = parsed;
+    } catch {
+      continue;
+    }
+    for (const line of lines) {
+      const text = String(line.text || "").trim();
+      if (!text) continue;
+      const match = text.match(/姓名\s*[:：]\s*([^\s，,；;、|]{2,15})/);
+      if (!match) continue;
+      const name = match[1].trim();
+      /* 纯中文（可带间隔号）或纯字母名才采信，排除“姓名：张3”一类 OCR 噪声 */
+      if (!/^[一-鿿·]+$|^[A-Za-z][A-Za-z .]{1,14}$/.test(name)) continue;
+      return name;
+    }
+  }
+  return null;
+}
+
 function reportOcrLinesJson(reportId: string) {
   return (
     getDatabase()
@@ -157,6 +189,7 @@ function reportOcrLinesJson(reportId: string) {
 export function patientIdentityForReport(reportId: string): PatientIdentity {
   const linesJsonValues = reportOcrLinesJson(reportId);
   return {
+    name: patientNameFromOcrText(linesJsonValues),
     sex: patientSexFromOcrText(linesJsonValues),
     birthDate: patientBirthDateFromOcrText(linesJsonValues),
     age: patientAgeFromOcrText(linesJsonValues),
@@ -324,7 +357,34 @@ export function assessReportMemberIdentity(
         relationship,
       }));
   }
+  /*
+   * 姓名精确一致也是强归属信号（家庭成员档案通常用真实姓名），
+   * 与出生日期/年龄候选合并去重，姓名匹配排在前面。
+   */
+  if (patient.name) {
+    const nameMatches = db
+      .prepare(
+        `
+      SELECT m.id, m.display_name AS displayName, m.relationship
+      FROM health_members m
+      JOIN member_permissions mp
+        ON mp.member_id = m.id AND mp.user_id = ? AND mp.permission = 'manager'
+      WHERE m.id <> ? AND m.deleted_at IS NULL AND m.display_name = ?
+      ORDER BY m.created_at
+      LIMIT 3
+    `,
+      )
+      .all(user.id, report.memberId, patient.name) as typeof candidates;
+    if (nameMatches.length) {
+      const seen = new Set(nameMatches.map((candidate) => candidate.id));
+      candidates = [
+        ...nameMatches,
+        ...candidates.filter((candidate) => !seen.has(candidate.id)),
+      ].slice(0, 3);
+    }
+  }
   return {
+    patientName: patient.name,
     patientSex: patient.sex,
     patientBirthDate: patient.birthDate,
     patientAgeText: patient.age?.text || null,

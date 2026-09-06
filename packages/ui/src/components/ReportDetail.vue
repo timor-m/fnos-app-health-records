@@ -13,7 +13,7 @@ import FormSelect from "./FormSelect.vue";
 import ImageViewer, { type ImageViewerPage } from "./ImageViewer.vue";
 import MorphologyFindingEditor from "./MorphologyFindingEditor.vue";
 import { request, apiUrl } from "../utils/api";
-import { downloadStreamedFile } from "../utils/download";
+import { downloadDirectUrl, downloadStreamedFile } from "../utils/download";
 import { describeObservationAbnormal, formatObservationNormalization, formatReferenceRange } from "../utils/indicator-display";
 import { formatDatabaseTime, formatDatabaseTimeWithYear } from "../utils/time";
 import { hasEmptyCompletedOcr, resolveAiTriggerState } from "../utils/ai-trigger-state";
@@ -644,6 +644,12 @@ function openPdfOriginalViewer(page: ReportPage) {
 function closePdfOriginalViewer() {
   pdfViewerOpen.value = false;
   pdfViewerPage.value = null;
+}
+
+async function downloadPdfOriginal() {
+  const page = pdfViewerPage.value;
+  if (!page) return;
+  await downloadDirectUrl(originalUrl(page), page.originalName || `第 ${page.pageNumber} 页.pdf`);
 }
 
 /* 弹层打开期间锁定背景滚动（页面缩放已全局禁用） */
@@ -1379,6 +1385,7 @@ const memberPatientInfo = computed(() => {
   const assessment = memberIdentityAssessment.value;
   if (!assessment) return "";
   const parts: string[] = [];
+  if (assessment.patientName) parts.push(assessment.patientName);
   if (assessment.patientSex) parts.push(assessment.patientSex === "male" ? "男" : "女");
   if (assessment.patientBirthDate) parts.push(`出生于 ${assessment.patientBirthDate}`);
   else if (assessment.patientAgeText) parts.push(`年龄 ${assessment.patientAgeText}`);
@@ -1395,6 +1402,15 @@ const memberCreateOpen = ref(false);
 const memberCreateSaving = ref(false);
 const memberCreateError = ref("");
 const memberCreateForm = ref({ displayName: "", relationship: "other", sex: "", birthDate: "" });
+const memberCreateMaxYear = new Date().getFullYear();
+const memberCreateRelationshipOptions = computed(() =>
+  Object.entries(mismatchRelationshipLabels).map(([value, label]) => ({ value, label }))
+);
+const memberCreateSexOptions = [
+  { value: "", label: "性别未知" },
+  { value: "male", label: "男" },
+  { value: "female", label: "女" }
+];
 
 async function postMemberAssignment(body: Record<string, unknown>, successMessage: string) {
   await request(`reports/${encodeURIComponent(props.reportId)}/assign-member`, {
@@ -1429,7 +1445,7 @@ function assignToCandidate(candidate: { id: string; displayName: string }) {
 function openMemberCreate() {
   const assessment = memberIdentityAssessment.value;
   memberCreateForm.value = {
-    displayName: "",
+    displayName: assessment?.patientName || "",
     relationship: "other",
     sex: assessment?.patientSex || "",
     birthDate: assessment?.patientBirthDate || assessment?.patientApproxBirthDate || ""
@@ -1884,15 +1900,9 @@ onActivated(() => {
           </div>
           <form v-if="memberCreateOpen" class="member-create-form" @submit.prevent="submitMemberCreate">
             <input v-model="memberCreateForm.displayName" type="text" maxlength="40" placeholder="成员姓名（必填）" required />
-            <select v-model="memberCreateForm.relationship" aria-label="家庭关系">
-              <option v-for="(label, value) in mismatchRelationshipLabels" :key="value" :value="value">{{ label }}</option>
-            </select>
-            <select v-model="memberCreateForm.sex" aria-label="性别">
-              <option value="">性别未知</option>
-              <option value="male">男</option>
-              <option value="female">女</option>
-            </select>
-            <input v-model="memberCreateForm.birthDate" type="date" aria-label="出生日期" />
+            <FormSelect v-model="memberCreateForm.relationship" :options="memberCreateRelationshipOptions" aria-label="家庭关系" />
+            <FormSelect v-model="memberCreateForm.sex" :options="memberCreateSexOptions" aria-label="性别" />
+            <DateTimePicker v-model="memberCreateForm.birthDate" :min-year="1900" :max-year="memberCreateMaxYear" aria-label="出生日期" />
             <p v-if="!memberIdentityAssessment.patientBirthDate && memberIdentityAssessment.patientApproxBirthDate" class="member-create-hint">出生日期按报告年龄推算，请核对后再保存</p>
             <button type="submit" class="duplicate-confirm-button" :disabled="memberCreateSaving">
               {{ memberCreateSaving ? "创建中" : "创建并归属" }}
@@ -2772,7 +2782,7 @@ onActivated(() => {
           <span>已打开到第 {{ pdfViewerPage.pageNumber }} 页</span>
         </div>
         <div class="original-viewer-actions">
-          <a :href="originalUrl(pdfViewerPage)" :download="pdfViewerPage.originalName" title="下载 PDF"><Download :size="18" /></a>
+          <button type="button" title="下载 PDF" @click="downloadPdfOriginal"><Download :size="18" /></button>
           <button type="button" title="关闭" @click="closePdfOriginalViewer"><X :size="20" /></button>
         </div>
       </header>

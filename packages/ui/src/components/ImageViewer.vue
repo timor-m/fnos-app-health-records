@@ -7,6 +7,7 @@ import {
 import { useScrollLock } from "../composables/useScrollLock";
 import OcrTextOverlay from "./OcrTextOverlay.vue";
 import type { OcrPageDetail } from "../types/api";
+import { downloadDirectUrl } from "../utils/download";
 
 export type ImageViewerPage = {
   key: string;
@@ -54,6 +55,12 @@ const viewerDisplaySrc = computed(() => {
   return viewerUsingPreview.value && page.previewUrl ? page.previewUrl : page.fullUrl;
 });
 const viewerDownloadSrc = computed(() => viewerPage.value?.downloadUrl || viewerPage.value?.fullUrl || "");
+
+async function downloadViewerPage() {
+  const page = viewerPage.value;
+  if (!page || !viewerDownloadSrc.value) return;
+  await downloadDirectUrl(viewerDownloadSrc.value, page.downloadName || page.label);
+}
 
 function resetViewerTransform() {
   viewerScale.value = 1;
@@ -406,7 +413,7 @@ onBeforeUnmount(() => {
           <RectangleHorizontal v-if="viewerRotation % 180 === 0" :size="18" />
           <RectangleVertical v-else :size="18" />
         </button>
-        <a :href="viewerDownloadSrc" :download="viewerPage?.downloadName || viewerPage?.label" title="下载"><Download :size="18" /></a>
+        <button type="button" title="下载" @click="downloadViewerPage"><Download :size="18" /></button>
       </div>
       <button class="viewer-close-button" type="button" title="关闭" @click="emit('close')"><X :size="20" /></button>
     </header>

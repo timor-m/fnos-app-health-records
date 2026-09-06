@@ -26,13 +26,8 @@ function extractChangelogSection(version) {
   return body;
 }
 
-function bulletLines(items) {
-  return items.map((item) => `- ${item}`).join("\n");
-}
-
 const version = packageJson.version;
 const changelogBody = extractChangelogSection(version);
-const highlights = Array.isArray(template.releaseNotes?.highlights) ? template.releaseNotes.highlights : [];
 const notes = `# ${template.appTitle} v${version}
 
 ## 本版本变更
@@ -45,27 +40,10 @@ ${changelogBody}
 - 应用标识：\`${template.appName}\`
 - 目标数据库版本：\`v${schemaVersion}\`
 
-## 重点能力
-
-${bulletLines(highlights)}
-
 ## 发布产物
 
 - \`dist/app.tgz\`：fnOS 应用载荷归档
 - \`dist/${template.appName}-${version}.fpk\`：可安装 fnOS 应用包
-
-## 数据库升级
-
-- 应用启动时会按需执行 SQLite schema 迁移。
-- 存在待执行 schema 迁移时，会在迁移前自动创建轻量数据库备份。
-- 跨版本升级基于 \`schema_migrations\` 逐条补齐，不依赖用户安装过中间版本。
-
-## 说明
-
-- Release notes 由 \`scripts/generate-release-notes.mjs\` 根据 \`CHANGELOG.md\` 当前版本段落生成。
-- 版本来源：\`package.json\`
-- 应用配置来源：\`template.config.json\`
-- 迁移注册表：\`packages/server/database/migrations.ts\`
 `;
 
 if (outputPath) {

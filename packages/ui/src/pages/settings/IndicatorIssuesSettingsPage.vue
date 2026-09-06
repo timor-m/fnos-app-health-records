@@ -18,6 +18,7 @@ import {
   Sparkles
 } from "@lucide/vue";
 import EmptyState from "../../components/EmptyState.vue";
+import FormSelect from "../../components/FormSelect.vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import { request } from "../../utils/api";
 import { useToast } from "../../composables/useToast";
@@ -59,13 +60,25 @@ type IssueEditor = {
   options: IndicatorCatalogOption[];
   selectedCanonicalKey: string;
   saveAlias: boolean;
-  aliasScope: "report_type" | "global";
+  aliasScope: string;
   reason: string;
   searching: boolean;
   submitting: boolean;
 };
 
 const editors = reactive<Record<string, IssueEditor>>({});
+
+const aliasScopeOptions = [
+  { value: "report_type", label: "仅同类报告（推荐）" },
+  { value: "global", label: "所有报告类型" }
+];
+
+function catalogSelectOptions(options: IndicatorCatalogOption[]) {
+  return options.map((option) => ({
+    value: option.canonicalKey,
+    label: `${option.displayName} · ${option.category}${option.defaultUnit ? ` · ${option.defaultUnit}` : ""}`
+  }));
+}
 
 const displayedIssues = computed(() => [...issues.value].sort((left, right) =>
   right.count - left.count || (right.latestReportIssuedAt || "").localeCompare(left.latestReportIssuedAt || "")
@@ -522,16 +535,12 @@ onMounted(() => {
                   <Search :size="15" />{{ editors[issue.fingerprint].searching ? "查询中" : "查询" }}
                 </button>
               </div>
-              <select v-model="editors[issue.fingerprint].selectedCanonicalKey">
-                <option value="">请选择标准指标</option>
-                <option
-                  v-for="option in editors[issue.fingerprint].options"
-                  :key="option.canonicalKey"
-                  :value="option.canonicalKey"
-                >
-                  {{ option.displayName }} · {{ option.category }}{{ option.defaultUnit ? ` · ${option.defaultUnit}` : "" }}
-                </option>
-              </select>
+              <FormSelect
+                v-model="editors[issue.fingerprint].selectedCanonicalKey"
+                :options="catalogSelectOptions(editors[issue.fingerprint].options)"
+                placeholder="请选择标准指标"
+                aria-label="请选择标准指标"
+              />
               <input
                 v-model="editors[issue.fingerprint].reason"
                 type="text"
@@ -543,10 +552,12 @@ onMounted(() => {
                   <input v-model="editors[issue.fingerprint].saveAlias" type="checkbox" />
                   将“{{ issue.rawName }}”保存为本地别名
                 </label>
-                <select v-if="editors[issue.fingerprint].saveAlias" v-model="editors[issue.fingerprint].aliasScope">
-                  <option value="report_type">仅同类报告（推荐）</option>
-                  <option value="global">所有报告类型</option>
-                </select>
+                <FormSelect
+                  v-if="editors[issue.fingerprint].saveAlias"
+                  v-model="editors[issue.fingerprint].aliasScope"
+                  :options="aliasScopeOptions"
+                  aria-label="别名范围"
+                />
               </div>
               <div class="indicator-governance-actions">
                 <button

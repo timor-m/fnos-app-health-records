@@ -357,7 +357,8 @@ onBeforeUnmount(() => {
       <span :class="{ placeholder: !modelValue }">{{ displayValue() }}</span>
     </button>
     <Teleport to="body">
-      <div v-if="open" ref="layer" class="datetime-picker-layer" @mousedown.self="cancel" @touchstart.self.prevent="cancel">
+      <!-- click 关闭遮罩避免透穿；touchstart.prevent 阻止触屏合成 click 落到底层元素 -->
+      <div v-if="open" ref="layer" class="datetime-picker-layer" @click.self="cancel" @touchstart.self.prevent="cancel">
         <div class="datetime-picker-panel" :style="panelStyle" role="dialog" aria-modal="true" :aria-label="label || '请选择时间'">
             <div class="datetime-picker-header">
               <button type="button" class="datetime-picker-cancel" @click="cancel">
@@ -442,5 +443,10 @@ onBeforeUnmount(() => {
   border: 0;
   box-shadow: var(--shadow-s);
   font-size: 13px;
+}
+
+/* PC 上触发器同步收紧到桌面表单密度，移动端保持 44px 触控目标 */
+@media (min-width: 761px) and (pointer: fine) {
+  .datetime-picker-trigger { min-height: 36px; font-size: 13px; }
 }
 </style>

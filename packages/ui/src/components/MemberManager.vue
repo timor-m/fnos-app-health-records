@@ -187,7 +187,7 @@ const permissionOptions = [
     </div>
   </section>
 
-  <div v-if="editorOpen" class="modal-backdrop" @mousedown.self="editorOpen = false">
+  <div v-if="editorOpen" class="modal-backdrop" @click.self="editorOpen = false">
     <section class="modal-panel" role="dialog" aria-modal="true" :aria-label="editorTitle">
       <span class="sheet-grabber" aria-hidden="true"></span>
       <header><div><UserRound :size="20" /><h3>{{ editorTitle }}</h3></div><button type="button" title="关闭" @click="editorOpen = false"><X :size="19" /></button></header>
@@ -208,7 +208,7 @@ const permissionOptions = [
     </section>
   </div>
 
-  <div v-if="accessOpen" class="modal-backdrop" @mousedown.self="accessOpen = false">
+  <div v-if="accessOpen" class="modal-backdrop" @click.self="accessOpen = false">
     <section class="modal-panel" role="dialog" aria-modal="true" aria-label="访问权限">
       <span class="sheet-grabber" aria-hidden="true"></span>
       <header><div><ShieldCheck :size="20" /><h3>{{ accessMember?.displayName }}的访问权限</h3></div><button type="button" title="关闭" @click="accessOpen = false"><X :size="19" /></button></header>

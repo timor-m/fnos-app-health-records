@@ -1,4 +1,4 @@
-export type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "minimax" | "ollama";
+export type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "minimax" | "ollama" | "custom";
 
 export type AiProviderOption = {
   label: string;
@@ -70,6 +70,14 @@ export const aiProviderCatalog: Record<AiProviderKey, AiProviderOption> = {
     defaultMaxOutputTokens: 8_192,
     apiKeyRequired: false,
     modelHint: "文本模型可填写 qwen2.5:7b；视觉模型必须使用明确支持图片输入的模型。Ollama 默认不需要 API Key"
+  },
+  custom: {
+    label: "自定义（OpenAI 兼容）",
+    defaultBaseUrl: "",
+    defaultTextModel: "",
+    defaultVisionModel: "",
+    defaultMaxOutputTokens: 8_192,
+    modelHint: "接入硅基流动、OpenRouter、OneAPI 等 OpenAI 兼容平台或自建网关；地址、模型名和 Key 以平台控制台为准。可用于把同一模型同时挂在多个平台（结合场景模型分工）"
   }
 };
 

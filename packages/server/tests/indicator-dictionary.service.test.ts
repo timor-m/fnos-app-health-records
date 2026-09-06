@@ -107,7 +107,7 @@ function remoteBundle(revision: number, includePendingAlias: boolean) {
     manifest: {
       formatVersion: 1,
       revision,
-      generatedAt: `2026-07-${String(20 + revision).padStart(2, "0")}T00:00:00.000Z`,
+      generatedAt: new Date(Date.UTC(2026, 6, 20 + revision)).toISOString(),
       files: {
         taxonomy: {
           path: "taxonomy.json",
@@ -348,8 +348,8 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
       "app://dictionary/remote",
     );
     assert.equal(fallbackCheck.sourceKind, "bundled");
-    assert.equal(fallbackCheck.latestRevision, 11);
-    assert.match(fallbackCheck.sourceFailures.at(-1) || "", /远程 revision 4.*内置 revision 11/);
+    assert.equal(fallbackCheck.latestRevision, 14);
+    assert.match(fallbackCheck.sourceFailures.at(-1) || "", /远程 revision 4.*内置 revision 14/);
     assert.deepEqual(requestedHosts.slice(0, 2), ["gitee.com", "gitee.com"]);
     assert.deepEqual(getIndicatorDictionaryStatus(admin).remoteBaseUrls, [
       "https://gitee.com/timor-m/health-records-dictionary/raw/main/",
@@ -359,7 +359,7 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
 
     failedHosts.clear();
     redirectGiteeRaw = true;
-    bundle = remoteBundleUsingCoreCategory(11);
+    bundle = remoteBundleUsingCoreCategory(14);
     requestedHosts.length = 0;
     const giteeCheck = await checkRemoteIndicatorDictionary(admin);
     assert.equal(giteeCheck.sourceUrl, "https://gitee.com/timor-m/health-records-dictionary/raw/main/");
@@ -373,7 +373,7 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
     const bundledCheck = await checkRemoteIndicatorDictionary(admin);
     assert.equal(bundledCheck.sourceUrl, "app://dictionary/remote");
     assert.equal(bundledCheck.sourceKind, "bundled");
-    assert.equal(bundledCheck.latestRevision, 11);
+    assert.equal(bundledCheck.latestRevision, 14);
     assert.deepEqual(requestedHosts.slice(0, 3), ["gitee.com", "gitee.com", "timor-m.github.io"]);
     assert.equal(bundledCheck.sourceFailures.length, 3);
 
@@ -382,7 +382,7 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
       useBundledFallback: true,
     });
     assert.equal(bundledUpdate.sourceKind, "bundled");
-    assert.equal(bundledUpdate.revision, 11);
+    assert.equal(bundledUpdate.revision, 14);
     assert.deepEqual(requestedHosts, []);
   } finally {
     globalThis.fetch = originalFetch;

@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 11,
+  "revision": 14,
   "indicators": [
     {
       "canonicalKey": "tumor_afp",
@@ -2635,6 +2635,1299 @@
         "检验"
       ],
       "explanation": "超氧化物歧化酶定量结果，检测方法差异较大，应以原报告为准。"
+    },
+    {
+      "canonicalKey": "blood_gas_paco2",
+      "displayName": "二氧化碳分压",
+      "categoryKey": "laboratory_other",
+      "order": 63,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "blood",
+      "defaultUnit": "mmHg",
+      "unitDimension": "pressure",
+      "aliases": [
+        "PaCO2",
+        "PCO2",
+        "二氧化碳分压",
+        "动脉血二氧化碳分压"
+      ],
+      "allowedUnits": [
+        "mmHg"
+      ],
+      "sectionHints": [
+        "血气分析",
+        "血气",
+        "生化"
+      ],
+      "explanation": "血气分析中的二氧化碳分压，反映通气状态，应结合原报告参考范围和吸氧条件观察。"
+    },
+    {
+      "canonicalKey": "blood_gas_pao2",
+      "displayName": "氧分压",
+      "categoryKey": "laboratory_other",
+      "order": 64,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "blood",
+      "defaultUnit": "mmHg",
+      "unitDimension": "pressure",
+      "aliases": [
+        "PaO2",
+        "PO2",
+        "氧分压",
+        "动脉血氧分压"
+      ],
+      "allowedUnits": [
+        "mmHg"
+      ],
+      "sectionHints": [
+        "血气分析",
+        "血气",
+        "生化"
+      ],
+      "explanation": "血气分析中的氧分压，反映氧合状态，应结合吸氧浓度和原报告参考范围观察。"
+    },
+    {
+      "canonicalKey": "blood_gas_hco3_actual",
+      "displayName": "实际碳酸氢根",
+      "categoryKey": "laboratory_other",
+      "order": 65,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "blood",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "HCO3-",
+        "AB",
+        "实际碳酸氢根",
+        "实际碳酸氢盐",
+        "碳酸氢根"
+      ],
+      "allowedUnits": [
+        "mmol/L"
+      ],
+      "sectionHints": [
+        "血气分析",
+        "血气",
+        "生化"
+      ],
+      "explanation": "血气分析中的实际碳酸氢根，反映代谢性酸碱因素。"
+    },
+    {
+      "canonicalKey": "blood_gas_hco3_standard",
+      "displayName": "标准碳酸氢根",
+      "categoryKey": "laboratory_other",
+      "order": 66,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "blood",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "SB",
+        "标准碳酸氢根",
+        "标准碳酸氢盐",
+        "标准碳酸盐"
+      ],
+      "allowedUnits": [
+        "mmol/L"
+      ],
+      "sectionHints": [
+        "血气分析",
+        "血气",
+        "生化"
+      ],
+      "explanation": "血气分析中的标准碳酸氢根，与实际碳酸氢根是两个不同项目，不合并趋势。"
+    },
+    {
+      "canonicalKey": "blood_gas_tco2",
+      "displayName": "二氧化碳总量",
+      "categoryKey": "laboratory_other",
+      "order": 67,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "blood",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "TCO2",
+        "二氧化碳总量",
+        "总二氧化碳"
+      ],
+      "allowedUnits": [
+        "mmol/L"
+      ],
+      "sectionHints": [
+        "血气分析",
+        "血气",
+        "生化"
+      ],
+      "explanation": "血气分析中的二氧化碳总量，与电解质中的二氧化碳结合力不是同一项目，不合并趋势。"
+    },
+    {
+      "canonicalKey": "blood_gas_so2",
+      "displayName": "氧饱和度",
+      "categoryKey": "laboratory_other",
+      "order": 68,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "SaO2",
+        "SO2",
+        "氧饱和度"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "血气分析",
+        "血气",
+        "生化"
+      ],
+      "explanation": "血气分析中的氧饱和度结果，应结合氧分压和吸氧条件观察。"
+    },
+    {
+      "canonicalKey": "hematology_g6pd",
+      "displayName": "葡萄糖-6-磷酸脱氢酶",
+      "categoryKey": "laboratory_other",
+      "order": 69,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "U/L",
+      "unitDimension": "enzyme_activity",
+      "aliases": [
+        "G6PD",
+        "葡萄糖6磷酸脱氢酶",
+        "葡萄糖-6-磷酸脱氢酶",
+        "葡萄糖-6-磷酸脱氢酶测定"
+      ],
+      "allowedUnits": [
+        "U/L"
+      ],
+      "sectionHints": [
+        "生化",
+        "检验"
+      ],
+      "explanation": "红细胞葡萄糖-6-磷酸脱氢酶活性，不同检测方法参考范围差异较大，以原报告为准。"
+    },
+    {
+      "canonicalKey": "coagulation_d_dimer",
+      "displayName": "D-二聚体",
+      "categoryKey": "coagulation",
+      "order": 6,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "plasma",
+      "defaultUnit": "mg/L FEU",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "D-二聚体",
+        "D二聚体",
+        "D-Dimer",
+        "D-二聚体测定"
+      ],
+      "allowedUnits": [
+        "mg/L FEU",
+        "mg/LFEU",
+        "μg/mL FEU",
+        "μg/mL"
+      ],
+      "sectionHints": [
+        "凝血",
+        "凝血功能",
+        "D-二聚体"
+      ],
+      "explanation": "血浆 D-二聚体定量结果，FEU 与 DDU 单位口径不可混算，本指标按 FEU 口径收录。"
+    },
+    {
+      "canonicalKey": "liver_prealbumin",
+      "displayName": "前白蛋白",
+      "categoryKey": "liver_function",
+      "order": 41,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mg/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "PA",
+        "PAB",
+        "前白蛋白",
+        "血清前白蛋白",
+        "前白蛋白测定"
+      ],
+      "allowedUnits": [
+        "mg/L"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ],
+      "explanation": "血清前白蛋白定量结果，可反映肝脏合成功能和营养状态。"
+    },
+    {
+      "canonicalKey": "liver_afu",
+      "displayName": "α-L-岩藻糖苷酶",
+      "categoryKey": "liver_function",
+      "order": 42,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/L",
+      "unitDimension": "enzyme_activity",
+      "aliases": [
+        "AFU",
+        "α-L岩藻糖苷酶",
+        "α-L-岩藻糖苷酶",
+        "α-L-岩藻糖苷酶测定"
+      ],
+      "allowedUnits": [
+        "U/L"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化",
+        "肿瘤标志物"
+      ],
+      "explanation": "血清 α-L-岩藻糖苷酶活性结果，以原报告参考范围为准。"
+    },
+    {
+      "canonicalKey": "liver_glutathione_reductase",
+      "displayName": "谷胱甘肽还原酶",
+      "categoryKey": "liver_function",
+      "order": 43,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/L",
+      "unitDimension": "enzyme_activity",
+      "aliases": [
+        "GR",
+        "GSR",
+        "谷胱甘肽还原酶",
+        "谷胱甘肽还原酶测定"
+      ],
+      "allowedUnits": [
+        "U/L"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ],
+      "explanation": "血清谷胱甘肽还原酶活性结果，以原报告参考范围为准。"
+    },
+    {
+      "canonicalKey": "immunology_ana",
+      "displayName": "抗核抗体",
+      "categoryKey": "infection_immunity",
+      "order": 77,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "ANA",
+        "抗核抗体",
+        "抗核抗体定性"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "自身抗体",
+        "免疫",
+        "风湿免疫"
+      ],
+      "explanation": "抗核抗体定性结果，阳性时需结合滴度和核型进一步判断。"
+    },
+    {
+      "canonicalKey": "infectious_tb_igra",
+      "displayName": "结核感染T细胞免疫检测",
+      "categoryKey": "infection_immunity",
+      "order": 78,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "blood",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "IGRA",
+        "TB-IGRA",
+        "结核分枝杆菌-干扰素释放试验",
+        "结核感染T细胞免疫检测",
+        "γ-干扰素释放试验",
+        "γ干扰素释放试验"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "结核",
+        "感染"
+      ],
+      "explanation": "结核分枝杆菌特异性细胞免疫反应定性结果，以原报告结论为准。"
+    },
+    {
+      "canonicalKey": "infectious_cryptococcus_antigen",
+      "displayName": "隐球菌抗原",
+      "categoryKey": "infection_immunity",
+      "order": 79,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "CrAg",
+        "隐球菌抗原",
+        "隐球菌抗原检测",
+        "隐球菌荚膜多糖抗原"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "真菌",
+        "隐球菌",
+        "感染"
+      ],
+      "explanation": "隐球菌抗原定性结果，以原报告结论为准。"
+    },
+    {
+      "canonicalKey": "stool_occult_blood",
+      "displayName": "便隐血试验",
+      "categoryKey": "stool_analysis",
+      "order": 3,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "FOBT",
+        "FOB",
+        "便隐血",
+        "便隐血试验",
+        "粪便隐血",
+        "粪便隐血试验",
+        "大便隐血",
+        "隐血试验"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "便常规",
+        "粪便常规",
+        "粪便"
+      ],
+      "explanation": "粪便隐血定性结果，与尿潜血是不同标本的项目，不合并展示。"
+    },
+    {
+      "canonicalKey": "semen_volume",
+      "displayName": "精液体积",
+      "categoryKey": "semen_analysis",
+      "order": 10,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mL",
+      "unitDimension": "volume",
+      "aliases": [
+        "精液体积",
+        "精液量",
+        "Volume"
+      ],
+      "allowedUnits": [
+        "mL",
+        "ml",
+        "mml"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "一次射精的精液总量。"
+    },
+    {
+      "canonicalKey": "semen_liquefaction_time",
+      "displayName": "液化时间",
+      "categoryKey": "semen_analysis",
+      "order": 11,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "分钟",
+      "unitDimension": "time",
+      "aliases": [
+        "液化时间",
+        "精液液化时间",
+        "Ltime"
+      ],
+      "allowedUnits": [
+        "分钟",
+        "min"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "精液从凝固状态变为液化状态所需的时间。"
+    },
+    {
+      "canonicalKey": "semen_concentration",
+      "displayName": "精子浓度",
+      "categoryKey": "semen_analysis",
+      "order": 12,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "10^6/mL",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "精子浓度",
+        "精子密度",
+        "T-CON"
+      ],
+      "allowedUnits": [
+        "10^6/mL",
+        "10^6/ml"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "单位体积精液中的精子数量。"
+    },
+    {
+      "canonicalKey": "semen_total_count",
+      "displayName": "精子总数",
+      "categoryKey": "semen_analysis",
+      "order": 13,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "10^6",
+      "unitDimension": "other",
+      "aliases": [
+        "精子总数",
+        "TOTAL"
+      ],
+      "allowedUnits": [
+        "10^6",
+        "10^6个"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "一次射精的精子总数量，与仪器计数过程参数不是同一项目。"
+    },
+    {
+      "canonicalKey": "semen_pr_percent",
+      "displayName": "前向运动精子百分率",
+      "categoryKey": "semen_analysis",
+      "order": 14,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "前向运动精子百分率",
+        "前向运动精子率",
+        "精子前向运动百分率",
+        "PR%"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "前向运动精子占全部精子的比例，是评估精子活力的核心指标。"
+    },
+    {
+      "canonicalKey": "semen_np_percent",
+      "displayName": "非前向运动精子百分率",
+      "categoryKey": "semen_analysis",
+      "order": 15,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "非前向运动精子百分率",
+        "NP%",
+        "NP"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "有活动但非前向运动的精子比例。"
+    },
+    {
+      "canonicalKey": "semen_im_percent",
+      "displayName": "不动精子百分率",
+      "categoryKey": "semen_analysis",
+      "order": 16,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "不动精子百分率",
+        "不活动精子百分率",
+        "IM%",
+        "IM"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "完全不活动的精子比例。"
+    },
+    {
+      "canonicalKey": "semen_motility_total_percent",
+      "displayName": "总活动精子百分率",
+      "categoryKey": "semen_analysis",
+      "order": 17,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "总活动精子百分率",
+        "总活动率",
+        "PR+NP%",
+        "PR+NP"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "前向运动与非前向运动精子比例之和。"
+    },
+    {
+      "canonicalKey": "semen_viability_percent",
+      "displayName": "精子存活率",
+      "categoryKey": "semen_analysis",
+      "order": 18,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "精子存活率",
+        "SUR"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "存活精子占全部精子的比例。"
+    },
+    {
+      "canonicalKey": "semen_normal_morphology_percent",
+      "displayName": "正常形态精子百分率",
+      "categoryKey": "semen_analysis",
+      "order": 19,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "正常形态精子百分率",
+        "正常形态率",
+        "Normal%"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "形态正常精子占全部精子的比例。"
+    },
+    {
+      "canonicalKey": "semen_normal_morphology_count",
+      "displayName": "正常形态精子数",
+      "categoryKey": "semen_analysis",
+      "order": 20,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "个",
+      "unitDimension": "other",
+      "aliases": [
+        "正常形态精子数",
+        "正常形态精子计数"
+      ],
+      "allowedUnits": [
+        "个"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "计数视野内形态正常的精子数量。"
+    },
+    {
+      "canonicalKey": "semen_abnormal_morphology_count",
+      "displayName": "畸形精子数",
+      "categoryKey": "semen_analysis",
+      "order": 21,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "个",
+      "unitDimension": "other",
+      "aliases": [
+        "畸形精子数",
+        "畸形精子计数",
+        "Defor"
+      ],
+      "allowedUnits": [
+        "个"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "计数视野内形态异常的精子数量。"
+    },
+    {
+      "canonicalKey": "semen_tzi",
+      "displayName": "畸形精子指数",
+      "categoryKey": "semen_analysis",
+      "order": 22,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "TZI",
+        "畸形精子指数"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "平均每个畸形精子的缺陷部位数，反映形态异常的严重程度。"
+    },
+    {
+      "canonicalKey": "semen_sdi",
+      "displayName": "精子畸形指数",
+      "categoryKey": "semen_analysis",
+      "order": 23,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "SDI",
+        "精子畸形指数"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "缺陷总数与精子总数的比值，与畸形精子指数口径不同，不合并趋势。"
+    },
+    {
+      "canonicalKey": "semen_mai",
+      "displayName": "多重异常指数",
+      "categoryKey": "semen_analysis",
+      "order": 24,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "MAI",
+        "多重异常指数"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "平均每个畸形精子携带的异常部位数。"
+    },
+    {
+      "canonicalKey": "semen_head_defect_count",
+      "displayName": "头部缺陷精子数",
+      "categoryKey": "semen_analysis",
+      "order": 25,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "个",
+      "unitDimension": "other",
+      "aliases": [
+        "头部缺陷数",
+        "头部缺陷精子数",
+        "H-Defect"
+      ],
+      "allowedUnits": [
+        "个"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "计数视野内头部缺陷的精子数量。"
+    },
+    {
+      "canonicalKey": "semen_midpiece_defect_count",
+      "displayName": "中段缺陷精子数",
+      "categoryKey": "semen_analysis",
+      "order": 26,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "个",
+      "unitDimension": "other",
+      "aliases": [
+        "中段缺陷数",
+        "中段缺陷精子数",
+        "M-Defect"
+      ],
+      "allowedUnits": [
+        "个"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "计数视野内中段缺陷的精子数量。"
+    },
+    {
+      "canonicalKey": "semen_principal_defect_count",
+      "displayName": "主段缺陷精子数",
+      "categoryKey": "semen_analysis",
+      "order": 27,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "个",
+      "unitDimension": "other",
+      "aliases": [
+        "主段缺陷数",
+        "主段缺陷精子数",
+        "P-Defect"
+      ],
+      "allowedUnits": [
+        "个"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "计数视野内主段缺陷的精子数量。"
+    },
+    {
+      "canonicalKey": "semen_erc_count",
+      "displayName": "过量残留胞浆精子数",
+      "categoryKey": "semen_analysis",
+      "order": 28,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "个",
+      "unitDimension": "other",
+      "aliases": [
+        "过量残留胞浆精子数",
+        "残余胞浆精子数",
+        "ERC"
+      ],
+      "allowedUnits": [
+        "个"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "计数视野内胞浆残留过量的精子数量。"
+    },
+    {
+      "canonicalKey": "semen_round_cell_concentration",
+      "displayName": "圆细胞浓度",
+      "categoryKey": "semen_analysis",
+      "order": 29,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "10^6/mL",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "圆细胞",
+        "圆细胞浓度",
+        "ROU-C"
+      ],
+      "allowedUnits": [
+        "10^6/mL",
+        "10^6/ml"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "精液中圆形细胞（生精细胞或白细胞等）的浓度。"
+    },
+    {
+      "canonicalKey": "semen_vap",
+      "displayName": "平均路径速率",
+      "categoryKey": "semen_analysis",
+      "order": 30,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "μm/s",
+      "unitDimension": "other",
+      "aliases": [
+        "VAP",
+        "平均路径速率"
+      ],
+      "allowedUnits": [
+        "μm/s",
+        "um/s"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "精子沿平均运动路径的移动速率。"
+    },
+    {
+      "canonicalKey": "semen_vcl",
+      "displayName": "曲线速度",
+      "categoryKey": "semen_analysis",
+      "order": 31,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "μm/s",
+      "unitDimension": "other",
+      "aliases": [
+        "VCL",
+        "曲线速度"
+      ],
+      "allowedUnits": [
+        "μm/s",
+        "um/s"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "精子沿实际运动轨迹的移动速度。"
+    },
+    {
+      "canonicalKey": "semen_vsl",
+      "displayName": "直线速度",
+      "categoryKey": "semen_analysis",
+      "order": 32,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "μm/s",
+      "unitDimension": "other",
+      "aliases": [
+        "VSL",
+        "直线速度"
+      ],
+      "allowedUnits": [
+        "μm/s",
+        "um/s"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "精子沿起点到终点直线的移动速度。"
+    },
+    {
+      "canonicalKey": "semen_lin",
+      "displayName": "直线性",
+      "categoryKey": "semen_analysis",
+      "order": 33,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "LIN",
+        "直线性"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "直线速度与曲线速度的比值，反映运动轨迹的直线程度。"
+    },
+    {
+      "canonicalKey": "semen_str",
+      "displayName": "前向性",
+      "categoryKey": "semen_analysis",
+      "order": 34,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "STR",
+        "前向性"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "直线速度与平均路径速率的比值，反映运动的前向程度。"
+    },
+    {
+      "canonicalKey": "semen_wob",
+      "displayName": "摆动性",
+      "categoryKey": "semen_analysis",
+      "order": 35,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "WOB",
+        "摆动性"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "平均路径速率与曲线速度的比值，反映轨迹的摆动程度。"
+    },
+    {
+      "canonicalKey": "semen_alh",
+      "displayName": "摆动幅度",
+      "categoryKey": "semen_analysis",
+      "order": 36,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "μm",
+      "unitDimension": "length",
+      "aliases": [
+        "ALH",
+        "摆动幅度"
+      ],
+      "allowedUnits": [
+        "μm",
+        "um"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "精子头部沿平均路径横向摆动的幅度。"
+    },
+    {
+      "canonicalKey": "semen_mad",
+      "displayName": "移动角度",
+      "categoryKey": "semen_analysis",
+      "order": 37,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "度",
+      "unitDimension": "other",
+      "aliases": [
+        "MAD",
+        "移动角度"
+      ],
+      "allowedUnits": [
+        "度",
+        "°"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "精子运动方向的平均变化角度。"
+    },
+    {
+      "canonicalKey": "semen_bcf",
+      "displayName": "精子鞭打频率",
+      "categoryKey": "semen_analysis",
+      "order": 38,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "Hz",
+      "unitDimension": "frequency",
+      "aliases": [
+        "BCF",
+        "精子鞭打频率",
+        "精子鞭丁频率",
+        "鞭打频率"
+      ],
+      "allowedUnits": [
+        "Hz",
+        "HZ",
+        "hz"
+      ],
+      "sectionHints": [
+        "精液分析",
+        "精液常规",
+        "精液"
+      ],
+      "explanation": "精子尾部鞭打的频率，部分报告将「鞭打」误写为「鞭丁」。"
+    },
+    {
+      "canonicalKey": "urine_hyaline_casts",
+      "displayName": "透明管型",
+      "categoryKey": "urinalysis",
+      "order": 79,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "urine",
+      "defaultUnit": "/LPF",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "透明管型",
+        "透明管型计数"
+      ],
+      "allowedUnits": [
+        "/LPF",
+        "Cast/LP",
+        "个/LPF"
+      ],
+      "sectionHints": [
+        "尿常规",
+        "尿沉渣",
+        "尿镜检"
+      ],
+      "explanation": "尿沉渣镜检中的透明管型计数，与总管型计数、病理管型分别比较，不合并趋势。"
+    },
+    {
+      "canonicalKey": "urine_pathological_casts",
+      "displayName": "病理管型",
+      "categoryKey": "urinalysis",
+      "order": 80,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "urine",
+      "defaultUnit": "/LPF",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "病理管型",
+        "病理管型计数"
+      ],
+      "allowedUnits": [
+        "/LPF",
+        "Cast/LP",
+        "个/LPF"
+      ],
+      "sectionHints": [
+        "尿常规",
+        "尿沉渣",
+        "尿镜检"
+      ],
+      "explanation": "尿沉渣镜检中的病理管型计数，尿沉渣分析仪的 /μL 口径与镜检口径不合并。"
+    },
+    {
+      "canonicalKey": "urine_epithelial_cell_count",
+      "displayName": "上皮细胞计数",
+      "categoryKey": "urinalysis",
+      "order": 81,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "urine",
+      "defaultUnit": "/LPF",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "上皮细胞计数",
+        "尿上皮细胞计数"
+      ],
+      "allowedUnits": [
+        "/LPF",
+        "Cast/LP",
+        "个/LPF"
+      ],
+      "sectionHints": [
+        "尿常规",
+        "尿沉渣",
+        "尿镜检"
+      ],
+      "explanation": "尿沉渣镜检中的上皮细胞计数，尿沉渣分析仪的 /μL 口径与镜检口径不合并。"
+    },
+    {
+      "canonicalKey": "urine_rbc_morphology",
+      "displayName": "尿红细胞形态",
+      "categoryKey": "urinalysis",
+      "order": 82,
+      "kind": "categorical",
+      "valueType": "text",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "红细胞形态",
+        "尿红细胞形态",
+        "红细胞形态分析"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "尿常规",
+        "尿沉渣",
+        "尿镜检"
+      ],
+      "explanation": "尿沉渣红细胞形态定性描述（如均一性、非均一性），仅限尿液标本，不进入折线趋势。"
+    },
+    {
+      "canonicalKey": "tumor_scc",
+      "displayName": "鳞状细胞癌相关抗原",
+      "categoryKey": "laboratory_other",
+      "order": 70,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "ng/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "SCC",
+        "SCCAg",
+        "鳞状细胞癌相关抗原",
+        "鳞癌相关抗原",
+        "鳞癌抗原"
+      ],
+      "allowedUnits": [
+        "ng/mL",
+        "μg/L"
+      ],
+      "sectionHints": [
+        "肿瘤标志物",
+        "多肿瘤标志物联合检测"
+      ],
+      "explanation": "血清鳞状细胞癌相关抗原定量结果，应结合本次报告参考范围观察。"
+    },
+    {
+      "canonicalKey": "cardiac_lvef",
+      "displayName": "左室射血分数",
+      "categoryKey": "functional_measurement",
+      "order": 51,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "EF",
+        "LVEF",
+        "射血分数",
+        "左室射血分数",
+        "左心室射血分数"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "心脏彩超",
+        "超声心动图",
+        "心脏超声",
+        "彩超"
+      ],
+      "explanation": "超声心动图测量的左心室射血分数，不同测量方法结果略有差异，以原报告为准。"
+    },
+    {
+      "canonicalKey": "vital_spo2",
+      "displayName": "血氧饱和度",
+      "categoryKey": "general_measurement",
+      "order": 51,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "血氧",
+        "SpO2",
+        "指脉氧",
+        "指氧",
+        "脉搏血氧饱和度",
+        "指脉氧饱和度",
+        "血氧饱和度"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "一般检查",
+        "生命体征",
+        "体检"
+      ],
+      "explanation": "指脉氧（脉搏血氧仪）测量的血氧饱和度，与血气分析中的氧饱和度是不同测量方法，不合并趋势。"
     }
   ],
   "extensions": [
@@ -2916,6 +4209,105 @@
       "sectionHints": [
         "肿瘤标志物",
         "多肿瘤标志物联合检测"
+      ]
+    },
+    {
+      "canonicalKey": "glucose_fasting",
+      "aliases": [
+        "血糖（空腹）"
+      ],
+      "sectionHints": [
+        "生化",
+        "血糖"
+      ]
+    },
+    {
+      "canonicalKey": "cbc_lymphocyte_percentage",
+      "aliases": [
+        "淋巴细胞百分数"
+      ],
+      "sectionHints": [
+        "血常规"
+      ]
+    },
+    {
+      "canonicalKey": "cbc_rdw_sd",
+      "aliases": [
+        "RDV-SD"
+      ],
+      "sectionHints": [
+        "血常规"
+      ]
+    },
+    {
+      "canonicalKey": "cbc_rdw_cv",
+      "aliases": [
+        "RD-CV",
+        "红细胞体积分布宽度变异数"
+      ],
+      "sectionHints": [
+        "血常规"
+      ]
+    },
+    {
+      "canonicalKey": "cbc_pdw",
+      "aliases": [
+        "PDvW"
+      ],
+      "sectionHints": [
+        "血常规"
+      ]
+    },
+    {
+      "canonicalKey": "liver_ag_ratio",
+      "aliases": [
+        "白/球比例"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "生化"
+      ]
+    },
+    {
+      "canonicalKey": "infectious_hiv_agab",
+      "aliases": [
+        "Anti-HIV",
+        "人类免疫缺陷病毒抗原抗体(定性Anti-HIV)"
+      ],
+      "sectionHints": [
+        "感染",
+        "免疫"
+      ]
+    },
+    {
+      "canonicalKey": "urine_casts",
+      "aliases": [
+        "管型计数"
+      ],
+      "sectionHints": [
+        "尿常规",
+        "尿沉渣",
+        "尿镜检"
+      ]
+    },
+    {
+      "canonicalKey": "vision_uncorrected_left",
+      "aliases": [
+        "裸视力左眼"
+      ],
+      "sectionHints": [
+        "眼科",
+        "视力"
+      ]
+    },
+    {
+      "canonicalKey": "vision_uncorrected_right",
+      "aliases": [
+        "裸视力右眼"
+      ],
+      "sectionHints": [
+        "眼科",
+        "视力"
       ]
     }
   ],

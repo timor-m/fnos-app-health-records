@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { Check, ChevronDown } from "@lucide/vue";
 import { useScrollLock } from "../composables/useScrollLock";
 
@@ -23,20 +23,25 @@ useScrollLock(computed(() => open.value && lockScroll.value));
 
 const current = computed(() => props.options.find((option) => option.value === props.modelValue) || null);
 
+// 桌面端面板跟随触发器定位；移动端走底部抽屉样式，不需要内联定位
+function updatePanelPosition() {
+  if (!open.value) return;
+  const mobile = window.matchMedia("(max-width: 760px)").matches;
+  lockScroll.value = mobile;
+  if (mobile) {
+    panelStyle.value = {};
+    return;
+  }
+  const rect = root.value?.getBoundingClientRect();
+  panelStyle.value = rect
+    ? { position: "fixed", left: `${rect.left}px`, top: `${rect.bottom + 6}px`, width: `${rect.width}px` }
+    : {};
+}
+
 function toggle() {
   if (props.disabled) return;
-  if (!open.value) {
-    const mobile = window.matchMedia("(max-width: 760px)").matches;
-    lockScroll.value = mobile;
-    if (mobile) {
-      panelStyle.value = {};
-    } else {
-      const rect = root.value?.getBoundingClientRect();
-      panelStyle.value = rect
-        ? { position: "fixed", left: `${rect.left}px`, top: `${rect.bottom + 6}px`, width: `${rect.width}px` }
-        : {};
-    }
-  }
+  // 打开前同步确定是否锁定滚动，避免等 nextTick 定位的那一拍出现滚动窗口
+  if (!open.value) lockScroll.value = window.matchMedia("(max-width: 760px)").matches;
   open.value = !open.value;
 }
 
@@ -61,11 +66,16 @@ watch(open, (value) => {
   document[action]("mousedown", onDocPointerDown);
   document[action]("touchstart", onDocPointerDown);
   window[action]("keydown", onKeydown);
+  window[action]("resize", updatePanelPosition);
+  window[action]("scroll", updatePanelPosition, true);
+  if (value) nextTick(updatePanelPosition);
 });
 onBeforeUnmount(() => {
   document.removeEventListener("mousedown", onDocPointerDown);
   document.removeEventListener("touchstart", onDocPointerDown);
   window.removeEventListener("keydown", onKeydown);
+  window.removeEventListener("resize", updatePanelPosition);
+  window.removeEventListener("scroll", updatePanelPosition, true);
 });
 </script>
 
@@ -80,7 +90,8 @@ onBeforeUnmount(() => {
       <ChevronDown :size="16" class="form-select-caret" />
     </button>
     <Teleport to="body">
-      <div v-if="open" ref="layer" class="form-select-layer" @mousedown.self="open = false" @touchstart.self="open = false">
+      <!-- 用 click 关闭遮罩：mousedown/touchstart 提前关闭会让后续 click 透穿到底层元素 -->
+      <div v-if="open" ref="layer" class="form-select-layer" @click.self="open = false">
         <div class="form-select-panel" :style="panelStyle" role="listbox" :aria-label="ariaLabel">
           <span class="sheet-grabber" aria-hidden="true"></span>
           <button

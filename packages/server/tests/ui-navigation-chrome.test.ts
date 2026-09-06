@@ -40,5 +40,5 @@ test("back-to-top is mounted on records, trends and log list pages", () => {
 test("back-to-top styles keep the button above the mobile bottom nav", () => {
   const styles = readSource("packages/ui/src/styles.css");
   assert.match(styles, /\.back-to-top \{/);
-  assert.match(styles, /\.back-to-top \{ right: 14px; bottom: calc\(66px \+ var\(--safe-bottom\) \+ 14px\); \}/);
+  assert.match(styles, /\.back-to-top \{ right: 14px; bottom: calc\(66px \+ var\(--safe-bottom\) \+ 28px\); \}/);
 });

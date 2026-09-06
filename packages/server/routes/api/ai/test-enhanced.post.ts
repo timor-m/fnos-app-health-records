@@ -2,7 +2,7 @@ import { createError, defineEventHandler, readBody } from "h3";
 import { ok } from "../../../utils/api-response";
 import { getRequestUser } from "../../../utils/request-user";
 import { isAdministrator } from "../../../domain/request-user";
-import { parseStoredSettings, resolveAiBaseUrl, resolveProvider } from "../../../services/ai-settings.service";
+import { findAiProfile, parseStoredSettings, resolveActiveProfile, resolveAiBaseUrl } from "../../../services/ai-settings.service";
 import { normalizeAiProvider, aiProviderCatalog } from "../../../services/ai-provider";
 import { executeAiChatCompletion } from "../../../services/ai-runtime.service";
 
@@ -33,9 +33,17 @@ export default defineEventHandler(async (event) => {
   if (!isAdministrator(getRequestUser(event))) throw createError({ statusCode: 403, statusMessage: "仅管理员可测试 AI 配置" });
 
   const body = (await readBody(event)) as Record<string, unknown> || {};
-  const provider = normalizeAiProvider(body.provider);
   const parsed = parseStoredSettings();
-  const current = resolveProvider(provider, parsed);
+  const profile = typeof body.profileId === "string" ? findAiProfile(parsed, body.profileId.trim()) : null;
+  const provider = normalizeAiProvider(body.provider || profile?.provider || resolveActiveProfile(parsed)?.provider);
+  const fallback = profile
+    || (body.provider ? parsed.profiles.find((item) => item.provider === provider) : resolveActiveProfile(parsed));
+  const current = fallback || {
+    baseUrl: aiProviderCatalog[provider].defaultBaseUrl,
+    textModel: aiProviderCatalog[provider].defaultTextModel,
+    visionModel: aiProviderCatalog[provider].defaultVisionModel,
+    apiKey: ""
+  };
 
   const apiKey = typeof body.apiKey === "string" && body.apiKey.trim()
     ? body.apiKey.trim()
