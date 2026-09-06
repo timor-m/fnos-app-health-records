@@ -3588,14 +3588,6 @@ export function persistAiExtraction(
     values.push(value);
   };
   const generatedTitle = buildReportTitle(fields);
-  if (fields.reportType === "checkup") {
-    fields.bodyParts = fields.bodyParts.filter(
-      (item) =>
-        !/^(?:综合体检|健康体检|体检|physicalexam|checkup)$/i.test(
-          `${item.name || item.raw}`.normalize("NFKC").replace(/[\s_-]+/g, ""),
-        ),
-    );
-  }
   if (!manualFieldKeys.has("title")) {
     updates.push(
       replacesGeneratedFields
