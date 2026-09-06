@@ -157,6 +157,9 @@ function createItemId() {
 
 type FnosAuthorizationFlow = "directory" | "files";
 
+/* 飞牛 App 目录授权流程存在 bug，暂时隐藏“授权其他目录”入口；修复后改回 true */
+const fnosDirectoryAuthEnabled = false;
+
 function clearFnosAuthorizationQuery() {
   const url = new URL(window.location.href);
   for (const key of ["status", "error", "method", "appName", "state", "path", "paths"]) {
@@ -688,7 +691,8 @@ onActivated(() => {
               <UploadCloud v-else :size="16" />
               直接选择文件
             </button>
-            <button type="button" :disabled="localAuthorizing || localImporting" @click="authorizeFnosDirectory">
+            <!-- 飞牛 App 目录授权流程存在 bug，暂时隐藏入口，修复后移除 v-if 恢复 -->
+            <button v-if="fnosDirectoryAuthEnabled" type="button" :disabled="localAuthorizing || localImporting" @click="authorizeFnosDirectory">
               <FolderOpen :size="16" />授权其他目录
             </button>
           </div>

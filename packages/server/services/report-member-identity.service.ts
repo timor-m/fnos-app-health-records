@@ -203,6 +203,26 @@ function ageMonthsBetween(birthDate: string, referenceDate: string) {
   return (refYear - birthYear) * 12 + (refMonth - birthMonth);
 }
 
+function normalizeIdentityName(value: string | null | undefined) {
+  return String(value || "")
+    .normalize("NFKC")
+    .replace(/\s+/g, "")
+    .toLocaleLowerCase("zh-CN");
+}
+
+/*
+ * 姓名一致是最强的身份信号：报告按身份证登记，成员档案里的出生日期/性别
+ * 可能是凭记忆填的，两者冲突时应信姓名，视为同一人不再提醒。
+ */
+function sameIdentityName(
+  left: string | null | undefined,
+  right: string | null | undefined,
+) {
+  const a = normalizeIdentityName(left);
+  const b = normalizeIdentityName(right);
+  return Boolean(a && b && a === b);
+}
+
 /*
  * 报告只印年龄时，按报告参考日期倒退月龄得到近似出生日期，
  * 用于“创建新成员并归属”表单的预填。仅月级精度（婴幼儿场景）可推，
@@ -234,7 +254,8 @@ export function assessReportMemberIdentity(
   const report = db
     .prepare(
       `
-    SELECT r.member_id AS memberId, m.sex AS memberSex, m.birth_date AS memberBirthDate,
+    SELECT r.member_id AS memberId, m.display_name AS memberDisplayName,
+      m.sex AS memberSex, m.birth_date AS memberBirthDate,
       substr(COALESCE(r.sampled_at, r.examined_at, r.report_issued_at, r.created_at), 1, 10) AS referenceDate
     FROM reports r
     JOIN health_members m ON m.id = r.member_id
@@ -244,6 +265,7 @@ export function assessReportMemberIdentity(
     .get(reportId) as
     | {
         memberId: string;
+        memberDisplayName: string;
         memberSex: string | null;
         memberBirthDate: string | null;
         referenceDate: string;
@@ -259,6 +281,9 @@ export function assessReportMemberIdentity(
   if (dismissed) return null;
   const patient = patientIdentityForReport(reportId);
   if (!patient.sex && !patient.birthDate && !patient.age) return null;
+  /* 患者姓名与当前成员档案名一致时视为同一人，出生日期/性别差异不再提醒 */
+  if (patient.name && sameIdentityName(report.memberDisplayName, patient.name))
+    return null;
   const mismatchedFields: Array<"sex" | "birthDate"> = [];
   if (
     report.memberSex &&

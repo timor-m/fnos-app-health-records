@@ -1540,7 +1540,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
   display: flex; justify-content: flex-end; gap: 8px;
 }
 .local-file-auth-actions button {
-  min-height: 34px; padding: 0 11px; border: 1px solid var(--line); border-radius: 8px;
+  min-height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--surface); color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px;
   font-size: 12px; font-weight: 700;
 }
@@ -2706,7 +2706,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
     display: grid; grid-template-columns: repeat(5, 1fr);
   }
   .mobile-nav a { min-width: 0; color: var(--muted); display: grid; justify-items: center; align-content: center; gap: 3px; font-size: 11px; font-weight: 600; }
-  .back-to-top { right: 14px; bottom: calc(66px + var(--safe-bottom) + 28px); }
+  .back-to-top { right: 14px; bottom: calc(66px + var(--safe-bottom) + 58px); }
   .mobile-nav a.router-link-active { color: var(--brand-strong); }
   .mobile-nav-icon { position: relative; width: 40px; height: 28px; display: grid; place-items: center; border-radius: 999px; transition: background .15s; }
   .mobile-nav-icon .nav-badge { right: -5px; top: -7px; border-color: rgba(255, 255, 255, .9); }
@@ -2964,8 +2964,9 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
 
   .modal-panel.local-file-modal { width: 100%; height: 92dvh; max-height: 92dvh; border-radius: 8px 8px 0 0; }
   .modal-panel.local-preview-modal { width: 100%; height: 92dvh; max-height: 92dvh; border-radius: 18px 18px 0 0; }
-  .local-file-auth-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .local-file-auth-actions button { min-width: 0; padding-inline: 7px; justify-content: center; white-space: nowrap; }
+  /* 目录授权入口暂时隐藏后只剩一个按钮，移动端同样靠右不撑满 */
+  .local-file-auth-actions { display: flex; justify-content: flex-end; }
+  .local-file-auth-actions button { min-width: 0; padding-inline: 9px; justify-content: center; white-space: nowrap; }
   .local-file-toolbar { align-items: flex-start; }
   .local-file-footer { align-items: stretch; flex-direction: column; gap: 8px; }
   .local-file-footer .primary-button { width: 100%; justify-content: center; }

@@ -205,6 +205,30 @@ test("suggests members whose display name matches the patient name", async () =>
   );
 });
 
+/*
+ * 报告按身份证登记、成员档案的出生日期/性别可能凭记忆填写：
+ * 患者姓名与当前成员档案名一致时视为同一人，不再提醒。
+ */
+test("stays silent when the patient name matches the current member", async () => {
+  await withDatabase(
+    ({ reportId }) => {
+      const db = getDatabase();
+      db.exec("UPDATE health_members SET display_name = '张三' WHERE id = 'member-self'");
+      assert.equal(assessReportMemberIdentity(manager, reportId), null);
+    },
+    { memberSex: "female", memberBirthDate: "1990-01-01" },
+  );
+  /* 姓名一致时性别冲突同样豁免（档案性别可能填错或 OCR 误读） */
+  await withDatabase(
+    ({ reportId }) => {
+      const db = getDatabase();
+      db.exec("UPDATE health_members SET display_name = '张三' WHERE id = 'member-self'");
+      assert.equal(assessReportMemberIdentity(manager, reportId), null);
+    },
+    { memberSex: "female", memberBirthDate: null },
+  );
+});
+
 test("flags sex mismatch without birth date candidates", async () => {
   await withDatabase(
     ({ reportId }) => {

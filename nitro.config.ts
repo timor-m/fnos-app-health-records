@@ -17,6 +17,8 @@ export default defineNitroConfig({
   output: {
     dir: ".server-dist"
   },
+  /* 压缩服务端产物，减小 fnOS 安装包体积 */
+  minify: true,
   publicAssets: [
     {
       dir: ".ui-dist",
