@@ -53,6 +53,24 @@ test("removes report status, result suffixes and conclusion prefixes without los
   assert.ok(indicatorNameCandidates("您本次体检一般检查示体重指数").includes("体重指数"));
 });
 
+test("truncates result values, reference ranges and dates glued into indicator names", () => {
+  assert.ok(
+    indicatorNameCandidates("血清泌乳素测定值偏高(24.11ng/ml)(参考值男:2.7-13").includes("血清泌乳素")
+  );
+  assert.ok(
+    indicatorNameCandidates("型串联质谱检测:25-羟基维生素D17.23ng/mL:2026-06-15总IgE,肺炎支原体三项,肺炎支原体")
+      .includes("25羟基维生素d")
+  );
+  assert.ok(
+    indicatorNameCandidates("抗体,20项过敏原测定:免疫球蛋白E(Ig)291.0ng/ml:2026-06-16体液细胞形态学检测:颜色")
+      .includes("免疫球蛋白e")
+  );
+  // 括号内的测量条件和侧别命名是指标本体，不受值边界截断影响。
+  assert.ok(indicatorNameCandidates("全血粘度(5/s)").includes("全血粘度(5/s)"));
+  assert.ok(indicatorNameCandidates("全血粘度(5/s)").every((candidate) => candidate !== "全血粘度"));
+  assert.ok(indicatorNameCandidates("RV5+SV1:1.75mV").includes("rv5+sv1"));
+});
+
 test("normalizes English indicator separators consistently", () => {
   assert.deepEqual(
     indicatorNameCandidates("anti_thyroid_peroxidase antibody"),

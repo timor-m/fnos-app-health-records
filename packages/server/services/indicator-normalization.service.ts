@@ -357,9 +357,37 @@ export function indicatorNameCandidates(value: string | null | undefined) {
     add(suffixCode[2]);
   }
   if (indicatorCodePattern.test(raw)) add(raw);
+  /**
+   * 「血清泌乳素测定值偏高(24.11ng/ml)(参考值男:2.7-13」「25-羟基维生素D17.23ng/mL:2026-06-15…」
+   * 这类名称把结果值、参考范围（含截断未闭合括号）和报告日期粘进了项目名。
+   * 值/参考/日期不是名称语义，截断后只追加候选不替换原名。
+   */
+  const boundarySources = new Set<string>();
+  for (const source of [raw, withoutLeadingOrdinal, withoutNormalMarker]) {
+    const truncated = source
+      .replace(/\s*\d{4}\s*[-/年.]\s*\d{1,2}\s*[-/月.]\s*\d{1,2}.*$/u, "")
+      .replace(/[（(][^（）()]*(?:参考值|参考范围|参考区间)[^（）()]*[）)]?/gu, " ")
+      // 数字开头括号多为结果值，但 (5/s) 这类剪切率测量条件是指标本体，受保护不剥。
+      .replace(/[（(]\s*[-+]?\d[\d.]*[^（）()]*[）)]?/gu, (match) => {
+        const inner = match.replace(/^[（(]/, "").replace(/[）)]$/, "").trim();
+        return protectedIndicatorQualifiers.test(inner) ? match : " ";
+      })
+      .replace(/[（(][^（）()]*$/u, " ")
+      .trim();
+    if (truncated !== source && truncated.length >= 2) boundarySources.add(truncated);
+    // 名称与结果值无分隔直接粘连：「25-羟基维生素D17.23ng/mL」，取数值单位前的名称部分。
+    const gluedValue = truncated.match(/^(.{2,}?[A-Za-z\u3400-\u9fff）)])[-+]?\d+\.\d+\s*(?:nmol|pmol|mmol|umol|µmol|μmol|mol|mIU|kIU|kU|mU|IU|ng|pg|μg|ug|µg|mg|mEq|mL|dL|g|U|L|%)(?![A-Za-z])/iu);
+    if (gluedValue?.[1] && gluedValue[1].trim().length >= 2) boundarySources.add(gluedValue[1].trim());
+  }
+  for (const source of [...boundarySources]) {
+    // 「型串联质谱检测:25-羟基维生素D」「20项过敏原测定:免疫球蛋白E」的检测方法前缀不是名称语义。
+    const methodPrefixStripped = source.replace(/^[A-Za-z0-9\u3400-\u9fff,，、]{0,15}?(?:串联质谱|检测|测定|检验|检查|试验|法)\s*[:：]\s*/u, "").trim();
+    if (methodPrefixStripped !== source && methodPrefixStripped.length >= 2) boundarySources.add(methodPrefixStripped);
+  }
+  for (const source of boundarySources) add(source);
   // 结构化结果偶尔被拼进项目名，例如“RV5+SV1:1.75mV”。仅在冒号右侧明显是
   // 数值/单位或异常状态时取左侧，避免破坏真正带冒号的医学名称。
-  const cleanedSources = new Set([raw, withoutLeadingOrdinal, withoutNormalMarker]);
+  const cleanedSources = new Set([raw, withoutLeadingOrdinal, withoutNormalMarker, ...boundarySources]);
   for (const source of cleanedSources) {
     const resultSuffix = source.match(/^(.+?)\s*[：:]\s*[-+]?\d+(?:\.\d+)?\s*[A-Za-zμµ%°/²³^0-9·.*]*\s*$/);
     if (resultSuffix?.[1]) add(resultSuffix[1]);

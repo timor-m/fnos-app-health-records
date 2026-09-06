@@ -681,6 +681,14 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .trend-card {
   padding: 14px; border-radius: var(--radius-l); background: var(--surface); box-shadow: var(--shadow-s);
   position: relative; display: grid; gap: 12px;
+  /*
+   * 指标量达到几百时，浏览器原生跳过屏外卡片的布局和绘制，
+   * DOM 保留（锚点跳转、页面内查找、分组展开不受影响）；
+   * contain-intrinsic-size 给屏外卡片一个估算高度，避免滚动条抖动。
+   * 不支持的浏览器自动降级为普通渲染。
+   */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 300px;
 }
 .trend-card.attention.abnormal { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--danger) 60%, transparent), var(--shadow-s); }
 .trend-card.attention.near_boundary { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--amber) 70%, transparent), var(--shadow-s); }

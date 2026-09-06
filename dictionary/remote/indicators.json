@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 14,
+  "revision": 15,
   "indicators": [
     {
       "canonicalKey": "tumor_afp",
@@ -3928,6 +3928,69 @@
         "体检"
       ],
       "explanation": "指脉氧（脉搏血氧仪）测量的血氧饱和度，与血气分析中的氧饱和度是不同测量方法，不合并趋势。"
+    },
+    {
+      "canonicalKey": "laboratory_vitamin_d_25oh",
+      "displayName": "25-羟基维生素D",
+      "categoryKey": "laboratory_other",
+      "order": 71,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "ng/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "25-羟基维生素D",
+        "25-羟维生素D",
+        "25-羟基维生素D测定",
+        "血清25-羟基维生素D",
+        "25(OH)D",
+        "维生素D"
+      ],
+      "allowedUnits": [
+        "ng/mL",
+        "μg/L"
+      ],
+      "sectionHints": [
+        "维生素D",
+        "骨代谢",
+        "内分泌",
+        "串联质谱"
+      ],
+      "explanation": "血清 25-羟基维生素D 测量值，反映体内维生素D 营养状况，应以原报告参考范围为准。"
+    },
+    {
+      "canonicalKey": "immunology_total_ige",
+      "displayName": "总IgE",
+      "categoryKey": "infection_immunity",
+      "order": 80,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "IU/mL",
+      "unitDimension": "other",
+      "aliases": [
+        "总IgE",
+        "总IgE测定",
+        "免疫球蛋白E",
+        "总免疫球蛋白E",
+        "血清总IgE",
+        "IgE",
+        "TIgE",
+        "Total IgE"
+      ],
+      "allowedUnits": [
+        "IU/mL",
+        "kIU/L",
+        "kU/L"
+      ],
+      "sectionHints": [
+        "过敏",
+        "过敏原",
+        "免疫",
+        "变态反应"
+      ],
+      "explanation": "血清总 IgE 测量值，常用于过敏性疾病筛查，应以原报告参考范围为准。"
     }
   ],
   "extensions": [
