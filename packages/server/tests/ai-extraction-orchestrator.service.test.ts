@@ -225,7 +225,7 @@ test("keeps document title and type anchored to the first scalar unit", async ()
   ]);
 });
 
-test("fills business identifiers locally and does not persist a generic checkup body part", async () => {
+test("fills business identifiers locally and persists a single checkup body part", async () => {
   await withReport(1, async ({ reportId, jobId }) => {
     const executor: AiExecutor = async () => {
       const normalized = normalizeAiExtraction({
@@ -241,13 +241,13 @@ test("fills business identifiers locally and does not persist a generic checkup 
     };
     const execution = await executeAiExtractionPlan(jobId, reportId, executor);
     assert.equal(execution.result.fields.identifiers.physicalExamNo, "EXAM-2026-001");
-    assert.deepEqual(execution.result.fields.bodyParts, []);
+    assert.deepEqual(execution.result.fields.bodyParts, [{ raw: "综合体检", name: "综合体检", parent: null, laterality: "unspecified" }]);
     persistAiExtraction(reportId, jobId, execution.result, execution.inputCharacters);
     const stored = getDatabase().prepare(`
       SELECT body_parts_json AS bodyPartsJson, identifiers_json AS identifiersJson
       FROM reports WHERE id = ?
     `).get(reportId) as { bodyPartsJson: string; identifiersJson: string };
-    assert.deepEqual(JSON.parse(stored.bodyPartsJson), []);
+    assert.deepEqual(JSON.parse(stored.bodyPartsJson), [{ raw: "综合体检", name: "综合体检", parent: null, laterality: "unspecified" }]);
     assert.equal(JSON.parse(stored.identifiersJson).physicalExamNo, "EXAM-2026-001");
   }, () => [
     "个人健康体检报告",
