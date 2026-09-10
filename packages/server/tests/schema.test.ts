@@ -65,7 +65,7 @@ test("initializes the health records schema with WAL", () => {
       assert.equal(duplicateDecisionColumns.some((column) => column.name === columnName), true, `missing duplicate decision column ${columnName}`);
       assert.equal(duplicateHistoryColumns.some((column) => column.name === columnName), true, `missing duplicate history column ${columnName}`);
     }
-    assert.equal(schemaVersion, 16);
+    assert.equal(schemaVersion, 18);
     const organizationIndex = db.prepare(`
       SELECT name FROM sqlite_master
       WHERE type = 'index' AND name = 'reports_organization_idx'
@@ -143,7 +143,7 @@ test("migrates an existing v1 database to PDF source page columns", () => {
     ]) {
       assert.equal(normalizationColumns.some((column) => column.name === columnName), true, `missing column ${columnName}`);
     }
-    assert.equal(schemaVersion, 16);
+    assert.equal(schemaVersion, 18);
     const upgrades = getDatabase().prepare("SELECT COUNT(*) AS count FROM app_upgrade_history WHERE status = 'completed'").get() as
       { count: number };
     assert.equal(upgrades.count, 1);
@@ -455,7 +455,7 @@ test("upgrades an early v16 database through AI candidate tracking and governanc
     assert.equal(migration.name, "finalize_indicator_dictionary_morphology_ai_units_and_data_governance");
     assert.match(migration.checksum, /ai-units-data-governance/);
     const migrationCount = db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number };
-    assert.equal(migrationCount.count, 16);
+    assert.equal(migrationCount.count, schemaVersion);
     const normalizationColumns = db.prepare("PRAGMA table_info(observation_normalizations)").all() as Array<{ name: string }>;
     for (const columnName of [
       "source_origin", "source_name", "alias_source", "review_status", "reviewed_by", "reviewed_at"
@@ -528,7 +528,7 @@ test("rejects unreleased v17-v19 metadata until explicitly repaired into the fin
   try {
     // 未发版 schema 不再让进程崩溃：应用以维护模式启动，等待维护页显式修复
     getDatabase();
-    assert.deepEqual(getUnreleasedSchemaMaintenance(), { databaseVersion: 19, supportedVersion: 16 });
+    assert.deepEqual(getUnreleasedSchemaMaintenance(), { databaseVersion: 19, supportedVersion: schemaVersion });
     closeDatabaseForTests();
 
     const repair = new DatabaseSync(databasePath);
@@ -537,9 +537,9 @@ test("rejects unreleased v17-v19 metadata until explicitly repaired into the fin
 
     const db = getDatabase();
     assert.equal(getUnreleasedSchemaMaintenance(), null);
-    assert.equal(getDatabaseStatus().appliedSchemaVersion, 16);
+    assert.equal(getDatabaseStatus().appliedSchemaVersion, schemaVersion);
     const migrationCount = db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number };
-    assert.equal(migrationCount.count, 16);
+    assert.equal(migrationCount.count, schemaVersion);
     const columns = db.prepare("PRAGMA table_info(observation_normalizations)").all() as Array<{ name: string }>;
     for (const columnName of [
       "source_origin", "source_name", "alias_source", "review_status", "reviewed_by", "reviewed_at"
@@ -610,21 +610,21 @@ test("repairs unreleased schema from the maintenance page flow with backup and d
   process.env.STORAGE_DIR = storageDir;
   try {
     getDatabase();
-    assert.deepEqual(getUnreleasedSchemaMaintenance(), { databaseVersion: 19, supportedVersion: 16 });
+    assert.deepEqual(getUnreleasedSchemaMaintenance(), { databaseVersion: 19, supportedVersion: schemaVersion });
 
     const result = repairUnreleasedSchemaVersions();
     assert.equal(result.fromVersion, 19);
-    assert.equal(result.toVersion, 16);
+    assert.equal(result.toVersion, schemaVersion);
     assert.ok(result.backupPath && existsSync(result.backupPath), "修复前必须生成数据库备份");
 
     assert.equal(getUnreleasedSchemaMaintenance(), null);
-    assert.equal(getDatabaseStatus().appliedSchemaVersion, 16);
+    assert.equal(getDatabaseStatus().appliedSchemaVersion, schemaVersion);
     const kept = getDatabase()
       .prepare("SELECT display_name AS name FROM users WHERE id = 'user-keep'")
       .get() as { name: string } | undefined;
     assert.equal(kept?.name, "保留用户");
     const backups = readdirSync(join(storageDir, "backups", "db"));
-    assert.equal(backups.length, 1);
+    assert.equal(backups.length, 2);
 
     // 重复调用必须报错，不允许修复正常数据库
     assert.throws(() => repairUnreleasedSchemaVersions(), /不需要未发版 schema 修复/);
@@ -655,9 +655,9 @@ test("repairs an already-recorded v16 duplicate governance schema without creati
   process.env.STORAGE_DIR = storageDir;
   try {
     const db = getDatabase();
-    assert.equal(getDatabaseStatus().appliedSchemaVersion, 16);
+    assert.equal(getDatabaseStatus().appliedSchemaVersion, schemaVersion);
     const migrationCount = db.prepare("SELECT COUNT(*) AS count FROM schema_migrations").get() as { count: number };
-    assert.equal(migrationCount.count, 16);
+    assert.equal(migrationCount.count, schemaVersion);
     for (const tableName of ["report_duplicate_decisions", "report_duplicate_history"]) {
       const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
       assert.equal(columns.some((column) => column.name === "rule_version"), true);

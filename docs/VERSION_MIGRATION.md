@@ -227,9 +227,11 @@ npm run pack:app
 
 ## 当前项目状态
 
+本轮已撤回机构内趋势相关 UI、接口与自动执行逻辑。v17/v18 已在内部测试环境落库，迁移及表结构保留用于兼容，不回改、不降级，不主动清理已有项目或规则数据。
+
 当前健康档案应用已经建立：
 
-- 当前目标数据库版本为 `v17`；v13 为指标归一化结果增加标准分类和通俗说明字段，v14 为全局指标目录增加 AI 管理标记，v15 增加核心/远程指标字典运行时，v16 最终补齐字典物化列并新增 `morphology_findings`、`ai_extraction_units`、`ai_extraction_attempts`、诊断/用药/诊疗/接种/费用领域表和 `report_structured_sections`，v17 新增 `ai_extraction_candidates` 保存解析候选的本地提取、AI 提取、冗余、忽略和待核对状态。完整 v16 会按标准迁移升级到 v17，升级过程不会自动调用外部 AI。
+- 当前目标数据库版本为 `v18`；v16 已包含 `ai_extraction_candidates` 等报告提取与治理表。0.2.7（Unreleased）的 v17 保存成员范围内的机构项目及人工关联，v18 新增 `institution_trend_auto_rules` 和 `institution_trend_auto_decisions`，保存主动确认的自动规则及手动解除决定。v17 迁移不回改；v16/v17 升级前自动备份，默认不启用规则、不修改原始指标、不调用外部 AI。旧开发期同编号迁移通过维护流程修复后再执行本轮迁移。
 - 形态变化追踪复用 v16 `morphology_findings.tracking_group_id` 和 `match_confidence`，本次闭环不新增表、字段或数据库版本。应用启动仅在本地规则版本变化时幂等重建一次追踪关系，不调用外部 AI；管理员维护操作同样只更新这两个关联字段。
 - `schema_migrations`：数据库迁移记录。
 - `app_upgrade_history`：应用版本升级记录。

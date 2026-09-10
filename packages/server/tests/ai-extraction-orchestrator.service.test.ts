@@ -848,8 +848,8 @@ test("rejects unverified AI observations and downgrades fields that cannot close
     }>;
     const byName = Object.fromEntries(rows.map((row) => [row.itemName, row]));
     assert.equal(byName["空腹血糖"].quality, "high");
-    assert.equal(byName["总胆固醇"].quality, "low");
-    assert.match(byName["总胆固醇"].excludedReason || "", /参考范围下限/);
+    assert.equal(byName["总胆固醇"].quality, "high");
+    assert.equal(byName["总胆固醇"].excludedReason, null);
     assert.equal(byName["白细胞计数"], undefined);
     assert.equal(byName["丙氨酸氨基转移酶"].numericValue, 20);
     assert.equal(byName["丙氨酸氨基转移酶"].quality, "high");

@@ -12,6 +12,7 @@ import {
   listIndicatorNormalizationIssues,
   normalizeAllObservationsFromDictionary,
   normalizeReportObservations,
+  previewIndicatorNormalization,
   resolveIndicatorNormalizationIssue,
   searchIndicatorCatalog,
   setIndicatorAliasEnabled,
@@ -82,6 +83,8 @@ test("persists indicator confirmations, exclusions and report-type aliases acros
       affectedObservations: 1,
       normalized: 1,
       excluded: 0,
+      pending: 0,
+      remainingReasons: [],
       aliasSaved: true,
       canonicalKey: "cbc_wbc"
     });
@@ -146,6 +149,23 @@ test("persists indicator confirmations, exclusions and report-type aliases acros
     });
     assert.equal(excluded.excluded, 1);
 
+    const beforePreview = db.prepare("SELECT * FROM observation_normalizations ORDER BY observation_id").all();
+    const decisionsBefore = db.prepare("SELECT * FROM indicator_governance_decisions ORDER BY fingerprint").all();
+    const preview = previewIndicatorNormalization(admin);
+    assert.equal(preview.scanned, 3);
+    assert.equal(preview.eligible, 2);
+    assert.equal(preview.excluded, 1);
+    assert.equal(preview.removed, 0);
+    assert.deepEqual(db.prepare("SELECT * FROM observation_normalizations ORDER BY observation_id").all(), beforePreview);
+    assert.deepEqual(db.prepare("SELECT * FROM indicator_governance_decisions ORDER BY fingerprint").all(), decisionsBefore);
+    assert.throws(() => previewIndicatorNormalization({ ...admin, isGatewayAdmin: false, provider: "fnos_gateway" }), /仅管理员/);
+    const executed = await normalizeAllObservationsFromDictionary(admin, { full: true });
+    assert.equal(executed.normalized, preview.eligible);
+    db.prepare("UPDATE observation_normalizations SET quality = 'low' WHERE observation_id = 'governance-confirmed'").run();
+    const stalePreview = previewIndicatorNormalization(admin);
+    assert.equal(stalePreview.recovered, 1);
+    assert.equal(stalePreview.removed, 0);
+    assert.equal((db.prepare("SELECT quality FROM observation_normalizations WHERE observation_id = 'governance-confirmed'").get() as { quality: string }).quality, 'low');
     await normalizeAllObservationsFromDictionary(admin, { full: true });
     const afterRerun = db.prepare(`
       SELECT observation_id AS observationId, canonical_key AS canonicalKey,
@@ -436,6 +456,9 @@ test("keeps incompatible units raw across manual confirmation, saved aliases, re
     });
     assert.equal(confirmed.normalized, 0);
     assert.equal(confirmed.excluded, 0);
+    assert.equal(confirmed.pending, confirmed.affectedObservations - confirmed.normalized);
+    assert.ok(confirmed.pending > 0);
+    assert.ok(confirmed.remainingReasons.some(item => /单位/.test(item.reason) && item.count > 0));
     assert.equal(confirmed.aliasSaved, true);
 
     insertReport("unit-governance-report-2", "2026-06-01");

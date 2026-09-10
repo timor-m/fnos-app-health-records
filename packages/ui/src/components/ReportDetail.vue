@@ -10,6 +10,7 @@ import DateTimePicker from "./DateTimePicker.vue";
 import OcrTextOverlay from "./OcrTextOverlay.vue";
 import ReportStructuredSectionEditor from "./ReportStructuredSectionEditor.vue";
 import FormSelect from "./FormSelect.vue";
+import IndicatorHint from "./IndicatorHint.vue";
 import ImageViewer, { type ImageViewerPage } from "./ImageViewer.vue";
 import MorphologyFindingEditor from "./MorphologyFindingEditor.vue";
 import { request, apiUrl } from "../utils/api";
@@ -41,6 +42,7 @@ type DisplayAiUnit = AiExtractionUnitProgress & { displayLabel: string };
 
 const props = defineProps<{
   reportId: string;
+  reviewObservationId?: string;
   summary?: ReportSummary | null;
   variant: "panel" | "floating";
 }>();
@@ -725,6 +727,7 @@ function openObservationEditor(item?: ReportDetail["observations"][number]) {
 }
 
 function closeObservationEditor() {
+  if (props.reviewObservationId) emit("close");
   observationEditorOpen.value = false;
   editingObservationId.value = null;
 }
@@ -752,7 +755,15 @@ async function saveObservation() {
     });
     observationEditorOpen.value = false;
     emit("updated");
-    toast.show(editingObservationId.value ? "指标校对已保存" : "指标已添加");
+    const saved = editingObservationId.value
+      ? detail.value.observations.find(item => item.id === editingObservationId.value)
+      : undefined;
+    toast.show(saved
+      ? saved.displayTier === "primary"
+        ? `指标校对已保存，已纳入${saved.canonicalKey ? "标准" : "机构内"}趋势`
+        : `指标校对已保存：${saved.displayReason || "仍需核对趋势准入条件"}`
+      : "指标已添加");
+    if (props.reviewObservationId) emit("close");
   } catch (cause) {
     observationEditorError.value = cause instanceof Error ? cause.message : "指标保存失败";
   } finally {
@@ -1172,7 +1183,7 @@ async function loadOcrDetail(pageId: string) {
 }
 
 watch([observationSourcePage, allObservationsOpen], ([page, open]) => {
-  if (open && page) void loadOcrDetail(page.id);
+  if ((open || props.reviewObservationId) && page) void loadOcrDetail(page.id);
 });
 
 function reviewIssueLabel(issueType: ProcessingDiagnosticReviewItem["issueType"]) {
@@ -1661,6 +1672,11 @@ async function loadDetail(reportId: string, preserveCurrent = false) {
     const next = await request<ReportDetail>(`reports/${encodeURIComponent(reportId)}`);
     if (seq === detailSeq && props.reportId === reportId && next.id === reportId) {
       detail.value = next;
+      if (props.reviewObservationId && !preserveCurrent) {
+        const target = next.observations.find(item => item.id === props.reviewObservationId);
+        if (target) openObservationEditor(target);
+        else detailError.value = "该指标已不存在，请关闭后刷新列表";
+      }
       try {
         const status = await request<{ status: "ready" | "generating" | "available" }>(`reports/${encodeURIComponent(reportId)}/original/status`);
         if (seq === detailSeq && props.reportId === reportId) {
@@ -1790,6 +1806,7 @@ onActivated(() => {
 </script>
 
 <template>
+  <template v-if="!reviewObservationId">
   <header v-if="variant === 'floating'" class="sheet-header report-detail-floating-header">
     <h3>{{ source?.title || "报告详情" }}</h3>
     <button class="plain-icon-button" type="button" title="关闭" @click="emit('close')"><X :size="18" /></button>
@@ -2138,9 +2155,8 @@ onActivated(() => {
               <strong>{{ item.itemName }}</strong>
               <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
               <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
-                <small v-if="observationInterpretationLine(item)" class="observation-interpretation-line">{{ observationInterpretationLine(item) }}</small>
-              <small v-if="observationNormalizationLine(item)" class="observation-normalization-line">{{ observationNormalizationLine(item) }}</small>
-              <small v-if="item.canonicalExplanation" class="observation-explanation-line">说明：{{ item.canonicalExplanation }}</small>
+              <IndicatorHint v-if="item.displayReason || observationInterpretationLine(item) || observationNormalizationLine(item) || item.canonicalExplanation"
+                :text="[item.displayReason, observationInterpretationLine(item), observationNormalizationLine(item), item.canonicalExplanation].filter(Boolean).join('\n')" label="查看指标说明" />
             </article>
           </div>
           <div class="observation-panel-footer">
@@ -2354,9 +2370,15 @@ onActivated(() => {
     </article>
   </div>
 
+  </template>
   <Teleport to="body">
-    <div v-if="allObservationsOpen && detail" class="modal-backdrop observation-all-backdrop" @click.self="closeAllObservations">
-      <section class="modal-panel observation-all-modal" role="dialog" aria-modal="true" aria-label="全部结构化指标">
+    <div v-if="(allObservationsOpen && detail) || reviewObservationId" class="modal-backdrop observation-all-backdrop" @click.self="reviewObservationId ? emit('close') : closeAllObservations()">
+      <section class="modal-panel observation-all-modal" :class="{ 'observation-direct-review': reviewObservationId }" role="dialog" aria-modal="true" :aria-label="reviewObservationId ? '核对指标' : '全部结构化指标'">
+        <div v-if="reviewObservationId && (!detail || detailError)" class="observation-review-loading">
+          <p>{{ detailError || '正在加载目标指标…' }}</p>
+          <button class="soft-action-button" type="button" @click="emit('close')">关闭</button>
+        </div>
+        <template v-else-if="detail">
         <header>
             <div>
             <ScrollText :size="20" />
@@ -2374,7 +2396,7 @@ onActivated(() => {
           <div class="observation-all-layout">
             <aside class="observation-all-list">
           <section v-if="primaryObservations.length" class="observation-tier-section">
-            <header><strong>标准化指标</strong><span>{{ primaryObservations.length }} 项，可参与趋势门禁判断</span></header>
+            <header><strong>可用于趋势的指标</strong><span>{{ primaryObservations.length }} 项，包含标准指标与可靠的机构内指标</span></header>
             <div class="observation-list">
               <article
                 v-for="item in primaryObservations"
@@ -2389,9 +2411,8 @@ onActivated(() => {
                 <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
                 <button class="observation-edit-button" type="button" title="编辑指标" @click.stop="openObservationEditor(item)"><Pencil :size="15" /></button>
                 <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}<em v-if="item.manualReviewed" class="observation-manual-chip">人工校对</em></span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
-                <small v-if="observationInterpretationLine(item)" class="observation-interpretation-line">{{ observationInterpretationLine(item) }}</small>
-                <small v-if="observationNormalizationLine(item)" class="observation-normalization-line">{{ observationNormalizationLine(item) }}</small>
-                <small v-if="item.canonicalExplanation" class="observation-explanation-line">说明：{{ item.canonicalExplanation }}</small>
+              <IndicatorHint v-if="item.displayReason || observationInterpretationLine(item) || observationNormalizationLine(item) || item.canonicalExplanation"
+                :text="[item.displayReason, observationInterpretationLine(item), observationNormalizationLine(item), item.canonicalExplanation].filter(Boolean).join('\n')" label="查看指标说明" />
               </article>
             </div>
           </section>
@@ -2411,9 +2432,8 @@ onActivated(() => {
                 <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
                 <button class="observation-edit-button" type="button" title="编辑指标" @click.stop="openObservationEditor(item)"><Pencil :size="15" /></button>
                 <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}<em v-if="item.manualReviewed" class="observation-manual-chip">人工校对</em></span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
-                <small v-if="observationInterpretationLine(item)" class="observation-interpretation-line">{{ observationInterpretationLine(item) }}</small>
-                <small v-if="item.displayReason" class="observation-display-reason">{{ item.displayReason }}</small>
-                <small v-if="observationNormalizationLine(item)" class="observation-normalization-line">{{ observationNormalizationLine(item) }}</small>
+              <IndicatorHint v-if="item.displayReason || observationInterpretationLine(item) || observationNormalizationLine(item) || item.canonicalExplanation"
+                :text="[item.displayReason, observationInterpretationLine(item), observationNormalizationLine(item), item.canonicalExplanation].filter(Boolean).join('\n')" label="查看指标说明" />
               </article>
             </div>
           </section>
@@ -2449,13 +2469,19 @@ onActivated(() => {
                 <small v-else-if="selectedObservation && !observationEvidenceLineIds.length" class="observation-source-hint">已定位页面，但暂无可高亮的 OCR 行</small>
               </div>
               <p v-else class="preview-hint">暂无可用原件。</p>
+              <div v-if="selectedObservation?.evidence?.sourceText" class="observation-source-quote">
+                <strong>OCR 证据</strong>
+                <p>{{ selectedObservation.evidence.sourceText }}</p>
+              </div>
               <div v-if="detail.pages.length > 1" class="observation-source-nav">
                 <button type="button" title="上一页" :disabled="observationSourcePageIndex === 0" @click="observationSourcePageIndex -= 1"><ChevronLeft :size="16" /></button>
                 <span>第 {{ observationSourcePage?.pageNumber || 0 }} 页 / 共 {{ detail.pages.length }} 页</span>
                 <button type="button" title="下一页" :disabled="observationSourcePageIndex >= detail.pages.length - 1" @click="observationSourcePageIndex += 1"><ChevronRight :size="16" /></button>
               </div>
             </section>
+            <div v-if="observationEditorOpen && !reviewObservationId" class="observation-edit-shade" aria-hidden="true" @click="closeObservationEditor"></div>
             <section class="observation-edit-panel" :class="{ 'is-open': observationEditorOpen }">
+              <span class="sheet-grabber observation-edit-grabber" aria-hidden="true"></span>
               <header>
                 <div><h4>{{ editingObservationId ? "编辑指标" : "补充指标" }}</h4><p>{{ editingObservationId ? "已提取内容已自动带入" : "填写后加入当前报告" }}</p></div>
                 <button v-if="observationEditorOpen" class="plain-icon-button" type="button" title="取消编辑" @click="closeObservationEditor"><X :size="16" /></button>
@@ -2465,8 +2491,17 @@ onActivated(() => {
                 <p>从中间选择指标开始校对</p>
               </div>
               <form v-else class="settings-form observation-editor-form" @submit.prevent="saveObservation">
-                <div class="observation-catalog-picker">
-                  <span>本地标准指标</span>
+                <div class="observation-editor-fields">
+                <div class="form-grid observation-core-fields">
+                  <label class="observation-field-wide"><span>指标名称</span><input v-model="observationForm.itemName" required /></label>
+                  <label class="observation-field-wide"><span>结果原文</span><input v-model="observationForm.resultText" /></label>
+                  <label><span>数值结果</span><input v-model.number="observationForm.numericValue" type="number" step="any" /></label>
+                  <label><span>单位</span><input v-model="observationForm.unit" /></label>
+                </div>
+                <details :key="`standard-${editingObservationId}`" class="observation-editor-section">
+                  <summary>标准指标 <span>{{ observationForm.canonicalKey ? '已选择 · 可修改' : '可选 · 未指定' }}</span></summary>
+                  <div class="observation-catalog-picker">
+                  <small>没有匹配项可不选，不影响保存核对。</small>
                   <div class="observation-catalog-search">
                     <input
                       v-model="observationCatalogQuery"
@@ -2488,32 +2523,35 @@ onActivated(() => {
                   <FormSelect
                     v-model="observationForm.canonicalKey"
                     :options="observationCatalogSelectOptions"
+                    :hint="!observationCatalogOptions.length ? '暂无可选标准指标。可尝试其他名称查询，或保留“不指定标准指标”后保存核对。' : undefined"
                     aria-label="选择本地标准指标"
                   />
-                </div>
-                <div class="form-grid">
-                  <label><span>指标名称</span><input v-model="observationForm.itemName" required /></label>
+                  </div>
+                </details>
+                <details :key="`extra-${editingObservationId}`" class="observation-editor-section">
+                  <summary>更多信息 <span>参考范围、代码等</span></summary>
+                  <div class="form-grid observation-extra-fields">
                   <label><span>指标代码</span><input v-model="observationForm.itemCode" /></label>
                   <label><span>分组/章节</span><input v-model="observationForm.sectionName" /></label>
-                  <label><span>结果原文</span><input v-model="observationForm.resultText" /></label>
-                  <label><span>数值结果</span><input v-model.number="observationForm.numericValue" type="number" step="any" /></label>
-                  <label><span>单位</span><input v-model="observationForm.unit" /></label>
                   <label><span>参考下限</span><input v-model.number="observationForm.referenceLow" type="number" step="any" /></label>
                   <label><span>参考上限</span><input v-model.number="observationForm.referenceHigh" type="number" step="any" /></label>
                   <label><span>异常标记</span><FormSelect v-model="observationForm.abnormalFlag" :options="observationFlagOptions" aria-label="异常标记" /></label>
                   <label><span>参考范围原文</span><input v-model="observationForm.referenceText" /></label>
-                </div>
+                  </div>
+                </details>
                 <p v-if="observationEditorError" class="inline-panel-error">{{ observationEditorError }}</p>
+                </div>
                 <div class="form-actions">
-                  <button type="button" @click="closeObservationEditor">取消</button>
+                  <button class="soft-action-button" type="button" @click="closeObservationEditor">取消</button>
                   <button class="primary-button" type="submit" :disabled="savingObservation">
-                    <LoaderCircle v-if="savingObservation" class="spin-icon" :size="16" />保存指标
+                    <LoaderCircle v-if="savingObservation" class="spin-icon" :size="16" />保存并重新判断
                   </button>
                 </div>
               </form>
             </section>
           </div>
         </div>
+        </template>
       </section>
     </div>
   </Teleport>

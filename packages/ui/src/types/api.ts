@@ -701,6 +701,8 @@ export type TrendExcludedPoint = {
 };
 
 export type TrendPoint = {
+  comparisonMethod?: string | null;
+  comparisonSpecimen?: string | null;
   observationId: string;
   reportId: string;
   reportTitle: string;
@@ -740,6 +742,7 @@ export type TrendPoint = {
 };
 
 export type TrendSeries = {
+  kind?: 'standard' | 'institution';
   indicatorKey: string;
   name: string;
   unit: string | null;
@@ -817,6 +820,10 @@ export type IndicatorNormalizationSourceOrigin =
   | "legacy";
 
 export type IndicatorNormalizationIssue = {
+  pendingCount: number;
+  reportId: string;
+  canManage: boolean;
+  trendEligible: boolean;
   fingerprint: string;
   representativeObservationId: string;
   rawName: string;
@@ -877,6 +884,8 @@ export type IndicatorNormalizationMetrics = {
 };
 
 export type IndicatorGovernanceResult = {
+  pending: number;
+  remainingReasons: Array<{ reason: string; count: number }>;
   fingerprint: string;
   action: "confirm" | "exclude";
   affectedObservations: number;

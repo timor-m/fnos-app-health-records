@@ -132,10 +132,24 @@ function normalizeIndicators() {
   });
 }
 
-function normalizeAllIndicators() {
+const previewLoading = ref(false);
+
+async function normalizeAllIndicators() {
+  if (previewLoading.value || normalizationTaskActive.value) return;
+  previewLoading.value = true;
+  normalizationError.value = "";
+  let preview: { scanned: number; eligible: number; recovered: number; removed: number; pending: number; excluded: number; reasons: Array<{ reason: string; count: number }> };
+  try {
+    preview = await request("maintenance/indicator-normalization/preview", { method: "POST" });
+  } catch (cause) {
+    normalizationError.value = cause instanceof Error ? cause.message : "历史重评估预览失败";
+    return;
+  } finally {
+    previewLoading.value = false;
+  }
   confirmDialog.ask({
-    title: "全部重新匹配字典",
-    message: "确认清空现有标准指标关联，并使用当前核心与远程字典全部重新匹配？本操作可修复字典规则造成的错误合并，但不能修复 OCR 或 AI 已提错的原始名称、数值。不会重新 OCR、调用 AI 或修改原始指标。",
+    title: "历史重评估预览",
+    message: `共 ${preview.scanned} 条，预计 ${preview.eligible} 条可进入趋势（新增恢复 ${preview.recovered} 条、移出 ${preview.removed} 条），${preview.pending} 条仍待核对，${preview.excluded} 条不适用或已排除。${preview.reasons.slice(0, 5).map(item => `${item.reason}（${item.count} 条）`).join("；")}。确认后按当前字典重算，保留人工编辑与治理决策，不重新 OCR、调用 AI 或修改原始指标。预览为当前快照，执行结果可能随数据变化。`,
     confirmText: "全部重新匹配",
     danger: true,
     run: async () => {
@@ -198,8 +212,8 @@ onBeforeUnmount(clearNormalizationPoll);
           </div>
         </div>
         <div class="maintenance-actions">
-          <button class="soft-action-button danger-action-button" type="button" :disabled="normalizationTaskActive" @click="normalizeAllIndicators">
-            <RefreshCw :size="15" :class="{ 'spin-icon': fullNormalizationRunning }" />{{ fullNormalizationRunning ? "匹配中" : "全部重新匹配" }}
+          <button class="soft-action-button danger-action-button" type="button" :disabled="normalizationTaskActive || previewLoading" @click="normalizeAllIndicators">
+            <RefreshCw :size="15" :class="{ 'spin-icon': fullNormalizationRunning || previewLoading }" />{{ previewLoading ? "预览中" : fullNormalizationRunning ? "匹配中" : "全部重新匹配" }}
           </button>
           <button class="primary-button" type="button" :disabled="normalizationTaskActive" @click="normalizeIndicators">
             <RefreshCw :size="15" :class="{ 'spin-icon': normalizationRunning }" />{{ normalizationRunning ? "匹配中" : "匹配未归类项" }}

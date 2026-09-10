@@ -1,4 +1,6 @@
 import {
+  institutionTrendRuleSchemaSql,
+  institutionTrendSchemaSql,
   aiExtractionCandidateSchemaSql,
   aiExtractionUnitSchemaSql,
   clinicalFactSchemaSql,
@@ -553,6 +555,9 @@ CREATE INDEX IF NOT EXISTS file_gc_queue_pending_idx
   ON file_gc_queue(completed_at, not_before, created_at);
 
 ${indicatorDictionarySchemaSql}
+
+${institutionTrendSchemaSql}
+${institutionTrendRuleSchemaSql}
 
 ${reportDuplicateGovernanceSchemaSql}
 

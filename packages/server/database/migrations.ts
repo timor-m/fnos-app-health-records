@@ -404,10 +404,57 @@ export const databaseMigrations: DatabaseMigration[] = [
       ensureReportDuplicateGovernanceSchema(db);
       ensureOcrCoordSpaceColumns(db);
     }
+  },
+  {
+    version: 17,
+    name: "add_institution_trend_projects",
+    checksum: "manual:017-institution-trend-projects",
+    up: (db) => { db.exec(institutionTrendSchemaSql); }
+  },
+  {
+    version: 18,
+    name: "add_institution_trend_auto_rules",
+    checksum: "manual:018-institution-trend-auto-rules",
+    up: (db) => { db.exec(institutionTrendRuleSchemaSql); }
   }
 ];
 
 export const latestSchemaVersion = databaseMigrations[databaseMigrations.length - 1]?.version ?? 0;
+
+export const institutionTrendRuleSchemaSql = `
+CREATE TABLE IF NOT EXISTS institution_trend_auto_rules (
+  project_id TEXT PRIMARY KEY REFERENCES institution_trend_projects(id) ON DELETE CASCADE,
+  names_json TEXT NOT NULL,
+  confirmed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))
+);
+CREATE TABLE IF NOT EXISTS institution_trend_auto_decisions (
+  observation_id TEXT PRIMARY KEY REFERENCES observations(id) ON DELETE CASCADE,
+  decision TEXT NOT NULL CHECK (decision IN ('blocked', 'linked'))
+);
+`;
+
+export const institutionTrendSchemaSql = `
+CREATE TABLE IF NOT EXISTS institution_trend_projects (
+  id TEXT PRIMARY KEY,
+  member_id TEXT NOT NULL REFERENCES health_members(id) ON DELETE CASCADE,
+  hospital_name TEXT NOT NULL,
+  name TEXT NOT NULL,
+  method TEXT NOT NULL,
+  specimen TEXT NOT NULL,
+  unit TEXT NOT NULL,
+  created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS institution_trend_observations (
+  observation_id TEXT PRIMARY KEY REFERENCES observations(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES institution_trend_projects(id) ON DELETE CASCADE,
+  confirmed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  confirmed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS institution_trend_member_idx ON institution_trend_projects(member_id);
+CREATE INDEX IF NOT EXISTS institution_trend_project_idx ON institution_trend_observations(project_id);
+`;
 
 export function tableColumnNames(db: DatabaseSync, tableName: string) {
   const columns = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;

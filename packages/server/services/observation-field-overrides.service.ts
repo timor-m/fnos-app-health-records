@@ -247,10 +247,15 @@ export function updateManualObservation(
     currentCanonicalKey: string | null; isManualCreated: number | null;
   }) | undefined;
   if (!current) throw createError({ statusCode: 404, statusMessage: "指标不存在" });
+  const excluded = db.prepare("SELECT 1 FROM observation_normalizations WHERE observation_id = ? AND matched_by = 'manual_exclusion'").get(observationId);
+  if (excluded) throw createError({ statusCode: 409, statusMessage: "该指标已被人工排除，请先在指标治理中心撤销排除，再进行校对" });
   const fields = validatedFields(input);
   const canonicalKey = validatedCanonicalKey(input);
   let evidence: PersistableObservation["evidence"] = [];
-  try { evidence = JSON.parse(current.evidenceJson) as PersistableObservation["evidence"]; } catch { evidence = []; }
+  try {
+    const parsed: unknown = JSON.parse(current.evidenceJson);
+    evidence = Array.isArray(parsed) ? parsed as PersistableObservation["evidence"] : [];
+  } catch { evidence = []; }
   const sourceKey = current.sourceKey || observationSourceKey({ ...current, evidence });
   const overrideId = current.overrideId || createId("observation-override");
   const changedFields = (Object.keys(fields) as Array<keyof EditableObservationFields>)

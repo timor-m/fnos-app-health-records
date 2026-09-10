@@ -129,6 +129,7 @@ const clinicianKeys = new Set([
 
 export type AiTableEvidence = {
   headerText: string;
+  headerSourcePageNumber?: number | null;
   headerSourceLineIds: string[];
   rowSourceLineIds: string[];
   resultColumn: {
@@ -3109,6 +3110,7 @@ function structuredTableEvidence(
     null;
   return {
     headerText: line.tableHeaderText,
+    headerSourcePageNumber: line.tableHeaderSourcePageNumber,
     headerSourceLineIds: [...new Set(line.tableHeaderSourceLineIds || [])],
     rowSourceLineIds: [...new Set(line.sourceLineIds)],
     resultColumn:

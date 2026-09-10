@@ -89,8 +89,15 @@ function appliedSchemaVersion(db: DatabaseSync) {
   return current?.version ?? 0;
 }
 
-function isUnreleasedSchemaVersion(currentVersion: number) {
-  return schemaVersion === 16 && currentVersion > schemaVersion && currentVersion <= 19;
+function isUnreleasedSchemaVersion(db: DatabaseSync, currentVersion: number) {
+  if (currentVersion <= 16 || currentVersion > 19) return false;
+  if (currentVersion <= schemaVersion && tableExists(db, "institution_trend_projects")) return false;
+  // Distinguish legacy development v17-v19 from the released institution-project migration.
+  const columns = db.prepare("PRAGMA table_info(schema_migrations)").all() as Array<{ name: string }>;
+  const marker = columns.some(column => column.name === "checksum")
+    ? db.prepare("SELECT checksum FROM schema_migrations WHERE version = 17").get() as { checksum: string } | undefined
+    : undefined;
+  return marker?.checksum !== "manual:017-institution-trend-projects";
 }
 
 /**
@@ -233,7 +240,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
 
   const hasMigrationTable = tableExists(db, "schema_migrations");
   let currentVersion = hasMigrationTable ? appliedSchemaVersion(db) : 0;
-  if (hasMigrationTable && isUnreleasedSchemaVersion(currentVersion)) {
+  if (hasMigrationTable && isUnreleasedSchemaVersion(db, currentVersion)) {
     unreleasedSchemaVersion = currentVersion;
     return;
   }
@@ -323,7 +330,7 @@ export function repairUnreleasedSchemaVersions() {
   const databasePath = getDatabasePath();
   const fromVersion = unreleasedSchemaVersion;
   const backupPath = backupDatabaseBeforeMigration(database, storageDir, databasePath, fromVersion, schemaVersion);
-  database.prepare("DELETE FROM schema_migrations WHERE version > ? AND version <= 19").run(schemaVersion);
+  database.prepare("DELETE FROM schema_migrations WHERE version > 16 AND version <= 19").run();
   unreleasedSchemaVersion = null;
   migrate(database, storageDir, databasePath);
   return { fromVersion, toVersion: schemaVersion, backupPath };

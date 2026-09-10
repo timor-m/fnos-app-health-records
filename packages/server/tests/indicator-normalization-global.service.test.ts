@@ -6,12 +6,24 @@ import test from "node:test";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
 import type { RequestUser } from "../domain/request-user.ts";
 import {
+  assessPersistedObservationReference,
   convertUnit,
   indicatorNameCandidates,
   listIndicatorNormalizationIssues,
   normalizeReportObservations
 } from "../services/indicator-normalization.service.ts";
 import { installRemoteDictionarySnapshotForTests } from "../services/indicator-dictionary.service.ts";
+import { getReportDetail, listTrendSeries } from "../services/records.service.ts";
+
+test("reference evidence is independent of manual confirmation and range validity", () => {
+  const input = { referenceLow: 5, referenceHigh: 21, referenceText: "5-21",
+    hasAiExtraction: 1, evidenceJson: '[{"pageNumber":1,"quote":"T-BIL 12.3 μmol/L"}]' };
+  assert.equal(assessPersistedObservationReference(input).status, "raw_only");
+  assert.equal(assessPersistedObservationReference(input).low, null);
+  assert.equal(assessPersistedObservationReference({ ...input, manualReviewed: true }).status, "trusted");
+  assert.equal(assessPersistedObservationReference({ ...input, manualReviewed: true, referenceLow: 30 }).low, null);
+  assert.equal(assessPersistedObservationReference({ ...input, hasAiExtraction: 0 }).status, "trusted");
+});
 
 test("splits report codes from names without removing medical qualifiers", () => {
   assert.ok(indicatorNameCandidates("白细胞数目 WBC").includes("白细胞数目"));
@@ -38,6 +50,12 @@ test("splits report codes from names without removing medical qualifiers", () =>
 });
 
 test("removes OCR report ordinals before dictionary matching", () => {
+  assert.ok(indicatorNameCandidates(" ＊ 3.谷草/谷丙 ** ").includes("谷草/谷丙"));
+  assert.ok(indicatorNameCandidates("﹡白细胞＊").includes("白细胞"));
+  assert.ok(indicatorNameCandidates("*NEUT%*").includes("neut%"));
+  assert.ok(indicatorNameCandidates("*NEUT#*").includes("neut#"));
+  assert.ok(indicatorNameCandidates("A*B").includes("a*b"));
+  assert.deepEqual(indicatorNameCandidates("＊＊"), []);
   assert.ok(indicatorNameCandidates("3.谷草/谷丙").includes("谷草/谷丙"));
   assert.ok(indicatorNameCandidates("19.红细胞分布宽度(SD)").includes("红细胞分布宽度"));
   assert.ok(indicatorNameCandidates("23、TSH").includes("tsh"));
@@ -151,6 +169,36 @@ test("accepts hyphenated canonical names when OCR evidence closes the same norma
     assert.equal(row.canonicalKey, "liver_tbil");
     assert.equal(row.quality, "high");
     assert.equal(row.excludedReason, null);
+    db.prepare(`INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('evidence-member', 'evidence-user', 'manager', 'evidence-user')`).run();
+    const user: RequestUser = { id: 'evidence-user', displayName: '用户', provider: 'fnos_gateway',
+      authenticated: true, isGatewayAdmin: false };
+    for (const [low, high] of [[1, 2], [30, 5]]) {
+      db.prepare(`UPDATE observations SET reference_low = ?, reference_high = ?, reference_text = ?,
+        evidence_json = ? WHERE id = 'hyphen-evidence-observation'`).run(low, high, `${low}-${high}`,
+        JSON.stringify([{ pageNumber: 1, quote: 'T-BIL | 12.3 | μmol/L' }]));
+      normalizeReportObservations('evidence-report');
+      const normalized = db.prepare(`SELECT quality FROM observation_normalizations
+        WHERE observation_id = 'hyphen-evidence-observation'`).get() as { quality: string };
+      assert.equal(normalized.quality, 'high');
+      const point = listTrendSeries(user, 'evidence-member')[0]?.points[0];
+      assert.ok(point, 'reliable measured point remains in trends');
+      assert.equal(point.referenceLow, null);
+      assert.equal(point.referenceHigh, null);
+      const detail = getReportDetail(user, 'evidence-report');
+      assert.equal(detail.observations[0].referenceLow, null);
+      assert.equal(detail.observations[0].displayAbnormalFlag, null);
+    }
+    // Ablation: relaxing the reference gate must not relax value or unit evidence.
+    for (const quote of ['T-BIL | 99 | μmol/L', 'T-BIL | 12.3']) {
+      db.prepare(`UPDATE observations SET evidence_json = ?
+        WHERE id = 'hyphen-evidence-observation'`).run(JSON.stringify([{ pageNumber: 1, quote }]));
+      normalizeReportObservations('evidence-report');
+      const rejected = db.prepare(`SELECT quality FROM observation_normalizations
+        WHERE observation_id = 'hyphen-evidence-observation'`).get() as { quality: string };
+      assert.equal(rejected.quality, 'low');
+      assert.equal(listTrendSeries(user, 'evidence-member').length, 0);
+    }
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;

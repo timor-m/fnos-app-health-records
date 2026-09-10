@@ -19,6 +19,8 @@ import {
 } from "@lucide/vue";
 import EmptyState from "../../components/EmptyState.vue";
 import FormSelect from "../../components/FormSelect.vue";
+import IndicatorHint from "../../components/IndicatorHint.vue";
+import ReportDetail from "../../components/ReportDetail.vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import { request } from "../../utils/api";
 import { useToast } from "../../composables/useToast";
@@ -43,6 +45,8 @@ import type {
 } from "../../types/api";
 
 const issues = ref<IndicatorNormalizationIssue[]>([]);
+const reviewingIssue = ref<IndicatorNormalizationIssue | null>(null);
+const showEligible = ref(false);
 const metrics = ref<IndicatorNormalizationMetrics | null>(null);
 const history = ref<IndicatorGovernanceHistoryItem[]>([]);
 const aliasOverview = ref<IndicatorAliasGovernanceOverview>({ aliases: [], conflicts: [] });
@@ -52,6 +56,7 @@ const selectedNames = ref<string[]>([]);
 const loading = ref(false);
 const error = ref("");
 const notice = ref("");
+const noticeDetails = ref("");
 const maxFeedbackNames = 40;
 
 type IssueEditor = {
@@ -80,7 +85,7 @@ function catalogSelectOptions(options: IndicatorCatalogOption[]) {
   }));
 }
 
-const displayedIssues = computed(() => [...issues.value].sort((left, right) =>
+const displayedIssues = computed(() => issues.value.filter(item => showEligible.value ? item.trendEligible : !item.trendEligible).sort((left, right) =>
   right.count - left.count || (right.latestReportIssuedAt || "").localeCompare(left.latestReportIssuedAt || "")
 ));
 
@@ -128,12 +133,6 @@ async function copyFeedback() {
     ? `已复制 ${selectedIssueNames.value.length} 项，请粘贴到 QQ 群 ${feedbackQqGroup} 反馈`
     : "复制失败，请稍后重试");
 }
-
-const issueStatusLabels: Record<IndicatorNormalizationIssue["status"], string> = {
-  unknown: "未命中字典",
-  low: "低可信候选",
-  excluded: "保守排除"
-};
 
 const sourceOriginLabels: Record<IndicatorNormalizationSourceOrigin, string> = {
   item_name: "报告项目名",
@@ -264,6 +263,7 @@ async function resolveIssue(issue: IndicatorNormalizationIssue, action: "confirm
   editor.submitting = true;
   error.value = "";
   notice.value = "";
+  noticeDetails.value = "";
   try {
     const result = await request<IndicatorGovernanceResult>(
       `maintenance/indicator-normalization/issues/${issue.fingerprint}/resolve`,
@@ -279,8 +279,9 @@ async function resolveIssue(issue: IndicatorNormalizationIssue, action: "confirm
       }
     );
     notice.value = action === "confirm"
-      ? `已确认 ${result.affectedObservations} 条记录，${result.normalized} 条已恢复为标准趋势${result.aliasSaved ? "，并保存别名规则" : ""}。`
+      ? `已映射 ${result.affectedObservations} 条记录：${result.normalized} 条进入标准趋势，${result.pending} 条仍待核对，${result.excluded} 条不适用或已排除${result.aliasSaved ? "，并保存别名规则" : ""}。`
       : `已排除 ${result.affectedObservations} 条记录，后续重跑仍会保留该决策。`;
+    noticeDetails.value = result.remainingReasons.map(item => `${item.reason}（${item.count} 条）`).join("；");
     delete editors[issue.fingerprint];
     await loadIssues();
   } catch (cause) {
@@ -297,6 +298,7 @@ async function undoGovernance(item: IndicatorGovernanceHistoryItem) {
   historyBusyId.value = item.id;
   error.value = "";
   notice.value = "";
+  noticeDetails.value = "";
   try {
     const result = await request<IndicatorGovernanceUndoResult>(
       `maintenance/indicator-normalization/issues/${item.fingerprint}/undo`,
@@ -317,6 +319,7 @@ async function toggleAlias(aliasId: string, enabled: boolean, aliasName: string)
   aliasBusyId.value = aliasId;
   error.value = "";
   notice.value = "";
+  noticeDetails.value = "";
   try {
     const result = await request<IndicatorAliasUpdateResult>(
       `maintenance/indicator-normalization/aliases/${aliasId}/status`,
@@ -367,7 +370,7 @@ onMounted(() => {
   <section class="settings-page">
     <SubPageHeader
       title="指标治理中心"
-      description="审查未命中、低可信和保守排除指标；人工决策会保留来源并在重新整理后继续生效"
+      description="对照报告核对数据，标准指标可选；保存后自动判断能否进入趋势"
       back-to="/me/maintenance/indicators"
       back-label="返回指标管理"
     >
@@ -377,7 +380,7 @@ onMounted(() => {
     </SubPageHeader>
 
     <p v-if="error" class="inline-panel-error">{{ error }}</p>
-    <p v-if="notice" class="indicator-governance-notice"><ShieldCheck :size="16" />{{ notice }}</p>
+    <p v-if="notice" class="indicator-governance-notice" role="status"><ShieldCheck :size="16" />{{ notice }}<IndicatorHint v-if="noticeDetails" :text="noticeDetails" label="查看处理结果详情" /></p>
 
     <section v-if="metrics" class="settings-band indicator-quality-dashboard">
       <header>
@@ -409,7 +412,7 @@ onMounted(() => {
         <article class="metric-card-warning">
           <Sparkles :size="17" />
           <strong>{{ metrics.totals.needsReview }}</strong>
-          <span>{{ metrics.totals.issueGroups }} 组待治理问题</span>
+          <span>{{ metrics.totals.issueGroups }} 组待标准化项目（不代表未进入趋势）</span>
         </article>
         <article>
           <BarChart3 :size="17" />
@@ -467,13 +470,19 @@ onMounted(() => {
         <div class="indicator-issue-heading">
           <Sparkles :size="20" />
           <div>
-            <h3>全局待治理列表</h3>
-            <p>{{ displayedIssues.length }} 组同类指标需要统一审查，确认后会重新生成所有关联报告的趋势。</p>
+            <h3>{{ showEligible ? '已可用 · 可选标准化' : '待核对指标' }}</h3>
+            <p>对照原件逐条核对，标准指标可选。</p>
           </div>
+        </div>
+      </header>
+      <div class="indicator-review-toolbar">
+        <div class="indicator-review-tabs" role="group" aria-label="指标核对视图">
+          <button type="button" :aria-pressed="!showEligible" @click="showEligible = false">待核对</button>
+          <button type="button" :aria-pressed="showEligible" @click="showEligible = true">已可用 · 可选标准化</button>
         </div>
         <div class="indicator-feedback-actions">
           <button class="soft-action-button compact-soft" type="button" @click="toggleAll">
-            {{ allSelected ? "取消全选" : "全选" }}
+            {{ allSelected ? "取消选择" : "全选" }}
           </button>
           <button
             class="soft-action-button compact-soft"
@@ -482,10 +491,10 @@ onMounted(() => {
             :title="`复制脱敏指标名称，粘贴到 QQ 交流群 ${feedbackQqGroup} 反馈`"
             @click="copyFeedback"
           >
-            <Copy :size="15" />复制{{ selectedIssueNames.length ? ` ${selectedIssueNames.length}` : "" }}项
+            <Copy :size="15" />{{ selectedIssueNames.length ? `复制 ${selectedIssueNames.length} 项` : '复制' }}
           </button>
           <a
-            class="primary-button compact-primary"
+            class="soft-action-button compact-soft"
             :class="{ disabled: !feedbackUrl }"
             :href="feedbackUrl || undefined"
             target="_blank"
@@ -494,12 +503,13 @@ onMounted(() => {
             title="打开预填的 GitHub Issue（需要 GitHub 账号）"
             @click="!feedbackUrl && $event.preventDefault()"
           >
-            <ExternalLink :size="15" />反馈{{ selectedIssueNames.length ? ` ${selectedIssueNames.length}` : "" }}项
+            <ExternalLink :size="15" />{{ selectedIssueNames.length ? `反馈 ${selectedIssueNames.length} 项` : '反馈' }}
           </a>
         </div>
-      </header>
+      </div>
       <p class="indicator-feedback-note">仅“未命中字典”的项目可提交收录反馈；低可信候选和保守排除项需在本地核对，不会重复申请收录。反馈不包含报告数据；无法访问 GitHub 时点击“复制”，粘贴到 QQ 交流群 {{ feedbackQqGroup }} 即可。</p>
       <div class="maintenance-issue-rows">
+        <p v-if="!displayedIssues.length" class="indicator-feedback-note">{{ showEligible ? '暂无已可用但未标准化的指标。' : '当前列表暂无待核对指标；已可用记录可在“可选标准化”中查看，无需重复处理。' }}</p>
         <article v-for="issue in displayedIssues" :key="issue.fingerprint" class="indicator-issue-row indicator-governance-row">
           <label class="indicator-issue-check" :aria-label="`选择 ${issue.rawName}`">
             <input
@@ -513,7 +523,7 @@ onMounted(() => {
             <strong>{{ issue.rawName }}</strong>
             <span>{{ issue.sectionName || "未分组" }} · 来源：{{ sourceOriginLabels[issue.sourceOrigin] }}</span>
             <p class="indicator-original-result">原始结果：{{ formatRawIndicatorResult(issue.resultText, issue.unit, "未读取到原始结果") }}</p>
-            <p>{{ issue.reason }}</p>
+            <IndicatorHint :text="issue.reason" :label="issue.trendEligible ? '查看标准化提示' : '查看待核对原因'" />
             <p v-if="issue.candidateCanonicalName" class="indicator-candidate-summary">
               当前候选：{{ issue.candidateCanonicalName }}（{{ issue.candidateCanonicalKey }}）
               <template v-if="issue.candidateDefaultUnit"> · 标准单位 {{ issue.candidateDefaultUnit }}</template>
@@ -539,6 +549,7 @@ onMounted(() => {
                 v-model="editors[issue.fingerprint].selectedCanonicalKey"
                 :options="catalogSelectOptions(editors[issue.fingerprint].options)"
                 placeholder="请选择标准指标"
+                empty-text="暂无匹配的标准指标，请换个名称查询；也可返回“核对指标”，不指定标准指标进行核对。"
                 aria-label="请选择标准指标"
               />
               <input
@@ -580,12 +591,17 @@ onMounted(() => {
             </div>
           </div>
           <div class="maintenance-issue-meta">
-            <span :class="`issue-chip issue-chip--${issue.status}`">{{ issueStatusLabels[issue.status] }}</span>
-            <strong>{{ issue.count }} 次</strong>
+            <div class="indicator-review-status">
+            <span :class="`issue-chip issue-chip--${issue.status}`">{{ issue.trendEligible ? '已可用' : '需核对' }}</span>
+            <span>待核对 {{ issue.pendingCount }} / {{ issue.count }} 条</span>
             <small>{{ formatDate(issue.latestReportIssuedAt) }}</small>
+            </div>
+            <div class="indicator-review-actions">
+            <button class="primary-button compact-primary" type="button" :disabled="!issue.canManage" :title="issue.canManage ? '打开原件对照并核对当前记录' : '需要该成员档案的管理权限'" @click="reviewingIssue = issue">核对指标</button>
             <button class="soft-action-button compact-soft" type="button" @click="toggleGovernance(issue)">
-              {{ editors[issue.fingerprint]?.open ? "收起" : "治理" }}
+              {{ editors[issue.fingerprint]?.open ? "收起" : "批量标准化 / 排除" }}
             </button>
+            </div>
           </div>
         </article>
       </div>
@@ -687,5 +703,6 @@ onMounted(() => {
       </div>
       <p v-else class="indicator-feedback-note">尚无人工治理历史。</p>
     </section>
+    <ReportDetail v-if="reviewingIssue" :key="reviewingIssue.representativeObservationId" :report-id="reviewingIssue.reportId" :review-observation-id="reviewingIssue.representativeObservationId" variant="panel" @close="reviewingIssue = null" @updated="loadIssues" />
   </section>
 </template>

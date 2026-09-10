@@ -11,6 +11,8 @@ const props = defineProps<{
   placeholder?: string;
   disabled?: boolean;
   ariaLabel?: string;
+  emptyText?: string;
+  hint?: string;
 }>();
 const emit = defineEmits<{ "update:modelValue": [value: string]; change: [value: string] }>();
 
@@ -94,6 +96,7 @@ onBeforeUnmount(() => {
       <div v-if="open" ref="layer" class="form-select-layer" @click.self="open = false">
         <div class="form-select-panel" :style="panelStyle" role="listbox" :aria-label="ariaLabel">
           <span class="sheet-grabber" aria-hidden="true"></span>
+          <p v-if="!options.length || hint" class="form-select-empty">{{ hint || emptyText || '暂无可选项' }}</p>
           <button
             v-for="option in options"
             :key="option.value"

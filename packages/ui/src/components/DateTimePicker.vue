@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { CalendarDays, Check, X } from "@lucide/vue";
 import { useScrollLock } from "../composables/useScrollLock";
+import { DATE_WHEEL_ITEM_HEIGHT, dateWheelStep, dateWheelIndex, clampCalendarDay } from "../utils/date-wheel";
 
 const props = defineProps<{
   modelValue: string | null;
@@ -61,6 +62,7 @@ const displayedMonth = ref(selectedMonth.value);
 const currentYear = new Date().getFullYear();
 
 watch(open, (value) => {
+  clearWheelState();
   if (value) {
     // 打开时初始化选中值
     if (parsedDate.value) {
@@ -130,8 +132,13 @@ function displayValue(): string {
 
 // 滚轮滚动处理（带自动吸附）
 let scrollTimers: Record<string, ReturnType<typeof setTimeout>> = {};
-const ITEM_HEIGHT = 40;
-const HIGHLIGHT_TOP = 0; // 高亮框距离顶部的距离
+type WheelType = "year" | "month" | "day" | "hour" | "minute";
+const ITEM_HEIGHT = DATE_WHEEL_ITEM_HEIGHT;
+let positioned: Partial<Record<WheelType, number>> = {};
+let wheelRemainder: Partial<Record<WheelType, number>> = {};
+let wheelLastAt: Partial<Record<WheelType, number>> = {};
+const touching = new Set<WheelType>();
+let drag: { type: WheelType; element: HTMLElement; pointerId: number; startY: number; startTop: number } | null = null;
 const BUFFER_SIZE = 100; // 循环缓冲项数量（足够大以实现平滑循环）
 
 // 获取缓冲后的选项数组
@@ -190,116 +197,125 @@ function getSelectedValue(type: "year" | "month" | "day" | "hour" | "minute"): n
   }
 }
 
-// 滚轮滚动处理（带自动吸附和循环）
-function onScroll(e: Event, type: "year" | "month" | "day" | "hour" | "minute") {
+// Native touch scrolling only reads the selection. Recenter the loop after
+// scrolling settles, never while momentum is still moving the column.
+function onScroll(e: Event, type: WheelType) {
   const el = e.target as HTMLElement;
-  const scrollTop = el.scrollTop;
-  const originalOptions = getOriginalOptions(type);
-  const originalLength = originalOptions.length;
-  const bufSize = getBufSize(type);
-
-  // 计算当前选中的索引（考虑高亮框偏移）
-  const adjustedScrollTop = scrollTop - HIGHLIGHT_TOP;
-  let bufferedIndex = Math.round(adjustedScrollTop / ITEM_HEIGHT);
-  
-  // 计算原始索引（减去缓冲偏移）
-  let originalIndex = bufferedIndex - bufSize;
-  
-  // 循环跳转：如果超出原始范围，立即跳转到另一端
-  if (originalIndex < 0) {
-    // 到达顶部，跳转到底部（保持在缓冲区内）
-    originalIndex = originalLength + originalIndex;
-    const newBufferedIndex = originalIndex + bufSize;
-    el.scrollTop = newBufferedIndex * ITEM_HEIGHT + HIGHLIGHT_TOP;
-  } else if (originalIndex >= originalLength) {
-    // 到达底部，跳转到顶部（保持在缓冲区内）
-    originalIndex = originalIndex - originalLength;
-    const newBufferedIndex = originalIndex + bufSize;
-    el.scrollTop = newBufferedIndex * ITEM_HEIGHT + HIGHLIGHT_TOP;
-  }
-  
-  // 更新选中值
-  updateSelectedValue(type, originalOptions[originalIndex]);
-
-  // 清除之前的定时器
-  if (scrollTimers[type]) {
-    clearTimeout(scrollTimers[type]);
-  }
-
-  // 设置新的定时器，滚动停止后自动吸附
+  if (!open.value || Math.abs(el.scrollTop - (positioned[type] ?? -10000)) < 0.5) return;
+  delete positioned[type];
+  const options = getOriginalOptions(type);
+  const index = dateWheelIndex(Math.round(el.scrollTop / ITEM_HEIGHT) - getBufSize(type), options.length);
+  updateSelectedValue(type, options[index]);
+  clearTimeout(scrollTimers[type]);
   scrollTimers[type] = setTimeout(() => {
-    snapToNearest(type);
-  }, 100);
+    if (!touching.has(type) && drag?.type !== type) snapToNearest(type);
+  }, 180);
 }
 
-// 自动吸附到最近的选项
-function snapToNearest(type: "year" | "month" | "day" | "hour" | "minute") {
+function positionColumn(type: WheelType) {
   const el = wheelRefs[type].value;
-  if (!el) return;
-
-  const currentValue = getSelectedValue(type);
-  const originalOptions = getOriginalOptions(type);
-  const originalIndex = originalOptions.indexOf(currentValue);
-  const bufSize = getBufSize(type);
-
-  // 计算目标滚动位置，使选项居中在高亮框内
-  const bufferedIndex = originalIndex + bufSize;
-  const targetScrollTop = bufferedIndex * ITEM_HEIGHT + HIGHLIGHT_TOP;
-
-  // 月份滚动完成后才刷新日列，避免日列跟随每个滚动事件反复重排。
-  if (type === "year" || type === "month") {
-    const nextYear = type === "year" ? currentValue : selectedYear.value;
-    const nextMonth = type === "month" ? currentValue : selectedMonth.value;
-    displayedYear.value = nextYear;
-    displayedMonth.value = nextMonth;
-    const daysInMonth = new Date(nextYear, nextMonth, 0).getDate();
-    const dayWasClamped = selectedDay.value > daysInMonth;
-    if (dayWasClamped) {
-      selectedDay.value = daysInMonth;
-      nextTick(() => {
-        const dayEl = wheelDay.value;
-        if (!dayEl) return;
-        const dayIndex = days.value.indexOf(selectedDay.value);
-        const dayBufSize = getBufSize("day");
-        dayEl.scrollTop = (dayIndex + dayBufSize) * ITEM_HEIGHT + HIGHLIGHT_TOP;
-      });
-    }
-  }
-  
-  // 平滑滚动到目标位置
-  el.scrollTo({
-    top: targetScrollTop,
-    behavior: 'smooth'
-  });
+  if (!el || !open.value) return;
+  const index = getOriginalOptions(type).indexOf(getSelectedValue(type));
+  if (index < 0) return;
+  const top = (index + getBufSize(type)) * ITEM_HEIGHT;
+  positioned[type] = top;
+  el.scrollTop = top;
 }
 
-// 滚动到选中位置
-function scrollToSelected() {
-  const types: ("year" | "month" | "day" | "hour" | "minute")[] = ['year', 'month', 'day'];
-  if (props.showTime) {
-    types.push('hour', 'minute');
+function syncCalendarDays() {
+  const previousLength = days.value.length;
+  displayedYear.value = selectedYear.value;
+  displayedMonth.value = selectedMonth.value;
+  selectedDay.value = clampCalendarDay(selectedYear.value, selectedMonth.value, selectedDay.value);
+  // Even an unchanged day needs repositioning when the front buffer shrinks.
+  if (days.value.length !== previousLength) {
+    clearTimeout(scrollTimers.day);
+    nextTick(() => positionColumn("day"));
   }
+}
 
-  types.forEach(type => {
-    const el = wheelRefs[type].value;
-    if (!el) return;
+function snapToNearest(type: WheelType) {
+  clearTimeout(scrollTimers[type]);
+  if (type === "year" || type === "month") syncCalendarDays();
+  positionColumn(type);
+}
 
-    const currentValue = getSelectedValue(type);
-    const originalOptions = getOriginalOptions(type);
-    const originalIndex = originalOptions.indexOf(currentValue);
-    const bufSize = getBufSize(type);
-    
-    if (originalIndex >= 0) {
-      // 计算缓冲后的索引
-      const bufferedIndex = originalIndex + bufSize;
-      // 滚动到对应位置（立即滚动，不使用动画）
-      el.scrollTop = bufferedIndex * ITEM_HEIGHT + HIGHLIGHT_TOP;
-    }
-  });
+function onWheel(event: WheelEvent, type: WheelType) {
+  if (event.ctrlKey) return; // Preserve browser pinch-to-zoom.
+  event.preventDefault();
+  if (drag) return;
+  if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+  const now = performance.now();
+  const previous = now - (wheelLastAt[type] ?? 0) > 180 ? 0 : wheelRemainder[type] || 0;
+  const result = dateWheelStep(previous, event.deltaY, event.deltaMode);
+  wheelRemainder[type] = result.remainder;
+  wheelLastAt[type] = now;
+  if (!result.step) return;
+  const options = getOriginalOptions(type);
+  const index = dateWheelIndex(options.indexOf(getSelectedValue(type)) + result.step, options.length);
+  updateSelectedValue(type, options[index]);
+  snapToNearest(type);
+}
+
+function endTouch(type: WheelType) {
+  touching.delete(type);
+  clearTimeout(scrollTimers[type]);
+  scrollTimers[type] = setTimeout(() => snapToNearest(type), 180);
+}
+
+function startDrag(event: PointerEvent, type: WheelType) {
+  // Touch keeps browser-native momentum; mouse/pen use explicit capture so
+  // releasing outside the column cannot leave it stuck in dragging state.
+  if (event.pointerType === "touch" || event.button !== 0 || drag) return;
+  const element = event.currentTarget as HTMLElement;
+  event.preventDefault();
+  clearTimeout(scrollTimers[type]);
+  drag = { type, element, pointerId: event.pointerId, startY: event.clientY, startTop: element.scrollTop };
+  element.setPointerCapture(event.pointerId);
+}
+
+function moveDrag(event: PointerEvent) {
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  event.preventDefault();
+  const { element, startTop, startY, type } = drag;
+  element.scrollTop = startTop + startY - event.clientY;
+  // Read immediately: pointerup can precede the browser's next scroll event.
+  const options = getOriginalOptions(type);
+  updateSelectedValue(type, options[dateWheelIndex(Math.round(element.scrollTop / ITEM_HEIGHT) - getBufSize(type), options.length)]);
+}
+
+function releaseDrag() {
+  const current = drag;
+  drag = null;
+  if (current?.element.hasPointerCapture(current.pointerId)) current.element.releasePointerCapture(current.pointerId);
+  return current;
+}
+
+function endDrag(event: PointerEvent) {
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  const current = releaseDrag();
+  if (current && open.value) snapToNearest(current.type);
+}
+
+function clearWheelState() {
+  releaseDrag();
+  Object.values(scrollTimers).forEach(clearTimeout);
+  scrollTimers = {};
+  positioned = {};
+  wheelRemainder = {};
+  wheelLastAt = {};
+  touching.clear();
+}
+
+function scrollToSelected() {
+  for (const type of ["year", "month", "day", ...(props.showTime ? ["hour", "minute"] : [])] as WheelType[]) {
+    positionColumn(type);
+  }
 }
 
 // 确认选择
 function confirm() {
+  syncCalendarDays();
   emit("update:modelValue", formatValue());
   open.value = false;
 }
@@ -337,6 +353,7 @@ watch(open, (value) => {
 });
 
 onBeforeUnmount(() => {
+  clearWheelState();
   document.removeEventListener("mousedown", onDocPointerDown);
   document.removeEventListener("touchstart", onDocPointerDown);
   window.removeEventListener("resize", updatePanelPosition);
@@ -373,7 +390,8 @@ onBeforeUnmount(() => {
               <div class="datetime-picker-wheel">
                 <span class="datetime-wheel-label">年</span>
                 <div class="wheel-scroll-wrapper">
-                  <div ref="wheelYear" class="wheel-scroll" @scroll="onScroll($event, 'year')">
+                  <div ref="wheelYear" class="wheel-scroll"
+                    @pointerdown="startDrag($event, 'year')" @pointermove="moveDrag" @pointerup="endDrag" @pointercancel="endDrag" @lostpointercapture="endDrag" @scroll="onScroll($event, 'year')" @wheel="onWheel($event, 'year')" @touchstart.passive="touching.add('year')" @touchend="endTouch('year')" @touchcancel="endTouch('year')">
                     <div class="datetime-wheel-item" v-for="(y, idx) in getBufferedOptions('year')" :key="`year-${idx}`" :class="{ selected: y === selectedYear }">{{ y }}</div>
                   </div>
                 </div>
@@ -381,7 +399,8 @@ onBeforeUnmount(() => {
               <div class="datetime-picker-wheel">
                 <span class="datetime-wheel-label">月</span>
                 <div class="wheel-scroll-wrapper">
-                  <div ref="wheelMonth" class="wheel-scroll" @scroll="onScroll($event, 'month')">
+                  <div ref="wheelMonth" class="wheel-scroll"
+                    @pointerdown="startDrag($event, 'month')" @pointermove="moveDrag" @pointerup="endDrag" @pointercancel="endDrag" @lostpointercapture="endDrag" @scroll="onScroll($event, 'month')" @wheel="onWheel($event, 'month')" @touchstart.passive="touching.add('month')" @touchend="endTouch('month')" @touchcancel="endTouch('month')">
                     <div class="datetime-wheel-item" v-for="(m, idx) in getBufferedOptions('month')" :key="`month-${idx}`" :class="{ selected: m === selectedMonth }">{{ padZero(m) }}</div>
                   </div>
                 </div>
@@ -389,7 +408,8 @@ onBeforeUnmount(() => {
               <div class="datetime-picker-wheel">
                 <span class="datetime-wheel-label">日</span>
                 <div class="wheel-scroll-wrapper">
-                  <div ref="wheelDay" class="wheel-scroll" @scroll="onScroll($event, 'day')">
+                  <div ref="wheelDay" class="wheel-scroll"
+                    @pointerdown="startDrag($event, 'day')" @pointermove="moveDrag" @pointerup="endDrag" @pointercancel="endDrag" @lostpointercapture="endDrag" @scroll="onScroll($event, 'day')" @wheel="onWheel($event, 'day')" @touchstart.passive="touching.add('day')" @touchend="endTouch('day')" @touchcancel="endTouch('day')">
                     <div class="datetime-wheel-item" v-for="(d, idx) in getBufferedOptions('day')" :key="`day-${idx}`" :class="{ selected: d === selectedDay }">{{ padZero(d) }}</div>
                   </div>
                 </div>
@@ -398,7 +418,8 @@ onBeforeUnmount(() => {
                 <div class="datetime-picker-wheel">
                   <span class="datetime-wheel-label">时</span>
                   <div class="wheel-scroll-wrapper">
-                    <div ref="wheelHour" class="wheel-scroll" @scroll="onScroll($event, 'hour')">
+                    <div ref="wheelHour" class="wheel-scroll"
+                    @pointerdown="startDrag($event, 'hour')" @pointermove="moveDrag" @pointerup="endDrag" @pointercancel="endDrag" @lostpointercapture="endDrag" @scroll="onScroll($event, 'hour')" @wheel="onWheel($event, 'hour')" @touchstart.passive="touching.add('hour')" @touchend="endTouch('hour')" @touchcancel="endTouch('hour')">
                       <div class="datetime-wheel-item" v-for="(h, idx) in getBufferedOptions('hour')" :key="`hour-${idx}`" :class="{ selected: h === selectedHour }">{{ padZero(h) }}</div>
                     </div>
                   </div>
@@ -406,7 +427,8 @@ onBeforeUnmount(() => {
                 <div class="datetime-picker-wheel">
                   <span class="datetime-wheel-label">分</span>
                   <div class="wheel-scroll-wrapper">
-                    <div ref="wheelMinute" class="wheel-scroll" @scroll="onScroll($event, 'minute')">
+                    <div ref="wheelMinute" class="wheel-scroll"
+                    @pointerdown="startDrag($event, 'minute')" @pointermove="moveDrag" @pointerup="endDrag" @pointercancel="endDrag" @lostpointercapture="endDrag" @scroll="onScroll($event, 'minute')" @wheel="onWheel($event, 'minute')" @touchstart.passive="touching.add('minute')" @touchend="endTouch('minute')" @touchcancel="endTouch('minute')">
                       <div class="datetime-wheel-item" v-for="(min, idx) in getBufferedOptions('minute')" :key="`minute-${idx}`" :class="{ selected: min === selectedMinute }">{{ padZero(min) }}</div>
                     </div>
                   </div>

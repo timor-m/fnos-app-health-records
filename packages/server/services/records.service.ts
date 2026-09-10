@@ -64,6 +64,8 @@ import {
   type TrendPlacement,
 } from "../domain/indicator-dictionary/trend-taxonomy";
 import {
+  assessTrendAdmission,
+  assessPersistedObservationReference,
   convertUnit,
   ensureBuiltinIndicatorCatalog,
   isPolicyFilteredNormalization,
@@ -101,7 +103,6 @@ import {
   type ObservationAbnormalStatus,
 } from "./observation-interpretation.service";
 import {
-  assessObservationReference,
   type ObservationReferenceStatus,
 } from "./observation-reference.service";
 import { assessTrendComparability } from "./trend-comparability.service";
@@ -1289,6 +1290,7 @@ export function classifyObservationDisplay(input: {
   unit?: string | null;
   resultText?: string | null;
   manualReviewed?: boolean;
+  trendAdmission?: ReturnType<typeof assessTrendAdmission>;
 }): Pick<Observation, "displayTier" | "displayCategory" | "displayReason"> {
   if (
     input.normalizationQuality === "excluded" ||
@@ -1301,6 +1303,12 @@ export function classifyObservationDisplay(input: {
         input.normalizationExcludedReason ||
         "设备或计算过程参数，不作为家庭健康指标展示",
     };
+  }
+  if (input.trendAdmission?.eligible) {
+    return { displayTier: 'primary', displayCategory: input.trendAdmission.kind === 'standard' ? 'standardized' : 'medical_candidate', displayReason: input.trendAdmission.reason };
+  }
+  if (input.trendAdmission && input.numericValue != null) {
+    return { displayTier: 'secondary', displayCategory: 'medical_candidate', displayReason: input.trendAdmission.reason };
   }
   const hasVerifiableEvidence =
     Array.isArray(input.evidence) &&
@@ -1315,7 +1323,7 @@ export function classifyObservationDisplay(input: {
       );
     });
   const evidenceFailure =
-    /(?:缺少可核验的 OCR 证据|无法回指 OCR 证据|结构化数值与结果文本不一致|参考范围上下界反向)/.test(
+    /(?:缺少可核验的 OCR 证据|(?:项目名称|结果数值|结果单位)无法回指 OCR 证据|结构化数值与结果文本不一致)/.test(
       input.normalizationExcludedReason || "",
     );
   if ((!hasVerifiableEvidence && !input.manualReviewed) || evidenceFailure) {
@@ -1326,7 +1334,7 @@ export function classifyObservationDisplay(input: {
         input.normalizationExcludedReason || "缺少可核验的 OCR 证据",
     };
   }
-  if (["high", "medium"].includes(String(input.normalizationQuality))) {
+  if (!input.trendAdmission && ["high", "medium"].includes(String(input.normalizationQuality))) {
     return {
       displayTier: "primary",
       displayCategory: "standardized",
@@ -1461,7 +1469,7 @@ export function suppressDuplicateMeasurementCandidates(observations: Observation
   const standardizedAnchors = new Set<string>();
   for (const observation of observations) {
     const value = observation.numericValue;
-    if (observation.displayTier !== "primary" || value === null) continue;
+    if (observation.displayTier !== "primary" || !observation.canonicalName || value === null) continue;
     for (const entry of Array.isArray(observation.evidence) ? (observation.evidence as unknown[]) : []) {
       const key = duplicateMeasurementAnchorKey(value, entry);
       if (key) standardizedAnchors.add(key);
@@ -1470,7 +1478,7 @@ export function suppressDuplicateMeasurementCandidates(observations: Observation
   if (!standardizedAnchors.size) return observations;
   return observations.map((observation) => {
     const value = observation.numericValue;
-    if (observation.displayTier !== "secondary" || observation.canonicalName || value === null) {
+    if (observation.displayTier === "governance_only" || observation.canonicalName || value === null) {
       return observation;
     }
     const entries = Array.isArray(observation.evidence) ? (observation.evidence as unknown[]) : [];
@@ -1563,6 +1571,7 @@ export function getReportDetail(
     )
     .all(reportId) as unknown as ReportPage[];
   const detailOcrLineCache = new Map<string, Array<{ id: string; text: string }>>();
+  const admissionReport = row;
   const observations = suppressDuplicateMeasurementCandidates(getDatabase()
     .prepare(
       `
@@ -1578,6 +1587,7 @@ export function getReportDetail(
       n.excluded_reason AS normalizationExcludedReason, n.matched_by AS normalizationMatchedBy,
       c.explanation AS canonicalExplanation, c.reference_range_json AS dictionaryReferenceJson,
       manual_override.id IS NOT NULL AS manualReviewed,
+      EXISTS (SELECT 1 FROM report_extractions e WHERE e.report_id = o.report_id) AS hasAiExtraction,
       COALESCE(manual_override.is_manual_created, 0) AS manualCreated,
       manual_override.canonical_key AS manualCanonicalKey
     FROM observations o
@@ -1592,6 +1602,7 @@ export function getReportDetail(
       const row = item as unknown as Observation & {
         evidenceJson: string;
         normalizationMatchedBy: string | null;
+        hasAiExtraction: number;
         dictionaryReferenceJson: string | null;
       };
       const evidence = parseJson<Array<{ pageNumber?: number; quote?: string; confidence?: number }> | null>(
@@ -1610,12 +1621,11 @@ export function getReportDetail(
         unit: row.unit,
         resultText: row.resultText,
         manualReviewed: Boolean(row.manualReviewed),
+        trendAdmission: assessTrendAdmission({ ...row, reportId, hasAiExtraction: row.hasAiExtraction,
+          hospitalName: admissionReport.hospitalName, reportType: admissionReport.reportType,
+          reportIssuedAt: admissionReport.reportIssuedAt }),
       });
-      const reference = assessObservationReference({
-        low: row.referenceLow,
-        high: row.referenceHigh,
-        text: row.referenceText,
-      });
+      const reference = assessPersistedObservationReference(row);
       const interpretation = assessObservationInterpretation({
         storedFlag: row.abnormalFlag,
         resultText: row.resultText,
@@ -1626,9 +1636,8 @@ export function getReportDetail(
           row.numericValue ?? parseNumericResultText(row.resultText),
         referenceLow: reference.low,
         referenceHigh: reference.high,
-        dictionaryReference: parseDictionaryReferenceRange(
-          row.dictionaryReferenceJson,
-        ),
+        dictionaryReference: reference.status === "missing" && !reference.reason
+          ? parseDictionaryReferenceRange(row.dictionaryReferenceJson) : null,
       });
       const firstEvidence = Array.isArray(evidence) && evidence.length
         ? evidence[0]
@@ -1666,6 +1675,7 @@ export function getReportDetail(
       const {
         normalizationMatchedBy: _normalizationMatchedBy,
         dictionaryReferenceJson: _dictionaryReferenceJson,
+        hasAiExtraction: _hasAiExtraction,
         ...observation
       } = row;
       return {
@@ -5122,6 +5132,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       COALESCE(NULLIF(TRIM(o.normalized_name), ''), o.item_name) AS name,
       o.item_name AS itemName,
       o.section_name AS sectionName,
+      o.item_code AS itemCode,
       o.unit,
       o.result_text AS resultText,
       o.numeric_value AS numericValue,
@@ -5141,11 +5152,15 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       n.confidence AS normalizationConfidence,
       n.match_reason AS normalizationReason,
       n.excluded_reason AS normalizationExcludedReason,
+      n.matched_by AS normalizationMatchedBy,
       c.category AS catalogCategory,
       c.default_unit AS catalogDefaultUnit,
       c.explanation AS catalogExplanation,
+      EXISTS (SELECT 1 FROM report_extractions e WHERE e.report_id = o.report_id) AS hasAiExtraction,
+      EXISTS (SELECT 1 FROM observation_field_overrides v WHERE v.observation_id = o.id) AS manualReviewed,
       c.reference_range_json AS dictionaryReferenceJson,
       r.id AS reportId,
+      r.member_id AS memberId,
       r.title AS reportTitle,
       r.report_type AS reportType,
       r.status AS reportStatus,
@@ -5161,9 +5176,8 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     JOIN member_permissions mp ON mp.member_id = r.member_id AND mp.user_id = ?
     WHERE COALESCE(NULLIF(TRIM(o.normalized_name), ''), NULLIF(TRIM(o.item_name), '')) IS NOT NULL
       AND r.status <> 'trashed'
+      AND r.deleted_at IS NULL
       AND (? IS NULL OR r.member_id = ?)
-      AND n.canonical_key IS NOT NULL
-      AND n.canonical_name IS NOT NULL
       AND n.quality IN ('high', 'medium', 'low', 'excluded')
     ORDER BY COALESCE(${reportDisplayDateSql}, r.created_at), r.id, o.id
   `,
@@ -5171,6 +5185,9 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     .all(user.id, memberId || null, memberId || null) as Array<{
     observationId: string;
     name: string;
+    memberId: string;
+    itemCode: string | null;
+    normalizationMatchedBy: string | null;
     itemName: string;
     sectionName: string | null;
     unit: string | null;
@@ -5195,6 +5212,8 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     catalogCategory: string | null;
     catalogDefaultUnit: string | null;
     catalogExplanation: string | null;
+    hasAiExtraction: number;
+    manualReviewed: number;
     dictionaryReferenceJson: string | null;
     reportId: string;
     reportTitle: string;
@@ -5210,6 +5229,10 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     new Set(rows.map((row) => row.reportId)),
   );
   const enrichedRows = rows.map((row) => {
+    const admission = assessTrendAdmission(row);
+    const rawContext = comparisonContexts.get(row.reportId);
+    const rawMethod = row.method && !/^(?:ai|ocr|manual)$/i.test(row.method.trim()) ? row.method.trim() : rawContext?.method?.trim() || '';
+    const rawSpecimen = rawContext?.specimen?.trim() || '';
     const numericValue =
       row.numericValue ?? parseNumericResultText(row.resultText);
     const usesCanonical = Boolean(
@@ -5221,11 +5244,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     const rawTrendUnit =
       normalizeTrendUnit(row.unit) ||
       inferTrendUnitFromResultText(row.resultText);
-    const reference = assessObservationReference({
-      low: row.referenceLow,
-      high: row.referenceHigh,
-      text: row.referenceText,
-    });
+    const reference = assessPersistedObservationReference(row);
     const trendNumericValue =
       numericValue === null
         ? null
@@ -5279,12 +5298,13 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       // 仅在报告完全没有参考范围时才用字典公认范围兜底；
       // 报告自带范围但单位换算失败时不混用，避免跨单位误判。
       dictionaryReference:
-        reference.low === null && reference.high === null
+        reference.status === "missing" && !reference.reason
           ? parseDictionaryReferenceRange(row.dictionaryReferenceJson)
           : null,
     });
     return {
       ...row,
+      admission,
       abnormalFlag: interpretation.rawFlag,
       reportedAbnormalFlag: interpretation.rawFlag,
       displayAbnormalFlag: interpretation.effectiveFlag,
@@ -5296,16 +5316,16 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       trendNumericValue,
       trendName: usesCanonical
         ? row.canonicalName!
-        : normalizeTrendName(row.name),
-      trendUnit: usesCanonical ? row.canonicalUnit : rawTrendUnit,
+        : row.itemName.normalize('NFKC').trim(),
+      trendUnit: usesCanonical ? row.canonicalUnit : row.unit?.trim() || null,
       trendKey: usesCanonical
         ? row.canonicalKey!
-        : normalizeTrendName(row.name),
+        : `institution:${createHash('sha256').update(JSON.stringify([row.memberId, row.hospitalName?.trim(), row.itemName.normalize('NFKC').trim(), row.sectionName?.trim() || '', row.unit?.trim(), rawMethod, rawSpecimen])).digest('hex')}`,
       trendQuality: usesCanonical ? row.normalizationQuality! : "raw",
       trendConfidence: usesCanonical ? row.normalizationConfidence : null,
       trendReason: usesCanonical
         ? row.normalizationReason
-        : "未归一化，按原始名称和单位保守展示",
+        : `机构内原始数值，未匹配标准字典；${row.hospitalName || ''} · ${rawMethod || '方法未注明'} · ${rawSpecimen || '标本未注明'}`,
       trendCategory: usesCanonical
         ? row.normalizationCategory || row.catalogCategory
         : null,
@@ -5317,7 +5337,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       referenceStatus: trendReferenceStatus,
       referenceReason: trendReferenceReason,
       comparisonMethod:
-        row.method || comparisonContexts.get(row.reportId)?.method || null,
+        admission.kind === 'institution' ? rawMethod || null : row.method || comparisonContexts.get(row.reportId)?.method || null,
       comparisonSpecimen:
         comparisonContexts.get(row.reportId)?.specimen || null,
       trendReferenceText:
@@ -5333,17 +5353,14 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       evidenceTable: observationTableEvidence(row.evidenceJson),
     };
   });
-  /* P0：默认趋势只发布已经稳定归一化的数值指标。原始名、未知项和 low/excluded
-     继续留在治理池或正式序列的 excludedPoints 中，不再生成 raw 趋势。 */
-  const pointsWithEvidence = enrichedRows.filter((row) =>
-    Boolean(
-      row.canonicalKey &&
-      row.canonicalName &&
-      row.trendNumericValue !== null &&
-      row.normalizationQuality &&
-      ["high", "medium"].includes(row.normalizationQuality),
-    ),
-  );
+  const evidenceEntries = (value: string): unknown[] => { const parsed = parseJson<unknown>(value, []); return Array.isArray(parsed) ? parsed : []; };
+  const standardAnchors = new Set(enrichedRows.filter(row => row.admission.kind === 'standard').flatMap(row =>
+    evidenceEntries(row.evidenceJson).map(entry => `${row.reportId}:${duplicateMeasurementAnchorKey(row.numericValue!, entry)}`)));
+  const pointsWithEvidence = enrichedRows.filter(row => row.admission.eligible && !(row.admission.kind === 'institution'
+    && evidenceEntries(row.evidenceJson).some(entry => {
+      const key = duplicateMeasurementAnchorKey(row.numericValue!, entry);
+      return key !== null && standardAnchors.has(`${row.reportId}:${key}`);
+    })));
   const excludedRows = enrichedRows.filter((row) =>
     Boolean(
       row.canonicalKey &&
@@ -5722,9 +5739,10 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
         left.observationId.localeCompare(right.observationId);
       const pointByReport = new Map<string, (typeof group.points)[number]>();
       for (const point of group.points) {
-        const current = pointByReport.get(point.reportId);
+        const key = JSON.stringify([point.reportId, point.comparisonMethod?.trim() || "", point.comparisonSpecimen?.trim() || ""]);
+        const current = pointByReport.get(key);
         if (!current || comparePointPreference(point, current) < 0) {
-          pointByReport.set(point.reportId, point);
+          pointByReport.set(key, point);
         }
       }
       const sortedPoints = [...pointByReport.values()].sort(
@@ -5784,6 +5802,15 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
           memberBirthDate: point.memberBirthDate,
         })),
       );
+      const unverifiedRawContext = group.quality === 'raw' && points.some(point => !point.comparisonMethod || !point.comparisonSpecimen);
+      if (unverifiedRawContext) {
+        comparability.comparable = false;
+        comparability.status = 'insufficient_evidence';
+        comparability.reason = '机构内原始记录：方法或标本未注明，仅展示历次数值，不默认连线或判断涨跌';
+        comparability.changeAssessmentAllowed = false;
+        comparability.latestPairStatus = 'insufficient_evidence';
+        comparability.latestPairReason = comparability.reason;
+      }
       const changeAssessment = assessTrendChange(
         points.map((point) => ({
           observationId: point.observationId,
@@ -5794,7 +5821,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
         })),
         {
           latestComparisonAllowed: comparability.changeAssessmentAllowed,
-          seriesComparisonAllowed: ![
+          seriesComparisonAllowed: !unverifiedRawContext && ![
             "range_drift",
             "condition_mismatch",
           ].includes(comparability.status),
@@ -5829,6 +5856,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       );
       return {
         indicatorKey: group.indicatorKey,
+        kind: group.quality === 'raw' ? 'institution' as const : 'standard' as const,
         name: group.name,
         unit: group.unit,
         pinned: pinnedKeys.has(
@@ -5844,7 +5872,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
         sectionName: metadataRepresentative
           ? metadataRepresentative.sourceSectionName
           : group.sectionName,
-        quality: metadataRepresentative?.normalizationQuality || group.quality,
+        quality: group.quality === 'raw' ? 'raw' : metadataRepresentative?.normalizationQuality || group.quality,
         confidence:
           metadataRepresentative?.normalizationConfidence ?? group.confidence,
         explanation: group.explanation,
@@ -5926,8 +5954,6 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
             sortDate,
             reportType,
             sourceSectionName,
-            comparisonMethod,
-            comparisonSpecimen,
             memberBirthDate,
             ...point
           }) => ({
@@ -5969,7 +5995,9 @@ export function updateTrendPin(
   if (pinned) {
     // 轻量存在性校验：与 listTrendSeries 的发布口径一致（已归一化 high/medium、
     // 规范单位匹配、存在可用数值），避免为一次置顶整算全部趋势。
-    const exists = Boolean(
+    const exists = indicatorKey.startsWith('institution:')
+      ? listTrendSeries(user, memberId).some(series => series.indicatorKey === indicatorKey && (series.unit || '') === unitKey)
+      : Boolean(
       getDatabase()
         .prepare(
           `

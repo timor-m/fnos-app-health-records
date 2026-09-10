@@ -12,9 +12,11 @@ import {
   parseDictionaryReferenceRange
 } from "./observation-interpretation.service";
 import { assertMemberManage } from "./member.service";
+import { assessObservationReference } from "./observation-reference.service";
+import { linkedObservationUnitQuotes } from "./observation-unit-evidence.service";
 
 export function activeIndicatorNormalizationVersion() {
-  return `indicator-normalization-p9-unit-ocr-noise-v1-${activeIndicatorDictionaryVersion()}`;
+  return `indicator-normalization-p10-unit-provenance-v3-${activeIndicatorDictionaryVersion()}`;
 }
 
 function normalizationVersion() {
@@ -42,6 +44,7 @@ type ObservationRow = {
   manualReviewedAt?: string | null;
   reportType: string;
   hospitalName: string | null;
+  reportIssuedAt?: string | null;
   performingDepartment: string | null;
   reportingDepartment: string | null;
 };
@@ -136,6 +139,10 @@ export type BuiltinIndicatorBackfillResult = {
 export type IndicatorNormalizationIssue = {
   fingerprint: string;
   representativeObservationId: string;
+  reportId: string;
+  canManage: boolean;
+  trendEligible: boolean;
+  pendingCount: number;
   rawName: string;
   normalizedName: string | null;
   resultText: string;
@@ -195,6 +202,8 @@ export type IndicatorNormalizationMetrics = {
 
 
 export type IndicatorGovernanceResult = {
+  pending: number;
+  remainingReasons: Array<{ reason: string; count: number }>;
   fingerprint: string;
   action: "confirm" | "exclude";
   affectedObservations: number;
@@ -301,7 +310,9 @@ const indicatorCodePattern = /^[A-Za-z][A-Za-z0-9.+-]{0,15}[#%]?$/;
  * 不移除空腹/餐后、高切/低切、百分比/绝对值等医学条件。
  */
 export function indicatorNameCandidates(value: string | null | undefined) {
-  const raw = (value || "").normalize("NFKC").trim();
+  // Only remove edge footnote markers from lookup candidates; keep persisted source
+  // names, internal operators and measurement qualifiers intact.
+  const raw = (value || "").normalize("NFKC").replace(/^[\s*﹡]+|[\s*﹡]+$/g, "");
   if (!raw) return [];
   const candidates = new Set<string>();
   const add = (candidate: string | null | undefined) => {
@@ -570,7 +581,7 @@ function compactObservationEvidence(value: unknown) {
     .replace(/[（）()，,。.:：;；、|｜\s_]/g, "");
 }
 
-function observationEvidenceQuotes(row: ObservationRow) {
+function observationEvidenceQuotes(row: Pick<ObservationRow, "evidenceJson">) {
   if (typeof row.evidenceJson !== "string") return [];
   try {
     const parsed = JSON.parse(row.evidenceJson) as Array<{ pageNumber?: unknown; quote?: unknown }>;
@@ -717,13 +728,35 @@ function excludedObservationNoise(row: ObservationRow, reason: string): Normaliz
   };
 }
 
+export function assessPersistedObservationReference(row: {
+  referenceLow?: number | null;
+  referenceHigh?: number | null;
+  referenceText?: string | null;
+  evidenceJson?: string;
+  hasAiExtraction?: number;
+  manualReviewed?: number | boolean;
+}) {
+  const reference = assessObservationReference({
+    low: row.referenceLow, high: row.referenceHigh, text: row.referenceText
+  });
+  if (reference.status !== "trusted" || !row.hasAiExtraction || row.manualReviewed) return reference;
+  const numbers = observationEvidenceQuotes(row).flatMap(observationEvidenceNumbers);
+  if ([reference.low, reference.high].some((bound) => bound !== null
+    && !numbers.some((value) => sameObservationEvidenceNumber(value, bound)))) {
+    return {
+      ...reference, low: null, high: null, status: "raw_only" as const,
+      reason: "参考范围无法回指 OCR 证据，已停止用于自动判定"
+    };
+  }
+  return reference;
+}
+
 function observationEvidenceQualityIssue(row: ObservationRow) {
   // 内存待落库项与未经过 AI 持久化链路的历史/手工数据不套用本闸门。
   if (row.evidenceJson === undefined || !row.hasAiExtraction) return null;
   const manuallyReviewed = Boolean(row.manualReviewed);
   const quotes = observationEvidenceQuotes(row);
   if (!quotes.length && !manuallyReviewed) return "缺少可核验的 OCR 证据，禁止进入默认趋势";
-  const compactQuotes = quotes.map(compactObservationEvidence);
   const nameSearchQuotes = quotes.flatMap((quote) => [
     compactObservationEvidence(quote),
     compactIndicatorKey(quote),
@@ -758,19 +791,71 @@ function observationEvidenceQualityIssue(row: ObservationRow) {
   if (!manuallyReviewed && rawUnit) {
     const unitCandidates = [...new Set([rawUnit, normalizeUnit(rawUnit)].filter(Boolean))]
       .map(compactObservationEvidence);
-    if (!compactQuotes.some((quote) => unitCandidates.some((unit) => quote.includes(unit)))) {
+    const containsUnit = (quote: string) => unitCandidates.some(unit => {
+      const escaped = unit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      // A smaller unit token must not match inside another prefix or compound unit (g/L in mg/L).
+      const unitText = quote.split(/[（）()，,。:：;；、|｜]+/).map(compactObservationEvidence).join(' ');
+      return new RegExp(`(?<![a-zµμ])${escaped}(?![a-zµμ/])`, 'i').test(unitText);
+    });
+    const unitAnchored = quotes.some(containsUnit)
+      || linkedObservationUnitQuotes(row.reportId, row.evidenceJson)
+        .some(containsUnit);
+    if (!unitAnchored) {
       return "结果单位无法回指 OCR 证据，禁止进入默认趋势";
     }
   }
-  if (row.referenceLow != null && row.referenceHigh != null && row.referenceLow > row.referenceHigh) {
-    return "参考范围上下界反向，禁止进入默认趋势";
-  }
-  for (const [label, value] of [["下限", row.referenceLow], ["上限", row.referenceHigh]] as const) {
-    if (!manuallyReviewed && value != null && !sourceNumbers.some((source) => sameObservationEvidenceNumber(source, value))) {
-      return `参考范围${label}无法回指 OCR 证据，禁止进入默认趋势`;
-    }
-  }
+  // Reference validity affects interpretation, not the measured point's eligibility.
   return null;
+}
+
+/** Shared admission for report detail and trend publication. Dictionary confidence is not result evidence. */
+export function assessTrendAdmission(input: {
+  reportId: string; itemName: string; itemCode?: string | null; sectionName?: string | null;
+  numericValue: number | null; resultText: string; unit: string | null; evidenceJson: string;
+  normalizationQuality?: string | null; normalizationMatchedBy?: string | null;
+  normalizationExcludedReason?: string | null; canonicalKey?: string | null; canonicalName?: string | null;
+  hasAiExtraction?: number; manualReviewed?: number | boolean;
+  hospitalName?: string | null; reportType?: string; reportIssuedAt?: string | null;
+}) {
+  const deny = (reason: string) => ({ eligible: false, kind: null, reason } as const);
+  if (input.normalizationQuality === 'excluded' || isPolicyFilteredNormalization(input.normalizationMatchedBy || '')) {
+    return deny(input.normalizationExcludedReason || '已排除或不适用数值趋势');
+  }
+  const value = input.numericValue ?? parseNumericResultText(input.resultText);
+  if (value === null || !Number.isFinite(value)) return deny('不是可用的数值结果');
+  const textValue = parseNumericResultText(input.resultText);
+  if (textValue !== null && !sameObservationEvidenceNumber(value, textValue)) {
+    return deny('结构化数值与结果文本不一致，请核对数值和结果文本');
+  }
+  const standard = Boolean(input.canonicalKey && input.canonicalName && ['high', 'medium'].includes(input.normalizationQuality || ''));
+  if (!standard && (input.canonicalKey || input.canonicalName || input.normalizationMatchedBy !== 'none')) {
+    return deny(input.normalizationExcludedReason || '标准身份、单位或结果仍需核对');
+  }
+  const row: ObservationRow = {
+    ...input, numericValue: value, id: '', normalizedName: null, sectionName: input.sectionName || null, itemCode: input.itemCode || null,
+    referenceText: null, reportType: input.reportType || '', hospitalName: input.hospitalName || null,
+    performingDepartment: null, reportingDepartment: null, manualReviewed: input.manualReviewed ? 1 : 0,
+    // Legacy standard records retain their existing admission; unknown records always require evidence or manual review.
+    hasAiExtraction: standard ? input.hasAiExtraction : 1,
+  };
+  const issue = observationEvidenceQualityIssue(row);
+  if (issue) return deny(issue);
+  if (standard) return { eligible: true, kind: 'standard', reason: null } as const;
+  const noise = functionalDeviceObservationExclusionReason(row) || observationNoiseExclusionReason(row);
+  if (noise) return deny(noise);
+  if (!input.hospitalName?.trim()) return deny('未标准化结果需先确认报告机构');
+  if (!Number.isFinite(Date.parse(input.reportIssuedAt || ''))) return deny('请先确认报告日期');
+  if (!input.unit?.trim()) return deny('未标准化结果需先确认单位');
+  if (!/^[-+]?\d+(?:\.\d+)?$/.test(input.resultText.trim()) || Number(input.resultText) !== value) return deny('结果不是明确数值或与结果文本不一致');
+  // Unknown names cannot borrow the standard-name evidence fallback (which tolerates AI synonyms).
+  if (!input.manualReviewed && !observationEvidenceQuotes(row).some(quote => compactObservationEvidence(quote).includes(compactObservationEvidence(input.itemName)))) {
+    return deny('未标准化项目名称无法回指 OCR 证据');
+  }
+  if (!input.manualReviewed && observationEvidenceQuotes(row).some(quote => {
+    const bounds = quote.normalize('NFKC').matchAll(/[<>≤≥]\s*([-+]?\d+(?:\.\d+)?)/g);
+    return [...bounds].some(match => Number(match[1]) === value);
+  })) return deny('OCR 证据包含同值的限值表达，需人工确认是否为实测数值');
+  return { eligible: true, kind: 'institution', reason: '机构内原始数值，未匹配标准字典' } as const;
 }
 
 function canConvertIndicatorUnit(canonicalKey: string, fromUnit: string, toUnit: string) {
@@ -1400,6 +1485,16 @@ function manuallyConfirmedNormalization(
 
 function normalizeObservationWithReadyCatalog(row: ObservationRow): NormalizationResult {
   const automatic = normalizeObservationAutomatically(row);
+  const decision = governanceDecisionForObservation(row);
+  if (decision?.action === "exclude") {
+    return {
+      ...automatic, quality: "excluded", matchedBy: "manual_exclusion",
+      matchReason: decision.reason?.trim() || "管理员已确认该来源项目不进入默认趋势",
+      excludedReason: decision.reason?.trim() || "已由管理员排除",
+      sourceOrigin: "manual_exclusion", sourceName: row.itemName,
+      reviewStatus: "excluded", reviewedBy: decision.createdBy, reviewedAt: decision.reviewedAt
+    };
+  }
   if (row.manualCanonicalKey) {
     const indicator = getDatabase().prepare(`
       SELECT id AS indicatorId, canonical_key AS canonicalKey, display_name AS displayName,
@@ -1430,22 +1525,7 @@ function normalizeObservationWithReadyCatalog(row: ObservationRow): Normalizatio
       reviewedAt: row.manualReviewedAt || new Date().toISOString()
     }, indicator);
   }
-  const decision = governanceDecisionForObservation(row);
   if (!decision) return automatic;
-  if (decision.action === "exclude") {
-    return {
-      ...automatic,
-      quality: "excluded",
-      matchedBy: "manual_exclusion",
-      matchReason: decision.reason?.trim() || "管理员已确认该来源项目不进入默认趋势",
-      excludedReason: decision.reason?.trim() || "已由管理员排除",
-      sourceOrigin: "manual_exclusion",
-      sourceName: row.itemName,
-      reviewStatus: "excluded",
-      reviewedBy: decision.createdBy,
-      reviewedAt: decision.reviewedAt
-    };
-  }
   const indicator = getDatabase().prepare(`
     SELECT id AS indicatorId, canonical_key AS canonicalKey, display_name AS displayName,
       category, default_unit AS defaultUnit, value_type AS valueType,
@@ -1525,6 +1605,8 @@ function refreshDisplayFlagWithDictionaryReference(observationId: string, indica
       o.reference_high AS referenceHigh, o.reference_text AS referenceText,
       o.evidence_json AS evidenceJson,
       o.display_abnormal_flag AS displayAbnormalFlag, o.abnormal_conflict AS abnormalConflict,
+      EXISTS (SELECT 1 FROM report_extractions e WHERE e.report_id = o.report_id) AS hasAiExtraction,
+      EXISTS (SELECT 1 FROM observation_field_overrides v WHERE v.observation_id = o.id) AS manualReviewed,
       c.reference_range_json AS dictionaryReferenceJson
     FROM observations o
     LEFT JOIN indicator_catalog c ON c.id = ?
@@ -1540,9 +1622,13 @@ function refreshDisplayFlagWithDictionaryReference(observationId: string, indica
     displayAbnormalFlag: "high" | "low" | "abnormal" | "normal" | null;
     abnormalConflict: number;
     dictionaryReferenceJson: string | null;
+    hasAiExtraction: number;
+    manualReviewed: number;
   } | undefined;
   if (!row) return;
-  const dictionaryReference = parseDictionaryReferenceRange(row.dictionaryReferenceJson);
+  const reference = assessPersistedObservationReference(row);
+  const dictionaryReference = reference.status === "missing" && !reference.reason
+    ? parseDictionaryReferenceRange(row.dictionaryReferenceJson) : null;
   let supportingText: Array<string | null> = [];
   try {
     const evidence = JSON.parse(row.evidenceJson) as unknown;
@@ -1561,9 +1647,9 @@ function refreshDisplayFlagWithDictionaryReference(observationId: string, indica
     resultText: row.resultText,
     supportingText,
     numericValue: row.numericValue,
-    referenceLow: row.referenceLow,
-    referenceHigh: row.referenceHigh,
-    referenceText: row.referenceText,
+    referenceLow: reference.low,
+    referenceHigh: reference.high,
+    referenceText: reference.text,
     dictionaryReference
   });
   const conflict = derived.abnormalConflict ? 1 : 0;
@@ -1805,6 +1891,7 @@ function observationRowsForReport(reportId: string) {
       (SELECT updated_by FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewedBy,
       (SELECT updated_at FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewedAt,
       r.report_type AS reportType, r.hospital_name_raw AS hospitalName,
+      COALESCE(r.report_issued_at, r.reviewed_at, r.received_at, r.examined_at, r.sampled_at, r.ordered_at) AS reportIssuedAt,
       r.performing_department AS performingDepartment, r.reporting_department AS reportingDepartment
     FROM observations o
     JOIN reports r ON r.id = o.report_id
@@ -2021,6 +2108,50 @@ function migrateTrendPinsFromFullNormalization(snapshot: TrendPinMigrationSnapsh
   return migrated;
 }
 
+export function previewIndicatorNormalization(user: RequestUser) {
+  if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可预览指标重评估" });
+  ensureBuiltinIndicatorCatalog();
+  const db = getDatabase();
+  const reports = db.prepare(`SELECT DISTINCT r.id FROM reports r
+    JOIN observations o ON o.report_id = r.id
+    WHERE r.status <> 'trashed' AND r.deleted_at IS NULL ORDER BY r.id`).all() as Array<{ id: string }>;
+  const existing = new Map((db.prepare(`SELECT observation_id AS id, canonical_key AS canonicalKey,
+    canonical_name AS canonicalName, matched_by AS matchedBy, excluded_reason AS excludedReason,
+    quality FROM observation_normalizations`).all() as Array<{
+      id: string; canonicalKey: string | null; canonicalName: string | null;
+      matchedBy: string; excludedReason: string | null; quality: string;
+    }>).map(row => [row.id, row]));
+  const summary = { scanned: 0, eligible: 0, recovered: 0, removed: 0, pending: 0, excluded: 0 };
+  const reasons = new Map<string, number>();
+  for (const report of reports) {
+    for (const row of observationRowsForReport(report.id)) {
+      // Use exactly the same rules and manual decisions as execution, without upserting results.
+      const next = normalizeObservationWithReadyCatalog(row);
+      const previous = existing.get(row.id);
+      const admissionFor = (result: NonNullable<typeof previous>) => assessTrendAdmission({
+        ...row, evidenceJson: row.evidenceJson || '[]',
+        canonicalKey: result.canonicalKey, canonicalName: result.canonicalName,
+        normalizationQuality: result.quality, normalizationMatchedBy: result.matchedBy,
+        normalizationExcludedReason: result.excludedReason
+      });
+      const wasEligible = previous ? admissionFor(previous).eligible : false;
+      const admission = admissionFor({ ...next, id: row.id });
+      const eligible = admission.eligible;
+      summary.scanned += 1;
+      if (eligible) summary.eligible += 1;
+      if (eligible && !wasEligible) summary.recovered += 1;
+      if (!eligible && wasEligible) summary.removed += 1;
+      if (!eligible) {
+        if (next.quality === "excluded") summary.excluded += 1;
+        else summary.pending += 1;
+        const reason = admission.reason || "指标身份或结果仍需核对";
+        reasons.set(reason, (reasons.get(reason) || 0) + 1);
+      }
+    }
+  }
+  return { ...summary, reasons: [...reasons].map(([reason, count]) => ({ reason, count })) };
+}
+
 export async function normalizeAllObservationsFromDictionary(
   user: RequestUser,
   options?: {
@@ -2226,6 +2357,11 @@ export function listIndicatorNormalizationIssues(user: RequestUser): IndicatorNo
   synchronizeUnmatchedNamePool();
   const rows = getDatabase().prepare(`
     SELECT pool.fingerprint, occurrence.observation_id AS observationId,
+      report.id AS reportId, observation.item_name AS itemName, observation.numeric_value AS numericValue,
+      observation.evidence_json AS evidenceJson,
+      EXISTS (SELECT 1 FROM report_extractions x WHERE x.report_id = report.id) AS hasAiExtraction,
+      EXISTS (SELECT 1 FROM observation_field_overrides x WHERE x.observation_id = observation.id) AS manualReviewed,
+      EXISTS (SELECT 1 FROM member_permissions mp WHERE mp.member_id = report.member_id AND mp.user_id = ? AND mp.permission = 'manager') AS canManage,
       pool.raw_name AS rawName, pool.normalized_name AS normalizedName,
       observation.result_text AS resultText, pool.unit, pool.section_name AS sectionName,
       report.hospital_name_raw AS hospitalName,
@@ -2246,8 +2382,10 @@ export function listIndicatorNormalizationIssues(user: RequestUser): IndicatorNo
     LEFT JOIN indicator_catalog catalog ON catalog.id = normalization.indicator_id
     WHERE pool.status = 'open'
     ORDER BY pool.last_seen_at DESC, report.report_issued_at DESC, occurrence.observation_id
-  `).all() as Array<{
+  `).all(user.id) as Array<{
     fingerprint: string;
+    reportId: string; itemName: string; numericValue: number | null; evidenceJson: string;
+    hasAiExtraction: number; manualReviewed: number; canManage: number;
     observationId: string;
     rawName: string;
     normalizedName: string | null;
@@ -2267,6 +2405,11 @@ export function listIndicatorNormalizationIssues(user: RequestUser): IndicatorNo
   }>;
   const grouped = new Map<string, IndicatorNormalizationIssue>();
   for (const row of rows) {
+    const admission = assessTrendAdmission({ ...row,
+      canonicalKey: row.candidateCanonicalKey, canonicalName: row.candidateCanonicalName,
+      normalizationQuality: row.candidateQuality, normalizationMatchedBy: row.matchedBy,
+      normalizationExcludedReason: row.excludedReason
+    });
     const current = grouped.get(row.fingerprint);
     const status = row.candidateCanonicalKey
       ? row.candidateQuality === "excluded" ? "excluded" : "low"
@@ -2275,6 +2418,8 @@ export function listIndicatorNormalizationIssues(user: RequestUser): IndicatorNo
       grouped.set(row.fingerprint, {
         fingerprint: row.fingerprint,
         representativeObservationId: row.observationId,
+        reportId: row.reportId, canManage: Boolean(row.canManage), trendEligible: admission.eligible,
+        pendingCount: admission.eligible ? 0 : 1,
         rawName: row.rawName,
         normalizedName: row.normalizedName,
         resultText: row.resultText,
@@ -2282,7 +2427,7 @@ export function listIndicatorNormalizationIssues(user: RequestUser): IndicatorNo
         sectionName: row.sectionName,
         hospitalName: row.hospitalName,
         status,
-        reason: row.excludedReason || row.matchReason || "未命中当前核心或远程指标字典",
+        reason: admission.eligible ? "已可用于趋势，标准化为可选操作" : admission.reason || "请核对指标信息",
         count: 1,
         latestReportIssuedAt: row.reportIssuedAt,
         candidateCanonicalKey: row.candidateCanonicalKey,
@@ -2295,13 +2440,18 @@ export function listIndicatorNormalizationIssues(user: RequestUser): IndicatorNo
       continue;
     }
     current.count += 1;
-    if ((row.reportIssuedAt || "") > (current.latestReportIssuedAt || "")) {
+    if (!admission.eligible) current.pendingCount += 1;
+    if ((current.trendEligible && !admission.eligible) || (current.trendEligible === admission.eligible && (row.reportIssuedAt || "") > (current.latestReportIssuedAt || ""))) {
       current.latestReportIssuedAt = row.reportIssuedAt;
       current.representativeObservationId = row.observationId;
+      current.reportId = row.reportId;
+      current.canManage = Boolean(row.canManage);
       current.resultText = row.resultText;
       current.unit = row.unit;
       current.hospitalName = row.hospitalName;
+      current.reason = admission.eligible ? "已可用于趋势，标准化为可选操作" : admission.reason || "请核对指标信息";
     }
+    current.trendEligible = current.trendEligible && admission.eligible;
     if (!current.candidateCanonicalKey && row.candidateCanonicalKey) {
       current.candidateCanonicalKey = row.candidateCanonicalKey;
       current.candidateCanonicalName = row.candidateCanonicalName;
@@ -2310,7 +2460,6 @@ export function listIndicatorNormalizationIssues(user: RequestUser): IndicatorNo
       current.matchedBy = row.matchedBy;
       current.sourceOrigin = row.sourceOrigin || "none";
       current.status = status;
-      current.reason = row.excludedReason || row.matchReason || current.reason;
     }
   }
   return [...grouped.values()]
@@ -2579,11 +2728,22 @@ export function resolveIndicatorNormalizationIssue(
     const rows = observationRowsForIds(occurrenceRows.map((row) => row.observationId));
     let normalized = 0;
     let excluded = 0;
+    const remainingReasons = new Map<string, number>();
     for (const row of rows) {
       const result = normalizeObservationWithReadyCatalog(row);
       upsertNormalization(result);
-      if (result.canonicalKey && ["high", "medium"].includes(result.quality)) normalized += 1;
+      const admission = assessTrendAdmission({
+        ...row, evidenceJson: row.evidenceJson || '[]',
+        canonicalKey: result.canonicalKey, canonicalName: result.canonicalName,
+        normalizationQuality: result.quality, normalizationMatchedBy: result.matchedBy,
+        normalizationExcludedReason: result.excludedReason
+      });
+      if (admission.eligible) normalized += 1;
       if (result.quality === "excluded") excluded += 1;
+      if (!admission.eligible) {
+        const reason = admission.reason || "结果仍需核对";
+        remainingReasons.set(reason, (remainingReasons.get(reason) || 0) + 1);
+      }
     }
     db.prepare(`
       UPDATE indicator_unmatched_names
@@ -2627,6 +2787,8 @@ export function resolveIndicatorNormalizationIssue(
       affectedObservations: rows.length,
       normalized,
       excluded,
+      pending: rows.length - normalized - excluded,
+      remainingReasons: [...remainingReasons].map(([reason, count]) => ({ reason, count })),
       aliasSaved,
       canonicalKey: indicator?.canonicalKey || null
     };

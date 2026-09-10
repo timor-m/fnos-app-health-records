@@ -88,14 +88,17 @@
 
 .wheel-scroll {
   height: 100%;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grab;
   overflow-x: hidden;
   overflow-y: auto;
-  overscroll-behavior-x: none;
+  overscroll-behavior: none;
   touch-action: pan-y;
   padding-block: var(--datetime-wheel-center-offset);
   box-sizing: border-box;
   -webkit-overflow-scrolling: touch;
-  scroll-snap-type: y mandatory;
+  overflow-anchor: none;
   mask-image: linear-gradient(
     to bottom,
     transparent 0%,
@@ -121,7 +124,6 @@
   font-size: 18px;
   color: var(--ink-2, #55554f);
   transition: color .15s, transform .15s;
-  scroll-snap-align: start;
 }
 
 .datetime-wheel-item.selected {
@@ -133,6 +135,7 @@
 /* 滚动条隐藏 */
 .wheel-scroll::-webkit-scrollbar { display: none; }
 .wheel-scroll { scrollbar-width: none; }
+.wheel-scroll:active { cursor: grabbing; }
 
 @media (max-width: 760px) {
   .datetime-picker-layer {

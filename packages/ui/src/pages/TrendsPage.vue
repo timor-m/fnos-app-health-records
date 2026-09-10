@@ -15,6 +15,7 @@ import {
 import BackToTop from "../components/BackToTop.vue";
 import EmptyState from "../components/EmptyState.vue";
 import FormSelect from "../components/FormSelect.vue";
+import IndicatorHint from "../components/IndicatorHint.vue";
 import ImageViewer, { type ImageViewerPage } from "../components/ImageViewer.vue";
 import PullIndicator from "../components/PullIndicator.vue";
 import ReportDetailModal from "../components/ReportDetailModal.vue";
@@ -38,11 +39,8 @@ const attentionFilter = ref<"all" | "attention" | "abnormal" | "near_boundary" |
 const collapsedGroups = ref(new Set<string>());
 const detailPopoverStyle = ref<Record<string, string>>({});
 const detailPopoverPlacement = ref<"above" | "below">("below");
-const noticePopoverStyle = ref<Record<string, string>>({});
-const noticePopoverPlacement = ref<"above" | "below">("below");
 const previewReportId = ref<string | null>(null);
 const activeDetailKey = ref<string | null>(null);
-const activeNoticeKey = ref<string | null>(null);
 const pinPendingKeys = ref(new Set<string>());
 // 仅管理员可见：指标问题池待治理组数，0 表示无待办或非管理员
 const adminIssueCount = ref(0);
@@ -222,12 +220,15 @@ async function load(memberId: string, silent = false) {
   if (!silent) loading.value = true;
   loadError.value = "";
   closeDetails();
-  try { series.value = await request(`trends?memberId=${encodeURIComponent(memberId)}`); }
+  try {
+    const result = await request<TrendSeries[]>(`trends?memberId=${encodeURIComponent(memberId)}`);
+    if (app.selectedMemberId.value === memberId) series.value = result;
+  }
   catch (cause) {
-    if (!silent) loadError.value = cause instanceof Error ? cause.message : "指标趋势加载失败";
+    if (!silent && app.selectedMemberId.value === memberId) loadError.value = cause instanceof Error ? cause.message : "指标趋势加载失败";
     throw cause;
   }
-  finally { if (!silent) loading.value = false; }
+  finally { if (!silent && app.selectedMemberId.value === memberId) loading.value = false; }
 }
 
 function compareTrendSeries(left: TrendSeries, right: TrendSeries) {
@@ -366,7 +367,7 @@ function qualityLabel(value: TrendSeries["quality"]) {
     medium: "中可信",
     low: "低可信",
     excluded: "未纳入",
-    raw: "原始展示"
+    raw: "机构内 · 未标准化"
   }[value] || "原始展示";
 }
 
@@ -590,19 +591,10 @@ function detailsOpen(item: TrendSeries) {
   return activeDetailKey.value === seriesKey(item);
 }
 
-function noticeOpen(item: TrendSeries) {
-  return activeNoticeKey.value === seriesKey(item);
-}
-
-function closeNotice() {
-  activeNoticeKey.value = null;
-  noticePopoverStyle.value = {};
-}
 
 function closeDetails() {
   activeDetailKey.value = null;
   detailPopoverStyle.value = {};
-  closeNotice();
 }
 
 function popoverAnchorFrame(event: MouseEvent) {
@@ -653,19 +645,6 @@ function toggleDetails(item: TrendSeries, event: MouseEvent) {
   activeDetailKey.value = key;
 }
 
-function toggleNotice(item: TrendSeries, event: MouseEvent) {
-  const key = seriesKey(item);
-  if (activeNoticeKey.value === key) {
-    closeNotice();
-    return;
-  }
-
-  const frame = popoverAnchorFrame(event);
-  closeDetails();
-  noticePopoverPlacement.value = frame.placement;
-  noticePopoverStyle.value = frame.style;
-  activeNoticeKey.value = key;
-}
 
 function openReport(reportId: string) {
   closeDetails();
@@ -706,6 +685,7 @@ const { pullDistance, refreshing } = usePullRefresh(root, async () => {
 });
 
 watch(() => app.selectedMemberId.value, (memberId) => {
+  series.value = [];
   if (!memberId) return;
   load(memberId).catch(() => {});
 }, { immediate: true });
@@ -780,7 +760,7 @@ onDeactivated(() => {
       <p v-if="hasActiveFilters" class="trend-filter-summary">{{ filterSummary }}</p>
       <RouterLink v-if="adminIssueCount > 0" class="trend-admin-issue-entry" to="/me/maintenance/indicator-issues">
         <CircleAlert :size="16" />
-        <span>{{ adminIssueCount }} 组指标未进入趋势，待治理</span>
+        <span>{{ adminIssueCount }} 组指标可核对或补充标准化</span>
         <ChevronRight :size="16" />
       </RouterLink>
       <EmptyState
@@ -823,6 +803,7 @@ onDeactivated(() => {
                 <em class="trend-delta" :class="deltaClass(item)">{{ deltaText(item) }}</em>
               </div>
               <span>{{ item.pointCount }} 个数据点 · {{ item.unit || "无单位" }} · {{ qualityLabel(item.quality) }}</span>
+              <small v-if="item.kind === 'institution'" class="trend-match-alias">{{ item.points[0]?.hospitalName }} · {{ item.points[0]?.comparisonMethod || '方法未注明' }} · {{ item.points[0]?.comparisonSpecimen || '标本未注明' }}</small>
               <small v-if="matchingAlias(item)" class="trend-match-alias">匹配名称：{{ matchingAlias(item) }}</small>
             </div>
             <button
@@ -847,17 +828,7 @@ onDeactivated(() => {
                 {{ trendStatusLabel(item) }}<template v-if="item.latestIntervalDays !== null"> · {{ intervalLabel(item.latestIntervalDays) }}</template>
               </small>
               <div class="trend-detail-popover-wrap">
-                <button
-                  v-if="collapsedNotices(item).length"
-                  class="trend-notice-toggle"
-                  type="button"
-                  :aria-expanded="noticeOpen(item)"
-                  :aria-label="`${item.name}有 ${collapsedNotices(item).length} 条提示，点击查看`"
-                  :title="`${collapsedNotices(item).length} 条提示`"
-                  @click="toggleNotice(item, $event)"
-                >
-                  <CircleAlert :size="14" />
-                </button>
+                <IndicatorHint v-if="collapsedNotices(item).length" :text="collapsedNotices(item).map(notice => notice.text).join('\n')" :label="`${item.name}的指标提示`" />
                 <button
                   class="trend-detail-toggle"
                   type="button"
@@ -934,37 +905,13 @@ onDeactivated(() => {
                     </div>
                   </section>
                 </Teleport>
-                <Teleport to="body">
-                  <div v-if="noticeOpen(item)" class="trend-detail-popover-backdrop" @click="closeNotice"></div>
-                  <section
-                    v-if="noticeOpen(item)"
-                    class="trend-normalization-popover trend-notice-popover"
-                    :class="`placement-${noticePopoverPlacement}`"
-                    :style="noticePopoverStyle"
-                    role="dialog"
-                    aria-label="指标提示"
-                    @click.stop
-                  >
-                    <header class="trend-normalization-popover-header">
-                      <strong>提示</strong>
-                      <button type="button" title="关闭" aria-label="关闭提示" @click="closeNotice">
-                        <X :size="17" />
-                      </button>
-                    </header>
-                    <div v-for="notice in collapsedNotices(item)" :key="notice.text">
-                      <p>
-                        <small class="trend-notice-item" :class="notice.cls">{{ notice.text }}</small>
-                      </p>
-                    </div>
-                  </section>
-                </Teleport>
               </div>
             </div>
             <div class="trend-chart-scroll">
               <div class="trend-chart-canvas" :style="{ minWidth: trendChartMinWidth(item) }">
                 <svg class="trend-sparkline" viewBox="0 0 100 96" preserveAspectRatio="none" aria-hidden="true">
                   <line x1="4" y1="64" x2="96" y2="64" />
-                  <polyline :points="trendChartPolyline(item)" />
+                  <polyline v-if="item.kind !== 'institution' || item.comparable" :points="trendChartPolyline(item)" />
                 </svg>
                 <button
                   v-for="chartPoint in trendChartPoints(item)"

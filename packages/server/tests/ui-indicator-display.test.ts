@@ -179,8 +179,8 @@ test("trend UI prioritizes comparability notices and avoids duplicate detail exp
   assert.match(source, /function collapsedNotices\(item: TrendSeries\)/);
   assert.match(source, /item\.comparabilityStatus === "condition_mismatch"/);
   assert.doesNotMatch(source, /collapsedNotices[\s\S]{0,600}range_drift/);
-  assert.match(source, /class="trend-notice-toggle"/);
-  assert.match(source, /class="trend-normalization-popover trend-notice-popover"/);
+  assert.match(source, /<IndicatorHint v-if="collapsedNotices\(item\)\.length"/);
+  assert.doesNotMatch(source, /class="trend-normalization-popover trend-notice-popover"/);
   assert.match(source, /function showMultiPointTrendDetail\(item: TrendSeries\)/);
   assert.match(source, /function abnormalContinuityDetail\(item: TrendSeries\)/);
   assert.match(source, /item\.attentionReason !== item\.abnormalContinuityReason/);

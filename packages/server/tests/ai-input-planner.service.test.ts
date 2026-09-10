@@ -2657,6 +2657,7 @@ test("inherits the actual previous-page table-header source ids", () => {
   assert.equal(fact.sourceMap.result.headerText, "本次结果");
   assert.equal(fact.sourceMap.unit?.headerText, "单位");
   assert.equal(fact.sourceMap.reference?.headerText, "参考范围");
+  assert.equal(rebuilt[1].lines.find(line => line.text.startsWith('甘油三酯'))?.tableHeaderSourcePageNumber, 1);
 });
 
 test("locally extracts exact dictionary names with a parenthesized code", () => {
@@ -4732,5 +4733,55 @@ test("overview depth packs scalar pages under doubled limits", () => {
     assert.ok(
       unit.characterCount <= aiInputPlanningPolicy.targetCharacters * 2,
     );
+  }
+});
+
+test("reconstructs two-line table names with one result and retains cell sources", () => {
+  for (const resultTop of [30, 37, 44]) {
+    for (const [firstName, secondName] of [["低密度脂蛋", "白胆固醇"], ["低密度脂蛋白胆固", "醇"]]) {
+    const rebuilt = rebuildOcrPages([{
+      pageId: "wrapped-table", pageNumber: 1,
+      linesJson: JSON.stringify([
+        { id: "name-a", text: firstName, box: [10, 30, 110, 40] },
+        { id: "name-b", text: secondName, box: [10, 44, 90, 54] },
+        { id: "value", text: "2.50", box: [150, resultTop, 180, resultTop + 10] },
+        { id: "unit", text: "mmol/L", box: [210, resultTop, 255, resultTop + 10] },
+        { id: "range", text: "0-3.40", box: [280, resultTop, 325, resultTop + 10] },
+        { id: "next-name", text: "甘油三酯", box: [10, 70, 100, 80] },
+        { id: "next-value", text: "1.20", box: [150, 70, 180, 80] },
+      ]),
+    }]);
+    const row = rebuilt[0].lines.find((line) => line.text.startsWith("低密度脂蛋白胆固醇"));
+    assert.ok(row, `result top ${resultTop}`);
+    assert.equal(row.text, "低密度脂蛋白胆固醇 | 2.50 | mmol/L | 0-3.40");
+    assert.deepEqual(row.sourceCells[0].sourceLineIds, ["name-a", "name-b"]);
+    assert.deepEqual(row.sourceCells[1].sourceLineIds, ["value"]);
+    assert.ok(rebuilt[0].lines.some((line) => line.text === "甘油三酯 | 1.20"));
+    }
+  }
+});
+
+test("leaves ambiguous or unsupported wrapped table names unchanged", () => {
+  const base = [
+    { id: "a", text: "低密度脂蛋", box: [10, 30, 110, 40] },
+    { id: "b", text: "白胆固醇", box: [10, 44, 90, 54] },
+    { id: "v", text: "2.50", box: [150, 37, 180, 47] },
+  ];
+  const cases = [
+    [...base, { id: "other-value", text: "3.20", box: [220, 37, 250, 47] }],
+    [...base, { id: "next-value", text: "1.20", box: [150, 48, 180, 58] }],
+    [...base, { id: "header", text: "项目", box: [10, 41, 90, 43] }],
+    base.map((line) => line.id === "b" ? { ...line, box: [10, 60, 90, 70] } : line),
+    base.map((line) => line.id === "b" ? { ...line, box: [45, 44, 125, 54] } : line),
+    base.map((line) => line.id === "b" ? { ...line, text: "未知片段" } : line),
+    base.map((line) => line.id === "v" ? { ...line, box: [] } : line),
+    base.slice(0, 2),
+    [base[0], { ...base[1], text: "参考范围" }, base[2]],
+  ];
+  for (const [index, lines] of cases.entries()) {
+    const rebuilt = rebuildOcrPages([{
+      pageId: "ambiguous-table", pageNumber: 1, linesJson: JSON.stringify(lines),
+    }]);
+    assert.ok(rebuilt[0].lines.every((line) => !line.id.includes("table_name_wrap_")), `case ${index}`);
   }
 });

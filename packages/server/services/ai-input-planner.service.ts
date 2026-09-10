@@ -147,6 +147,7 @@ export type PlannedOcrLine = {
   reportSectionName?: string | null;
   tableHeaderText?: string | null;
   tableHeaderSourceLineIds?: string[];
+  tableHeaderSourcePageNumber?: number | null;
   expectedLocalObservationCount?: number;
 };
 
@@ -1929,11 +1930,77 @@ function repairDetachedMeasurementValueRows(
   return repaired;
 }
 
+/* 只恢复两行项目名与右侧单一数值，不推断多结果表或任意合并单元格。
+ * 在视觉分行前拼接名称，保留两段原始来源；结果、单位和范围仍走原有坐标分行。
+ */
+function mergeWrappedTableNames(
+  lines: PlannedOcrLine[],
+  aliases: PreparedDictionaryAliases,
+) {
+  const positioned = lines.map((line) => ({ line, rect: boxRect(line.box) }));
+  const pairs: Array<{ first: PlannedOcrLine; second: PlannedOcrLine; box: number[] }> = [];
+  for (const { line: first, rect: a } of positioned) {
+    if (!a || first.boundary || !/^[\p{L}]{2,}$/u.test(first.text.trim())) continue;
+    for (const { line: second, rect: b } of positioned) {
+      if (!b || second.boundary || !/^[\p{L}]+$/u.test(second.text.trim())) continue;
+      const height = Math.min(rectHeight(a), rectHeight(b));
+      if (
+        height <= 0 || b.top < a.bottom || b.top - a.bottom > height * 0.7 ||
+        Math.abs(a.left - b.left) > height * 0.6 ||
+        horizontalOverlap(a, b) < 0.7
+      ) continue;
+      const facts = exactDictionaryFactsForName(first.text.trim() + second.text.trim(), aliases);
+      if (facts.length !== 1) continue;
+      const firstFacts = exactDictionaryFactsForName(first.text, aliases);
+      const secondFacts = exactDictionaryFactsForName(second.text, aliases);
+      if (
+        (firstFacts.length && secondFacts.length) ||
+        firstFacts.some((fact) => fact.canonicalKey !== facts[0].canonicalKey)
+      ) continue;
+      const right = Math.max(a.right, b.right);
+      const band = positioned.filter(({ line, rect }) =>
+        line !== first && line !== second && rect &&
+        rect.bottom > a.top && rect.top < b.bottom,
+      );
+      // 项目列有其它文字或结果跨出名称高度时，无法可靠恢复。
+      if (band.some(({ rect }) => rect!.left < right + height * 0.5)) continue;
+      const values = band.filter(({ line }) => isStrictVisualNumericCell(line));
+      if (values.length !== 1) continue;
+      const value = values[0].rect!;
+      if (value.top < a.top || value.bottom > b.bottom) continue;
+      // 结果必须是项目名右侧第一列；拒绝预测值/实测值等多个纯数值列。
+      if (band.some(({ rect }) => rect!.left < value.left)) continue;
+      pairs.push({ first, second, box: [a.left, a.top, right, b.bottom] });
+    }
+  }
+  const unambiguous = pairs.filter((pair) =>
+    pairs.every((other) => other === pair ||
+      ![other.first, other.second].some((line) => line === pair.first || line === pair.second)),
+  );
+  const consumed = new Set(unambiguous.map((pair) => pair.second));
+  return lines.filter((line) => !consumed.has(line)).map((line) => {
+    const pair = unambiguous.find((candidate) => candidate.first === line);
+    if (!pair) return line;
+    return {
+      ...line,
+      id: `table_name_wrap_${line.id}_${pair.second.id}`,
+      text: line.text.trim() + pair.second.text.trim(),
+      sourceLineIds: [...line.sourceLineIds, ...pair.second.sourceLineIds],
+      box: pair.box,
+      confidence: line.confidence === null || pair.second.confidence === null
+        ? null : Math.min(line.confidence, pair.second.confidence),
+    };
+  });
+}
+
 function reconstructPageLayout(
   lines: PlannedOcrLine[],
   aliases: PreparedDictionaryAliases,
   unitPattern: RegExp,
 ) {
+  if (lines.every((line) => boxRect(line.box))) {
+    lines = mergeWrappedTableNames(lines, aliases);
+  }
   /* 每行坐标只解析一次；行包围盒随行合并增量维护，避免排序和行匹配里重复 boxRect。 */
   const rects = lines.map((line) => boxRect(line.box));
   const positioned = rects.filter((rect) => rect !== null);
@@ -2125,6 +2192,7 @@ type PageLineContext = {
   narrativeActive: boolean;
   tableHeader: string[] | null;
   tableHeaderCells: PlannedOcrCell[] | null;
+  tableHeaderSourcePageNumber?: number | null;
   contentRegion: OcrContentRole | null;
   pageNumber: number | null;
   endedWithCandidate: boolean;
@@ -4682,6 +4750,7 @@ function annotatePageLines(
   let narrativeActive = false;
   let tableHeader = inheritContext ? previous.tableHeader : null;
   let tableHeaderCells = inheritContext ? previous.tableHeaderCells : null;
+  let tableHeaderSourcePageNumber = inheritContext ? previous.tableHeaderSourcePageNumber : null;
   let contentRegion = inheritContext ? previous.contentRegion : null;
   const annotated = lines.map((line): PlannedOcrLine => {
     let role = line.role;
@@ -4701,6 +4770,7 @@ function annotatePageLines(
     } else if (line.boundary === "table_header") {
       tableHeader = splitTableCells(line.text);
       tableHeaderCells = line.sourceCells;
+      tableHeaderSourcePageNumber = pageNumber;
       narrativeActive = false;
       contentRegion = isReferenceGuidanceRow(line.text, unitPattern)
         ? "reference"
@@ -4850,6 +4920,7 @@ function annotatePageLines(
       sectionName,
       reportSectionName: reportSection,
       tableHeaderText: tableHeader?.join(" | ") || null,
+      tableHeaderSourcePageNumber: tableHeader ? tableHeaderSourcePageNumber : null,
       tableHeaderSourceLineIds: tableHeaderCells
         ? [...new Set(tableHeaderCells.flatMap((cell) => cell.sourceLineIds))]
         : [],
@@ -4887,6 +4958,7 @@ function annotatePageLines(
       tableHeaderCells,
       contentRegion,
       pageNumber,
+      tableHeaderSourcePageNumber: tableHeader ? tableHeaderSourcePageNumber : null,
       endedWithCandidate:
         lastCandidateIndex >= 0 &&
         !hasLaterBoundary &&

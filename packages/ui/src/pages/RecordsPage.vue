@@ -8,6 +8,7 @@ import EmptyState from "../components/EmptyState.vue";
 import FormSelect from "../components/FormSelect.vue";
 import PullIndicator from "../components/PullIndicator.vue";
 import ReportDetail from "../components/ReportDetail.vue";
+import ReportDetailSheet from "../components/ReportDetailSheet.vue";
 import { request } from "../utils/api";
 import type { CursorPage, ReportDetail as ReportDetailType, ReportSummary, ReportSummaryStats } from "../types/api";
 import { useAppContext } from "../composables/useAppContext";
@@ -413,21 +414,8 @@ useRefreshOnActivate(() => { void reloadList(); });
       </section>
     </div>
 
-    <Teleport to="body">
-      <div v-if="mobileDetailOpen && selected" class="sheet-backdrop report-detail-sheet-backdrop" @click.self="closeMobileDetail">
-        <section class="sheet-panel report-detail-sheet">
-          <span class="sheet-grabber"></span>
-          <ReportDetail
-            :report-id="selectedId"
-            :summary="selected"
-            variant="floating"
-            @updated="reloadList"
-            @close="closeMobileDetail"
-            @open-candidate="openDuplicateCandidate"
-          />
-        </section>
-      </div>
-    </Teleport>
+    <ReportDetailSheet v-if="mobileDetailOpen && selected" :report-id="selectedId" :summary="selected"
+      @updated="reloadList" @close="closeMobileDetail" @open-candidate="openDuplicateCandidate" />
     <BackToTop />
   </div>
 </template>

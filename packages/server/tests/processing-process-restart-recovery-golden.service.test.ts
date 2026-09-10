@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
+import { schemaVersion } from "../database/schema.ts";
 import type { RequestUser } from "../domain/request-user.ts";
 import {
   getProcessingJobEventDetail,
@@ -627,7 +628,7 @@ test("recovers OCR, AI units, persisted extraction, and orphaned report state ac
       const schema = getDatabase()
         .prepare("SELECT MAX(version) AS version FROM schema_migrations")
         .get() as { version: number };
-      assert.equal(schema.version, 16);
+      assert.equal(schema.version, schemaVersion);
     });
   } finally {
     if (previousConcurrency === undefined) {

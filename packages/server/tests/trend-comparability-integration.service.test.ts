@@ -105,6 +105,13 @@ test("keeps points while governing cross-report range and condition drift", () =
     assert.equal(ck.pointCount, 2);
     assert.equal(ck.comparabilityStatus, "condition_mismatch");
     assert.equal(ck.changeAssessmentAllowed, false);
+
+    db.prepare("UPDATE observations SET method = 'fixture method a' WHERE id = 'compare-ck-new-point'").run();
+    insertObservation.run('compare-ck-method-b', 'compare-ck-new', '生化检验', '肌酸激酶', '肌酸激酶', '120', 120, 'U/L', 40, 200, '40-200', 'fixture method b');
+    normalizeReportObservations('compare-ck-new');
+    const multiMethod = listTrendSeries(manager, 'trend-comparability-member').find(item => item.indicatorKey === 'laboratory_ck');
+    assert.equal(multiMethod?.points.filter(point => point.reportId === 'compare-ck-new').length, 2, 'different methods within a report must survive deduplication');
+    assert.deepEqual(multiMethod?.points.filter(point => point.reportId === 'compare-ck-new').map(point => point.comparisonMethod).sort(), ['fixture method a', 'fixture method b']);
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;
