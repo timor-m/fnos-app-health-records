@@ -18,4 +18,4 @@ dictionary/remote/manifest.json
 .dictionary-pages/
 secrets/
 .docker-test-data/
-reports/
+/reports/
