@@ -1,11 +1,25 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { getDatabase } from "../database/client";
 import { getAppConfig } from "../utils/runtime-config";
 import { getJobRunnerStatus } from "./job-runner.service";
 
 let installing = false;
+function tableEnhancementAvailable(storageDir: string) {
+  try {
+    const root = join(storageDir, "ocr-table");
+    const active = JSON.parse(readFileSync(join(root, "active.json"), "utf8"));
+    return active.revision === "rapid-table-3.0.2-layout-1.2.1-v1"
+      && /^runtime-[\w-]+$/.test(active.directory)
+      && existsSync(join(root, active.directory, "bin/python"))
+      && Object.keys(active.modelHashes || {}).length >= 2
+      && Object.entries(active.modelHashes).every(([name, digest]) =>
+        /^lib\/python[\d.]+\/site-packages\/rapid_(table|layout)\/models\/[\w.-]+\.onnx$/.test(name)
+        && createHash("sha256").update(readFileSync(join(root, active.directory, name))).digest("hex") === digest);
+  } catch { return false; }
+}
 let installLastOutputAt: string | null = null;
 let installHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -110,7 +124,7 @@ function readLogTail(path: string, maxLines = 80) {
 
 function readInstallStatus(): OcrInstallStatus {
   const config = getAppConfig();
-  const path = installStatusPath(config.storageDir);
+  const path = installStatusPath(config.runtimeDir);
   const logPath = installLogPath(config.logDir);
   let status: OcrInstallStatus = { state: "idle", logPath };
   if (existsSync(path)) {
@@ -191,7 +205,7 @@ export function saveOcrInstallSettings(input: Partial<OcrInstallSettings>) {
 
 function writeInstallStatus(status: OcrInstallStatus) {
   const config = getAppConfig();
-  const path = installStatusPath(config.storageDir);
+  const path = installStatusPath(config.runtimeDir);
   const { logTail: _logTail, ...persisted } = status;
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
@@ -266,6 +280,7 @@ export function getOcrStatus() {
   }
   return {
     available,
+    tableEnhancementAvailable: tableEnhancementAvailable(config.runtimeDir),
     installing,
     workerScript: config.ocrWorkerScript,
     pythonBin: config.ocrPythonBin,
@@ -290,12 +305,13 @@ export function installOcrRuntime() {
   writeInstallStatus({ state: "installing", startedAt, logPath });
   appendInstallLog(`${startedAt} [info] OCR runtime installation started\n`);
   startInstallHeartbeat(startedAt);
-  const child = spawn("sh", [config.ocrSetupScript], {
+  const child = spawn("sh", [join(dirname(config.ocrSetupScript), "upgrade-runtime.sh")], {
     detached: false,
     stdio: ["ignore", "pipe", "pipe"],
     env: {
       ...process.env,
-      STORAGE_DIR: config.storageDir,
+      STORAGE_DIR: config.runtimeDir,
+      OCR_PYTHON_BIN: config.ocrPythonBin,
       ...(pipIndexUrl ? { PIP_INDEX_URL: pipIndexUrl } : {})
     }
   });

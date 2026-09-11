@@ -2,8 +2,197 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 15,
+  "revision": 19,
   "indicators": [
+    {
+      "canonicalKey": "lipid_ldl_hdl_ratio",
+      "displayName": "低密度脂蛋白胆固醇/高密度脂蛋白胆固醇比值",
+      "categoryKey": "lipids",
+      "order": 43,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "ratio",
+      "aliases": [
+        "低密度脂蛋白/高密度脂蛋白比值",
+        "低密度脂蛋白胆固醇/高密度脂蛋白胆固醇比值",
+        "LDL-C/HDL-C",
+        "LDL/HDL比值",
+        "LDL/HDL ratio"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "血脂",
+        "生化"
+      ],
+      "explanation": "原报告明确给出的 LDL-C 与 HDL-C 比值，无量纲；不同于总胆固醇/HDL-C 比值和动脉硬化指数，不由系统自行计算。"
+    },
+    {
+      "canonicalKey": "cardiac_lvidd",
+      "displayName": "左室舒张末期内径",
+      "categoryKey": "functional_measurement",
+      "order": 52,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mm",
+      "unitDimension": "length",
+      "aliases": [
+        "左室舒张末期内径",
+        "舒张期左室前后径",
+        "左心室舒张末期内径",
+        "LVIDd",
+        "LVEDD"
+      ],
+      "allowedUnits": [
+        "mm",
+        "cm"
+      ],
+      "sectionHints": [
+        "心脏彩超",
+        "超声心动图",
+        "心脏超声"
+      ],
+      "explanation": "超声心动图中的左心室舒张末期内径；不与收缩期内径、左室容积或体表面积校正后的指数合并，应按原报告测量方法观察。"
+    },
+    {
+      "canonicalKey": "lipid_non_hdl_c",
+      "displayName": "非高密度脂蛋白胆固醇",
+      "categoryKey": "lipids",
+      "order": 30,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "other",
+      "aliases": [
+        "非高密度脂蛋白胆固醇",
+        "非高密度脂蛋白胆固醇测定",
+        "non-HDL-C",
+        "non HDL cholesterol"
+      ],
+      "allowedUnits": [
+        "mmol/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "血脂",
+        "生化"
+      ],
+      "explanation": "非高密度脂蛋白胆固醇，不等同于低密度脂蛋白胆固醇。保留原报告单位，mmol/L 与 mg/dL 分开观察，不直接合并数值。"
+    },
+    {
+      "canonicalKey": "c_peptide_postprandial_2h",
+      "displayName": "餐后2小时C肽",
+      "categoryKey": "glucose_metabolism",
+      "order": 30,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "other",
+      "aliases": [
+        "餐后2小时C肽",
+        "C肽餐后2小时",
+        "餐后2小时C-肽",
+        "餐后2hC肽",
+        "C肽(餐后2小时)"
+      ],
+      "allowedUnits": [
+        "ng/mL",
+        "μg/L",
+        "nmol/L",
+        "pmol/L"
+      ],
+      "sectionHints": [
+        "糖代谢",
+        "胰岛功能",
+        "C肽释放试验"
+      ],
+      "explanation": "明确标注餐后2小时的C肽结果，保留原报告单位与试验条件；不与空腹、其他时间点或未注明时间的C肽合并。"
+    },
+    {
+      "canonicalKey": "insulin_postprandial_2h",
+      "displayName": "餐后2小时胰岛素",
+      "categoryKey": "glucose_metabolism",
+      "order": 31,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "other",
+      "aliases": [
+        "餐后2小时胰岛素",
+        "胰岛素餐后2小时",
+        "餐后2h胰岛素",
+        "胰岛素(餐后2小时)"
+      ],
+      "allowedUnits": [
+        "μIU/mL",
+        "mIU/L",
+        "pmol/L"
+      ],
+      "sectionHints": [
+        "糖代谢",
+        "胰岛功能",
+        "胰岛素释放试验"
+      ],
+      "explanation": "明确标注餐后2小时的胰岛素结果，保留原报告单位与试验条件；不与空腹、其他时间点或未注明时间的胰岛素合并，不作跨方法通用换算。"
+    },
+    {
+      "canonicalKey": "tumor_des_gamma_carboxy_prothrombin",
+      "displayName": "异常凝血酶原",
+      "categoryKey": "laboratory_other",
+      "order": 81,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mAU/mL",
+      "unitDimension": "other",
+      "aliases": [
+        "异常凝血酶原",
+        "血清异常凝血酶原",
+        "脱γ羧基凝血酶原",
+        "DCP",
+        "PIVKA-II"
+      ],
+      "allowedUnits": [
+        "mAU/mL"
+      ],
+      "sectionHints": [
+        "肿瘤标志物",
+        "肝癌标志物"
+      ],
+      "explanation": "异常凝血酶原定量结果，不同检测方法的结果不能直接互换；mAU/mL 与 ng/mL 不作通用换算，应按原报告的方法、单位和参考范围观察。"
+    },
+    {
+      "canonicalKey": "inflammation_procalcitonin",
+      "displayName": "降钙素原",
+      "categoryKey": "laboratory_other",
+      "order": 82,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "ng/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "降钙素原",
+        "血清降钙素原",
+        "降钙素原(PCT)",
+        "Procalcitonin"
+      ],
+      "allowedUnits": [
+        "ng/mL",
+        "μg/L"
+      ],
+      "sectionHints": [
+        "感染",
+        "炎症",
+        "感染标志物"
+      ],
+      "explanation": "降钙素原定量结果，应结合原报告参考范围和临床背景观察；不同于血常规中的血小板压积，也不同于降钙素。"
+    },
     {
       "canonicalKey": "tumor_afp",
       "displayName": "甲胎蛋白",
@@ -18,6 +207,7 @@
         "AFP",
         "甲胎蛋白",
         "甲胎蛋白测定",
+        "甲胎蛋白测定(定量)",
         "甲胎蛋白AFP",
         "甲胎蛋白(AFP)(发光法-定量)"
       ],
@@ -45,6 +235,7 @@
         "CEA",
         "癌胚抗原",
         "癌胚抗原测定",
+        "癌胚抗原测定(定量)",
         "癌胚抗原CEA",
         "癌胚抗原(CEA)(发光法-定量)"
       ],
@@ -177,7 +368,8 @@
       "aliases": [
         "NSE",
         "神经元特异性烯醇化酶",
-        "神经元特异性烯醇化酶测定"
+        "神经元特异性烯醇化酶测定",
+        "神经元特异烯醇化酶"
       ],
       "allowedUnits": [
         "ng/mL",
@@ -2022,6 +2214,7 @@
       "unitDimension": "categorical",
       "aliases": [
         "尿液颜色",
+        "尿颜色",
         "尿色",
         "尿液颜色(UCO)",
         "UCO"
@@ -2342,7 +2535,8 @@
         "CA-125",
         "糖类抗原125",
         "糖类抗原 125",
-        "糖链抗原CA125"
+        "糖链抗原CA125",
+        "糖链抗原125测定"
       ],
       "allowedUnits": [
         "U/mL",
@@ -3995,6 +4189,78 @@
   ],
   "extensions": [
     {
+      "canonicalKey": "cbc_monocyte_percentage",
+      "aliases": [
+        "单核细胞百分数"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ]
+    },
+    {
+      "canonicalKey": "thyroid_ft3",
+      "aliases": [
+        "血清游离三碘甲状原氨酸",
+        "血清游离三碘甲状腺原氨酸"
+      ],
+      "sectionHints": [
+        "甲功",
+        "甲状腺"
+      ]
+    },
+    {
+      "canonicalKey": "thyroid_ft4",
+      "aliases": [
+        "血清游离甲状腺素"
+      ],
+      "sectionHints": [
+        "甲功",
+        "甲状腺"
+      ]
+    },
+    {
+      "canonicalKey": "thyroid_tsh",
+      "aliases": [
+        "血清促甲状腺激素"
+      ],
+      "sectionHints": [
+        "甲功",
+        "甲状腺"
+      ]
+    },
+    {
+      "canonicalKey": "thyroid_t4_total",
+      "aliases": [
+        "血清甲状腺素"
+      ],
+      "sectionHints": [
+        "甲功",
+        "甲状腺"
+      ]
+    },
+    {
+      "canonicalKey": "thyroid_t3_total",
+      "aliases": [
+        "血清三碘甲状原氨酸",
+        "血清三碘甲状腺原氨酸"
+      ],
+      "sectionHints": [
+        "甲功",
+        "甲状腺"
+      ]
+    },
+    {
+      "canonicalKey": "ophthalmology_intraocular_pressure_right",
+      "aliases": [
+        "眼压-右眼"
+      ],
+      "sectionHints": [
+        "眼科",
+        "眼压"
+      ]
+    },
+    {
       "canonicalKey": "urine_wbc",
       "aliases": [
         "白细胞"
@@ -4054,7 +4320,8 @@
     {
       "canonicalKey": "cbc_eosinophil_percentage",
       "aliases": [
-        "嗜酸细胞百分比"
+        "嗜酸细胞百分比",
+        "嗜酸性粒细胞百分数"
       ],
       "sectionHints": [
         "血常规",
@@ -4078,7 +4345,8 @@
     {
       "canonicalKey": "cbc_basophil_percentage",
       "aliases": [
-        "嗜碱细胞百分比"
+        "嗜碱细胞百分比",
+        "嗜碱性粒细胞百分数"
       ],
       "sectionHints": [
         "血常规",

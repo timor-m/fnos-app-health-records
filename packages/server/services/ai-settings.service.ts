@@ -7,12 +7,14 @@ import { writeLog } from "../utils/logger";
 import { getAppConfig } from "../utils/runtime-config";
 import {
   aiProviderCatalog,
+  isMiniMaxM2Model,
   aiProviderHasRequiredApiKey,
   normalizeAiProvider,
   resolveAiTemperature,
   type AiProviderKey
 } from "./ai-provider";
 import { listAiTasks, type AiTaskKey } from "./ai-task-registry";
+import { aiVisionProbeImageUrl } from "./ai-vision-probe";
 import { executeAiChatCompletion } from "./ai-runtime.service";
 
 const settingKey = "ai.provider";
@@ -570,7 +572,7 @@ function applyProfileInput(
   const apiKey = submittedKey || (raw.clearApiKey === true ? "" : existing?.apiKey || "");
   const visionEnabled = raw.visionEnabled === undefined ? existing?.visionEnabled === true : raw.visionEnabled === true;
   const visionModel = String(raw.visionModel ?? existing?.visionModel ?? defaults.visionModel).trim();
-  if (provider === "minimax" && visionEnabled) {
+  if (isMiniMaxM2Model(visionModel) && visionEnabled) {
     throw createError({ statusCode: 400, statusMessage: "MiniMax M2 系列当前不支持视觉增强，请关闭视觉增强" });
   }
   if (visionEnabled && !visionModel) {
@@ -721,10 +723,10 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
   const apiKey = typeof input.apiKey === "string" && input.apiKey.trim() ? input.apiKey.trim() : current.apiKey;
   const textModel = String(input.textModel || current.textModel).trim();
   const testVision = input.testVision === true;
-  if (provider === "minimax" && testVision) {
+  const model = testVision ? String(input.visionModel || current.visionModel).trim() : textModel;
+  if (isMiniMaxM2Model(model) && testVision) {
     throw createError({ statusCode: 400, statusMessage: "MiniMax M2 系列当前不支持图片输入，请使用文本模型测试" });
   }
-  const model = testVision ? String(input.visionModel || current.visionModel).trim() : textModel;
   if ((aiProviderHasRequiredApiKey(provider) && !apiKey) || !model) {
     throw createError({
       statusCode: 400,
@@ -749,7 +751,7 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
         content: testVision
           ? [
               { type: "text", text: "Reply with OK if you can read this image." },
-              { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/Sc7u7QAAAABJRU5ErkJggg==" } }
+              { type: "image_url", image_url: { url: aiVisionProbeImageUrl } }
             ]
           : testStructuredOutput ? "只返回 JSON 对象：{\"ok\":true}" : "reply ok"
       }],

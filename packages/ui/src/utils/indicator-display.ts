@@ -1,3 +1,21 @@
+/** Only actionable data-quality notices belong behind the attention icon. */
+export function observationAttentionHint(input: {
+  displayTier: string; displayCategory: string; displayReason: string | null;
+  normalizationExcludedReason: string | null; abnormalConflict: boolean;
+  abnormalStatus: string; abnormalReason: string | null;
+  referenceStatus: string; referenceReason: string | null;
+}) {
+  const reasons: Array<string | null> = [];
+  if (input.displayTier !== 'primary' && input.displayCategory !== 'qualitative_finding') {
+    reasons.push(input.displayReason || input.normalizationExcludedReason || '指标仍需核对');
+  }
+  if (input.abnormalConflict || input.abnormalStatus === 'conflict') {
+    reasons.push(input.abnormalReason || '报告异常标记与数值或参考范围不一致，请核对');
+  }
+  if (input.referenceStatus === 'raw_only') reasons.push(input.referenceReason || '参考范围尚未核实，仅保留原文');
+  return [...new Set(reasons.map(reason => reason?.trim()).filter(Boolean))].join('\n');
+}
+
 export type ObservationAbnormalDisplayInput = {
   displayAbnormalFlag: "high" | "low" | "abnormal" | "normal" | null;
   abnormalStatus: "reported" | "computed" | "conflict" | "unresolved";

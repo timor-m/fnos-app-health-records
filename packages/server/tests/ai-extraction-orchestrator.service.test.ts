@@ -132,6 +132,59 @@ async function withReport(
   }
 }
 
+test('paired project groups accept their own AI results and reject cross-group substitutions', async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const raw = [
+      ['项目名称', '', '结果', '单位', '参考区间', '项目名称', '结果', '单位', '参考区间'],
+      ['合成项目甲', '【深圳HR】', '12', 'U/L', '0-30', '合成项目乙', '24', 'mg/L', '0-40'],
+    ].flatMap((cells, row) => cells.flatMap((text, column) => text ? [{
+      id: `row-${row}-${column}`, text, confidence: .99,
+      box: [column * 200, row * 40, column * 200 + 100, row * 40 + 20],
+      tableCell: { table: 'table_0', row, column, columns: 9 },
+    }] : []));
+    getDatabase().prepare('UPDATE ocr_results SET lines_json = ?').run(JSON.stringify(raw));
+    const executor: AiExecutor = async () => ({
+      provider: 'test', model: 'test', promptVersion: 'test',
+      ...normalizeAiExtraction({ observations: [
+        { itemName: '合成项目甲', resultText: '12', numericValue: 12, unit: 'U/L', evidence: [{ pageNumber: 1, quote: '合成项目甲 12 U/L' }] },
+        { itemName: '合成项目乙', resultText: '24', numericValue: 24, unit: 'mg/L', evidence: [{ pageNumber: 1, quote: '合成项目乙 24 mg/L' }] },
+        { itemName: '合成项目甲', resultText: '24', numericValue: 24, unit: 'U/L', evidence: [{ pageNumber: 1, quote: '合成项目甲 24 U/L' }] },
+      ] }),
+      rawResponseJson: '{}', promptTokens: 1, completionTokens: 1, elapsedMs: 1,
+    });
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    assert.equal(execution.result.fields.observations.length, 2);
+    assert.ok((execution.result.evidenceValidation?.rejectedObservations || 0) >= 1);
+    assert.equal(execution.result.fields.observations.find(item => item.itemName === '合成项目甲')?.numericValue, 12);
+  });
+});
+
+test('recovered header rows pass evidence validation but reference substitutions do not', async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const raw = [
+      ['缩写', '项目名称', '结果', '单位', '参考区间', '方法学'],
+      ...Array.from({ length: 20 }, (_, i) => [`S${i}`, `合成检测项${i}`, String(i + 1), 'U/L', '0-99', '方法甲']),
+    ].flatMap((cells, row) => cells.map((text, column) => ({
+      id: `row-${row}-${column}`, text, confidence: .99, tableUnsafe: true,
+      box: [column * 200, row * 40, column * 200 + 100, row * 40 + 20],
+    })));
+    getDatabase().prepare('UPDATE ocr_results SET lines_json = ?').run(JSON.stringify(raw));
+    const executor: AiExecutor = async () => ({
+      provider: 'test', model: 'test', promptVersion: 'test',
+      ...normalizeAiExtraction({ observations: [
+        ...Array.from({ length: 20 }, (_, i) => ({ itemName: `合成检测项${i}`, resultText: String(i + 1), numericValue: i + 1, unit: 'U/L',
+          evidence: [{ pageNumber: 1, quote: `合成检测项${i} ${i + 1} U/L` }] })),
+        { itemName: '合成检测项0', resultText: '99', numericValue: 99, unit: 'U/L', evidence: [{ pageNumber: 1, quote: '合成检测项0 0-99' }] },
+      ] }),
+      rawResponseJson: '{}', promptTokens: 1, completionTokens: 1, elapsedMs: 1,
+    });
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    assert.equal(execution.result.fields.observations.length, 20);
+    assert.ok((execution.result.evidenceValidation?.rejectedObservations || 0) >= 1);
+    assert.equal(execution.result.fields.observations.some(item => item.numericValue === 99), false);
+  });
+});
+
 function resultForInput(text: string, index: number): AiExtractionResult {
   const pages = [...text.matchAll(/\[第 (\d+) 页\]/g)].map((match) => Number(match[1]));
   const normalized = normalizeAiExtraction({
@@ -644,7 +697,7 @@ test("repairs observation values, rejects date fragments, and withholds reversed
   assert.equal(sanitized[0].evidence.length, 1);
 });
 
-test("repairs damaged CBC OCR values and conservatively completes one missing differential percentage", () => {
+test("preserves uncertain OCR without guessing units, values or missing differential percentages", () => {
   const evidence = (quote: string) => [{ pageNumber: 1, quote }];
   const base = {
     sectionName: "血常规五分类检验报告单",
@@ -742,23 +795,14 @@ test("repairs damaged CBC OCR values and conservatively completes one missing di
   ]);
   const byName = new Map(sanitized.map((item) => [item.itemName, item]));
 
-  assert.equal(byName.get("啫碱性粒细胞百分比(BASO%)")?.resultText, "0.8");
-  assert.equal(byName.get("啫碱性粒细胞百分比(BASO%)")?.numericValue, 0.8);
-  assert.equal(byName.get("啫碱性粒细胞百分比(BASO%)")?.abnormalFlag, null);
-  assert.equal(byName.get("血红蛋白浓度(HGB)")?.unit, "g/L");
-  assert.equal(byName.get("红细胞压积(HCT)")?.unit, "L/L");
-  assert.equal(byName.has("血小板体积分布宽度(PDVW)"), false);
+  assert.equal(byName.get("啫碱性粒细胞百分比(BASO%)")?.resultText, "8'0");
+  assert.equal(byName.get("啫碱性粒细胞百分比(BASO%)")?.numericValue, null);
+  assert.equal(byName.get("啫碱性粒细胞百分比(BASO%)")?.abnormalFlag, "high");
+  assert.equal(byName.get("血红蛋白浓度(HGB)")?.unit, "9/L");
+  assert.equal(byName.get("红细胞压积(HCT)")?.unit, null);
+  assert.equal(byName.has("血小板体积分布宽度(PDVW)"), true);
   const neutrophil = byName.get("中性粒细胞百分比(NEUT%)");
-  assert.equal(neutrophil?.numericValue, 39.3);
-  assert.equal(neutrophil?.resultText, "39.3↓");
-  assert.equal(neutrophil?.unit, "%");
-  assert.equal(neutrophil?.referenceLow, 40);
-  assert.equal(neutrophil?.referenceHigh, 75);
-  assert.equal(neutrophil?.abnormalFlag, "low");
-  assert.equal(
-    neutrophil?.method,
-    "calculated:differential_percentage_complement",
-  );
+  assert.equal(neutrophil, undefined);
 });
 
 test("repairs embedded numeric names and report-level qualitative headings safely", () => {
@@ -1762,6 +1806,24 @@ test("treats a checkup summary as redundant when the detailed local table has th
     "项目 | 本次结果 | 参考值 | 历史结果",
     "体重指数BMI | 24.9 ↑ | 18.5~23.9 | 24.8 ↑"
   ]);
+});
+
+test("validates actual result column after abbreviation with an abnormal flag header", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const executor: AiExecutor = async () => ({
+      provider: "test", model: "test", promptVersion: "test",
+      ...normalizeAiExtraction({ reportType: "laboratory", observations: [{
+        itemName: "尿比重", resultText: "1.015", numericValue: 1.015,
+        evidence: [{ pageNumber: 1, quote: "尿比重 | SG | 1.015 | | | 1.005-1.030" }],
+      }] }),
+      rawResponseJson: "{}", promptTokens: 10, completionTokens: 5, elapsedMs: 1,
+    });
+    const plan = buildAiExtractionPlan(reportId);
+    assert.equal(plan.pages[0].lines.find(line => line.text.startsWith("尿比重"))?.tableHeaderText,
+      "项目名称 | 缩写 | 结果 | 单位 | 异常 | 参考范围");
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    assert.ok(execution.result.fields.observations.some(item => item.itemName === "尿比重" && item.numericValue === 1.015));
+  }, () => ["【尿常规】", "项目名称 | 缩写 | 结果 | 单位 | 异常 | 参考范围", "尿比重 | SG | 1.015 | | | 1.005-1.030"]);
 });
 
 test("processes every omission candidate when one page contains more than thirty rows", async () => {

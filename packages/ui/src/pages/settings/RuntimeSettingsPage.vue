@@ -8,6 +8,7 @@ import { useAppContext } from "../../composables/useAppContext";
 
 type OcrStatus = {
   available: boolean;
+  tableEnhancementAvailable?: boolean;
   installing: boolean;
   runtime?: {
     createdAt?: string;
@@ -226,13 +227,13 @@ onActivated(syncStatusPolling);
           v-if="app.session.value?.isAdmin"
           class="header-action"
           type="button"
-          :disabled="ocr?.available || ocr?.installing"
+          :disabled="(ocr?.available && ocr?.tableEnhancementAvailable) || ocr?.installing"
           @click="installOcr"
         >
           <LoaderCircle v-if="ocr?.installing" class="spin-icon" :size="17" />
           <CheckCircle2 v-else-if="ocr?.available" :size="17" />
           <Download v-else :size="17" />
-          {{ ocr?.available ? "OCR 已安装" : ocr?.installing ? "正在安装" : "安装 OCR 环境" }}
+          {{ ocr?.installing ? "正在安装" : ocr?.available ? (ocr?.tableEnhancementAvailable ? "OCR 已安装" : "升级 OCR · 表格增强") : "安装 OCR 环境" }}
         </button>
       </header>
       <div class="status-grid">

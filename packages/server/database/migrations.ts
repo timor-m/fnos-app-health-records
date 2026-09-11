@@ -409,17 +409,28 @@ export const databaseMigrations: DatabaseMigration[] = [
     version: 17,
     name: "add_institution_trend_projects",
     checksum: "manual:017-institution-trend-projects",
-    up: (db) => { db.exec(institutionTrendSchemaSql); }
-  },
-  {
-    version: 18,
-    name: "add_institution_trend_auto_rules",
-    checksum: "manual:018-institution-trend-auto-rules",
-    up: (db) => { db.exec(institutionTrendRuleSchemaSql); }
+    up: (db) => {
+      db.exec(institutionTrendSchemaSql);
+      db.exec(institutionTrendRuleSchemaSql);
+      db.exec(uploadReceiptSchemaSql);
+    }
   }
 ];
 
 export const latestSchemaVersion = databaseMigrations[databaseMigrations.length - 1]?.version ?? 0;
+
+export const uploadReceiptSchemaSql = `
+CREATE TABLE IF NOT EXISTS upload_receipts (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  request_key TEXT NOT NULL,
+  member_id TEXT NOT NULL REFERENCES health_members(id) ON DELETE CASCADE,
+  content_hash TEXT NOT NULL,
+  report_id TEXT REFERENCES reports(id) ON DELETE SET NULL,
+  response_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(user_id, request_key)
+);
+`;
 
 export const institutionTrendRuleSchemaSql = `
 CREATE TABLE IF NOT EXISTS institution_trend_auto_rules (

@@ -8,6 +8,7 @@ import RemindersPage from "./pages/RemindersPage.vue";
 import SettingsPage from "./pages/SettingsPage.vue";
 import MembersSettingsPage from "./pages/settings/MembersSettingsPage.vue";
 import RuntimeSettingsPage from "./pages/settings/RuntimeSettingsPage.vue";
+import StorageSettingsPage from './pages/settings/StorageSettingsPage.vue';
 import AiSettingsPage from "./pages/settings/AiSettingsPage.vue";
 import TrashSettingsPage from "./pages/settings/TrashSettingsPage.vue";
 import DataAuditSettingsPage from "./pages/settings/DataAuditSettingsPage.vue";
@@ -45,6 +46,7 @@ const router = createRouter({
     { path: "/me/ai-audit", component: AiAuditSettingsPage, meta: { title: "AI 审计", requiresAdmin: true } },
     { path: "/me/system-logs", component: SystemLogsSettingsPage, meta: { title: "系统日志", requiresAdmin: true } },
     { path: "/me/maintenance", component: MaintenanceSettingsPage, meta: { title: "维护工具", requiresAdmin: true } },
+    { path: '/me/storage', component: StorageSettingsPage, meta: { title: '存储设置', requiresAdmin: true, requiresArchiveStorage: true } },
     { path: "/me/maintenance/indicators", component: IndicatorManagementSettingsPage, meta: { title: "指标管理", requiresAdmin: true } },
     { path: "/me/maintenance/indicator-issues", component: IndicatorIssuesSettingsPage, meta: { title: "指标问题池", requiresAdmin: true } },
     { path: "/me/maintenance/indicator-dictionary", component: IndicatorDictionarySettingsPage, meta: { title: "指标字典", requiresAdmin: true } },
@@ -59,6 +61,7 @@ const router = createRouter({
 router.beforeEach(async (to) => {
   const app = useAppContext();
   if (!app.session.value) await app.load();
+  if (to.meta.requiresArchiveStorage && !['fnos', 'development'].includes(app.session.value?.authMode || '')) return '/me';
   if (to.meta.requiresLocalAccount && app.session.value?.provider !== "local") return "/me";
   if (!to.meta.requiresAdmin) return true;
   if (app.session.value?.isAdmin) return true;

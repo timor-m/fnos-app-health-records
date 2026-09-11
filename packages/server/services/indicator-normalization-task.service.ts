@@ -4,6 +4,7 @@ import { isAdministrator, type RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 import { writeLog } from "../utils/logger";
 import { getAppConfig } from "../utils/runtime-config";
+import { storageMigrationPaused } from '../utils/storage-migration-state';
 import {
   normalizeAllObservationsFromDictionary,
   type IndicatorNormalizationMaintenanceResult
@@ -253,6 +254,7 @@ async function executeTask(row: TaskRow) {
 async function drainTasks() {
   let processed = 0;
   while (true) {
+    if (getAppConfig().storageError || storageMigrationPaused()) break;
     const task = claimNextTask();
     if (!task) break;
     await executeTask(task);
@@ -270,6 +272,8 @@ export function runIndicatorNormalizationTasks() {
   });
   return runnerPromise;
 }
+
+export function isStorageNormalizationActive() { return Boolean(runnerPromise); }
 
 export function kickIndicatorNormalizationTaskRunner() {
   if (runnerPromise || runnerKickTimer) return;

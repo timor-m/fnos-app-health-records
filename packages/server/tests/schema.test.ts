@@ -65,7 +65,7 @@ test("initializes the health records schema with WAL", () => {
       assert.equal(duplicateDecisionColumns.some((column) => column.name === columnName), true, `missing duplicate decision column ${columnName}`);
       assert.equal(duplicateHistoryColumns.some((column) => column.name === columnName), true, `missing duplicate history column ${columnName}`);
     }
-    assert.equal(schemaVersion, 18);
+    assert.equal(schemaVersion, 17);
     const organizationIndex = db.prepare(`
       SELECT name FROM sqlite_master
       WHERE type = 'index' AND name = 'reports_organization_idx'
@@ -143,7 +143,7 @@ test("migrates an existing v1 database to PDF source page columns", () => {
     ]) {
       assert.equal(normalizationColumns.some((column) => column.name === columnName), true, `missing column ${columnName}`);
     }
-    assert.equal(schemaVersion, 18);
+    assert.equal(schemaVersion, 17);
     const upgrades = getDatabase().prepare("SELECT COUNT(*) AS count FROM app_upgrade_history WHERE status = 'completed'").get() as
       { count: number };
     assert.equal(upgrades.count, 1);
@@ -482,6 +482,8 @@ test("rejects unreleased v17-v19 metadata until explicitly repaired into the fin
   mkdirSync(join(storageDir, "db"), { recursive: true });
   const legacy = new DatabaseSync(databasePath);
   legacy.exec(schemaSql);
+  legacy.exec('DROP TABLE institution_trend_projects');
+  legacy.exec('DROP TABLE upload_receipts');
   legacy.exec("DROP TABLE indicator_governance_history");
   legacy.exec("DROP TABLE indicator_governance_decisions");
   legacy.exec("DROP TABLE report_duplicate_decisions");
@@ -601,6 +603,8 @@ test("repairs unreleased schema from the maintenance page flow with backup and d
   mkdirSync(join(storageDir, "db"), { recursive: true });
   const legacy = new DatabaseSync(databasePath);
   legacy.exec(schemaSql);
+  legacy.exec('DROP TABLE institution_trend_projects');
+  legacy.exec('DROP TABLE upload_receipts');
   for (let version = 1; version <= 19; version += 1) {
     legacy.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(version);
   }

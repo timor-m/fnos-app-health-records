@@ -1,3 +1,4 @@
+import { inflateSync } from "node:zlib";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,7 +15,7 @@ import {
 } from "../services/ai-settings.service.ts";
 import { isAiExtractionConfigured } from "../services/ai-extraction.service.ts";
 import { executeAiTask } from "../services/ai-task.service.ts";
-import { aiProviderCatalog } from "../services/ai-provider.ts";
+import { aiProviderCatalog, isMiniMaxM2Model } from "../services/ai-provider.ts";
 
 async function withDatabase(run: () => Promise<void> | void) {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-ai-settings-"));
@@ -462,7 +463,7 @@ test("keeps MiniMax configuration independent and validates structured text outp
   });
 });
 
-test("rejects visual enhancement for the MiniMax preset", async () => {
+test("rejects visual enhancement for MiniMax M2 models", async () => {
   await withDatabase(async () => {
     assert.throws(
       () => saveAiSettings({
@@ -477,7 +478,7 @@ test("rejects visual enhancement for the MiniMax preset", async () => {
       }
     );
     await assert.rejects(
-      () => testAiConnection({ provider: "minimax", testVision: true }),
+      () => testAiConnection({ provider: "minimax", testVision: true, visionModel: "MiniMax-M2.7" }),
       (error: unknown) => {
         const value = error as { status?: number; statusText?: string; message?: string };
         return value.status === 400 && `${value.statusText} ${value.message}`.includes("不支持图片输入");
@@ -691,5 +692,83 @@ test("defaults extraction depth to overview while preserving an explicit detaile
     assert.equal(resolveAiExtractionDepth(), "detailed");
     saveAiSettings({ provider: "deepseek" });
     assert.equal(resolveAiExtractionDepth(), "detailed");
+  });
+});
+
+
+test("allows MiniMax M3 vision with an M2 text model", async () => {
+  await withDatabase(async () => {
+    const saved = saveAiSettings({
+      provider: "minimax", apiKey: "minimax-test-key",
+      textModel: "MiniMax-M2.7", visionModel: "MiniMax-M3", visionEnabled: true
+    });
+    assert.equal(saved.visionEnabled, true);
+    assert.equal(saved.visionModel, "MiniMax-M3");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      assert.equal(body.model, "MiniMax-M3");
+      assert.ok(body.messages.some((message: { content: unknown }) =>
+        Array.isArray(message.content) && message.content.some((part: { type: string }) => part.type === "image_url")));
+      return new Response(JSON.stringify({ choices: [{ message: { content: "red" } }] }), {
+        status: 200, headers: { "content-type": "application/json" }
+      });
+    };
+    try {
+      await testAiConnection({ provider: "minimax", testVision: true, visionModel: "MiniMax-M3" });
+    } finally { globalThis.fetch = originalFetch; }
+  });
+});
+
+
+test("identifies only MiniMax M2 model names as text-only", () => {
+  for (const model of ["MiniMax-M2", "MiniMax-M2.7", " minimax-m2.5-highspeed ", "MiniMaxAI/MiniMax-M2.7"]) {
+    assert.equal(isMiniMaxM2Model(model), true, model);
+  }
+  for (const model of ["MiniMax-M3", "MiniMax-M3-highspeed", "MiniMax-M20", "MiniMax-VL-01", "", "qwen-vl"]) {
+    assert.equal(isMiniMaxM2Model(model), false, model);
+  }
+});
+
+
+test("saves and sends image input to DeepSeek multimodal models", async () => {
+  await withDatabase(async () => {
+    for (const model of ["deepseek-flash", "deepseek-v4.1-flash"]) {
+    const saved = saveAiSettings({
+      provider: "deepseek", apiKey: "deepseek-test-key",
+      textModel: model, visionModel: model, visionEnabled: true
+    });
+    assert.equal(saved.visionEnabled, true);
+    const originalFetch = globalThis.fetch;
+    let imageSent = false;
+    globalThis.fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      assert.equal(body.model, model);
+      imageSent = body.messages.some((message: { content: unknown }) =>
+        Array.isArray(message.content) && message.content.some((part: { type: string }) => part.type === "image_url"));
+      const image = body.messages[0].content.find((part: { type: string }) => part.type === "image_url");
+      const png = Buffer.from(image.image_url.url.split(",")[1], "base64");
+      assert.equal(png.readUInt32BE(16), 32);
+      assert.equal(png.readUInt32BE(20), 32);
+      const chunks: Buffer[] = [];
+      for (let offset = 8; offset < png.length;) {
+        const length = png.readUInt32BE(offset);
+        if (png.toString("ascii", offset + 4, offset + 8) === "IDAT") {
+          chunks.push(png.subarray(offset + 8, offset + 8 + length));
+        }
+        offset += length + 12;
+      }
+      const pixels = inflateSync(Buffer.concat(chunks));
+      assert.equal(pixels.length, 32 * (1 + 32 * 3));
+      assert.deepEqual([...pixels.subarray(0, 4)], [0, 255, 0, 0]);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] }), {
+        status: 200, headers: { "content-type": "application/json" }
+      });
+    };
+    try {
+      await testAiConnection({ provider: "deepseek", testVision: true });
+      assert.equal(imageSent, true);
+    } finally { globalThis.fetch = originalFetch; }
+    }
   });
 });

@@ -14,9 +14,9 @@ import {
   type ProcessingJobBatchSource, type ProcessingJobQueuedDetail
 } from "./processing-job-batches.service";
 
-const maxFileCount = 24;
+const maxFileCount = 1000;
 const maxFileBytes = 40 * 1024 * 1024;
-const maxTotalBytes = 200 * 1024 * 1024;
+const maxTotalBytes = 2 * 1024 * 1024 * 1024;
 const pipelineVersion = "upload-v1";
 
 export type UploadInputFile = {
@@ -205,9 +205,13 @@ function createValidatedUpload(
   user: RequestUser,
   memberId: string,
   validated: ValidatedUploadFile[],
-  source: "browser_upload" | "nas_import"
+  source: "browser_upload" | "nas_import",
+  requestKey?: string
 ) {
   assertMemberManage(user, memberId);
+  if (requestKey !== undefined && (typeof requestKey !== 'string' || !/^[a-zA-Z0-9_-]{16,100}$/.test(requestKey))) {
+    throw createError({ statusCode: 400, statusMessage: "上传请求编号无效" });
+  }
   const reportTitle = "待识别报告";
   const reportId = createId("report");
   const relativeDirectory = join("reports", memberId, reportId);
@@ -234,6 +238,18 @@ function createValidatedUpload(
     });
 
     db.exec("BEGIN IMMEDIATE");
+    const contentHash = createHash('sha256').update(JSON.stringify({ memberId, source, files: prepared.map(page => [page.sha256, page.originalName, page.rotation]) })).digest('hex');
+    if (requestKey) {
+      const previous = db.prepare('SELECT member_id, content_hash, report_id, response_json FROM upload_receipts WHERE user_id = ? AND request_key = ?').get(user.id, requestKey) as
+        { member_id: string; content_hash: string; report_id: string | null; response_json: string } | undefined;
+      if (previous) {
+        if (previous.member_id !== memberId || previous.content_hash !== contentHash) throw createError({ statusCode: 409, statusMessage: '重试内容与原上传不一致，请重新创建上传任务' });
+        if (!previous.report_id) throw createError({ statusCode: 409, statusMessage: '该上传对应的报告已删除，请重新创建上传任务' });
+        db.exec('COMMIT');
+        rmSync(absoluteDirectory, { recursive: true, force: true });
+        return JSON.parse(previous.response_json) as UploadCreated;
+      }
+    }
     db.prepare(`
       INSERT INTO reports (id, member_id, created_by, report_type, title, status)
       VALUES (?, ?, ?, 'other', ?, 'queued')
@@ -283,8 +299,7 @@ function createValidatedUpload(
       fileCount: prepared.length,
       totalBytes: prepared.reduce((sum, page) => sum + page.fileSize, 0)
     }));
-    db.exec("COMMIT");
-    return {
+    const result = {
       reportId,
       memberId,
       status: "queued" as const,
@@ -295,6 +310,9 @@ function createValidatedUpload(
         id, pageNumber, originalName, mimeType, fileSize, rotation
       }))
     };
+    if (requestKey) db.prepare('INSERT INTO upload_receipts (user_id, request_key, member_id, content_hash, report_id, response_json) VALUES (?, ?, ?, ?, ?, ?)').run(user.id, requestKey, memberId, contentHash, reportId, JSON.stringify(result));
+    db.exec("COMMIT");
+    return result;
   } catch (error) {
     try { db.exec("ROLLBACK"); } catch { /* Transaction may not have started yet. */ }
     rmSync(absoluteDirectory, { recursive: true, force: true });
@@ -302,12 +320,18 @@ function createValidatedUpload(
   }
 }
 
-export function createUpload(user: RequestUser, memberId: string, files: UploadInputFile[]) {
-  return createValidatedUpload(user, memberId, validateFiles(files), "browser_upload");
+type UploadCreated = { reportId: string; memberId: string; status: 'queued'; title: string; pageCount: number; jobCount: number; pages: Array<{ id: string; pageNumber: number; originalName: string; mimeType: string; fileSize: number; rotation: number }> };
+
+export function createUpload(user: RequestUser, memberId: string, files: UploadInputFile[], requestKey?: string) {
+  return createValidatedUpload(user, memberId, validateFiles(files), "browser_upload", requestKey);
 }
 
-export function createUploadFromLocalFiles(user: RequestUser, memberId: string, files: LocalUploadInputFile[]) {
-  return createValidatedUpload(user, memberId, validateLocalFiles(files), "nas_import");
+export function createUploadFromLocalFiles(user: RequestUser, memberId: string, files: LocalUploadInputFile[], requestKey?: string) {
+  return createValidatedUpload(user, memberId, validateLocalFiles(files), "nas_import", requestKey);
+}
+
+export function createUploadFromStagedFiles(user: RequestUser, memberId: string, files: LocalUploadInputFile[], requestKey: string) {
+  return createValidatedUpload(user, memberId, validateLocalFiles(files), "browser_upload", requestKey);
 }
 
 

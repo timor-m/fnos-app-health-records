@@ -2108,6 +2108,7 @@ type ReportOriginalDownload = {
 };
 
 const reportOriginalExportTasks = new Map<string, Promise<void>>();
+export function isStorageExportActive() { return reportOriginalExportTasks.size > 0; }
 
 function reportDownloadFilename(title: string, fallback: string) {
   const base = (title || fallback)
@@ -7286,7 +7287,8 @@ function copyDirectoryForBackup(
   const source = safeStorageTarget(directoryName);
   const target = join(stagingRoot, directoryName);
   if (existsSync(source)) {
-    cpSync(source, target, { recursive: true, force: true });
+    cpSync(source, target, { recursive: true, force: true,
+      filter: path => directoryName !== 'config' || !isArchiveControlFile(basename(path)) });
   } else {
     mkdirSync(target, { recursive: true });
   }
@@ -7833,15 +7835,26 @@ export function validateBackup(
   return validateBackupArchivePath(archivePath);
 }
 
+function isArchiveControlFile(name: string) {
+  return /^archive-(location|migration|cleanup)\.json(?:\..*)?$/.test(name);
+}
+
 function replaceStorageDirectory(
   directoryName: (typeof backupIncludedDirectories)[number],
   extractRoot: string,
 ) {
   const source = join(extractRoot, directoryName);
   const target = safeStorageTarget(directoryName);
-  rmSync(target, { recursive: true, force: true });
+  if (directoryName === 'config') {
+    // Machine-local storage pointers and migration journals must survive business-data restore.
+    mkdirSync(target, { recursive: true });
+    for (const name of readdirSync(target)) {
+      if (!isArchiveControlFile(name)) rmSync(join(target, name), { recursive: true, force: true });
+    }
+  } else rmSync(target, { recursive: true, force: true });
   if (existsSync(source)) {
-    cpSync(source, target, { recursive: true, force: true });
+    cpSync(source, target, { recursive: true, force: true,
+      filter: path => directoryName !== 'config' || !isArchiveControlFile(basename(path)) });
   } else {
     mkdirSync(target, { recursive: true });
   }

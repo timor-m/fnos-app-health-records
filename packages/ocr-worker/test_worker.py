@@ -23,6 +23,31 @@ def ocr_line(text, confidence, x1, y1, x2, y2, variant=None):
 
 
 class TableRetryTest(unittest.TestCase):
+    def test_pdf_fusion_keeps_repeated_results_units_and_signs_at_distinct_positions(self):
+        source = [ocr_line(text, 1, 10, index * 30, 50, index * 30 + 20)
+                  for index, text in enumerate(["0", "0", "-", "-", "U/L", "U/L", "+", "±"])]
+        duplicates = [{**line, "confidence": .9} for line in source]
+        fused = worker.merge_pdf_text_and_ocr_lines(source, duplicates)
+        self.assertEqual([line["text"] for line in fused], [line["text"] for line in source])
+        self.assertEqual(len(set(line["id"] for line in fused)), len(source))
+
+    def test_pdf_fusion_keeps_unknown_position_and_conflicting_text(self):
+        pdf = [ocr_line("0", 1, 0, 0, 20, 20)]
+        ocr = [ocr_line("8", .9, 0, 0, 20, 20), {"text":"0", "confidence":.9}]
+        self.assertEqual(len(worker.merge_pdf_text_and_ocr_lines(pdf, ocr)), 3)
+
+    def test_structure_annotations_return_to_original_pdf_coordinates(self):
+        from unittest.mock import patch
+        source = [{"id":"a", "text":"synthetic", "box":[10,20,30,40]}]
+        def annotate(path, lines):
+            self.assertEqual(lines[0]["box"], [30,60,90,120])
+            return [{**lines[0], "tableCell":{"table":"table_0", "row":0, "column":0, "columns":2}}]
+        with patch("table_structure.enhance", side_effect=annotate):
+            result = worker.enhance_page_lines(Path("unused"), source, 3)
+        self.assertEqual(result[0]["box"], source[0]["box"])
+        self.assertIn("tableCell", result[0])
+        self.assertNotIn("tableCell", source[0])
+
     def test_auto_backend_prefers_onnxruntime_on_arm64(self):
         self.assertEqual(
             worker.backend_candidates(machine="aarch64"),

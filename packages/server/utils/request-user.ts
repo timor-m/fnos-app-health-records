@@ -44,7 +44,7 @@ function ensureUser(user: RequestUser) {
   }
 }
 
-function gatewayUser(event: H3Event): RequestUser | null {
+export function gatewayUser(event: H3Event): RequestUser | null {
   if (getAppConfig().authMode !== "fnos" || requestAccessMode(event) !== "gateway") return null;
   const request = event.node!.req!;
   const uid = request.headers["x-trim-userid"];

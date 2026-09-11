@@ -1,4 +1,6 @@
 import { getDatabase } from "../database/client";
+import { getAppConfig } from '../utils/runtime-config';
+import { storageMigrationPaused } from '../utils/storage-migration-state';
 import { writeLog } from "../utils/logger";
 import { purgeExpiredReports, recoverTimedOutDuplicateReportOperations } from "./records.service";
 import { runFileGarbageCollection, scanOrphanStorageFiles } from "./file-gc.service";
@@ -175,7 +177,7 @@ function duplicateOperationTimeoutMinutes() {
 }
 
 export async function runMaintenanceCycle() {
-  if (running) return { skipped: true as const };
+  if (running || getAppConfig().storageError || storageMigrationPaused()) return { skipped: true as const };
   running = true;
   try {
     const indicatorNormalization = runIndicatorDictionaryBackfillIfNeeded();
@@ -225,3 +227,5 @@ export function startMaintenanceRunner() {
   }, maintenanceIntervalMs);
   intervalTimer.unref?.();
 }
+
+export function isStorageMaintenanceActive() { return running; }

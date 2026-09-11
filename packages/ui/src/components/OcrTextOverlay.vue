@@ -187,11 +187,13 @@ watch(() => props.image, (newImage, oldImage) => {
       :style="lineStyle(line.box as [number, number, number, number])"
       @click.stop="interactive === false ? undefined : copyLineText(line)"
     >{{ line.text }}</span>
+    <Teleport to="body">
     <span
       class="ocr-copy-toast"
       :class="{ 'is-visible': copiedLineId }"
       :style="{ left: `${toastPosition.left}px`, top: `${toastPosition.top}px` }"
     >已复制</span>
+    </Teleport>
   </div>
 </template>
 
@@ -287,7 +289,7 @@ watch(() => props.image, (newImage, oldImage) => {
 .ocr-copy-toast {
   /* 图片往往高于可视区域，用 fixed 保证提示落在视口内 */
   position: fixed;
-  z-index: 30;
+  z-index: 160;
   transform: translate(-50%, calc(-50% + 6px));
   padding: 7px 16px;
   border-radius: 999px;

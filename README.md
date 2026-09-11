@@ -69,6 +69,7 @@ docker compose up -d
 - [fnOS 安装与升级](./docs/INSTALL_FNOS.md)
 - [Docker 部署](./docs/DOCKER_DEPLOYMENT.md)
 - [配置说明](./docs/CONFIGURATION.md)
+- [多文件报告导入](./docs/REPORT_IMPORT.md)
 - [备份、恢复与迁移](./docs/BACKUP_RESTORE.md)
 - [常见问题排查](./docs/TROUBLESHOOTING.md)
 - [指标字典维护](./dictionary/README.md)

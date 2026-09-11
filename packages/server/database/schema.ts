@@ -1,4 +1,5 @@
 import {
+  uploadReceiptSchemaSql,
   institutionTrendRuleSchemaSql,
   institutionTrendSchemaSql,
   aiExtractionCandidateSchemaSql,
@@ -571,4 +572,5 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   detail_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+${uploadReceiptSchemaSql}
 `;

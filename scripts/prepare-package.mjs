@@ -332,7 +332,17 @@ start_app() {
     node "\${SERVER_ENTRY}" >> "\${LOG_FILE}" 2>&1 &
 
     printf "%s" "$!" > "\${PID_FILE}"
-    sleep 1
+    readiness_attempt=0
+    while [ "\${readiness_attempt}" -lt 30 ]; do
+        if ! status_app; then
+            break
+        fi
+        if [ -S "\${SOCKET_PATH}" ]; then
+            return 0
+        fi
+        sleep 1
+        readiness_attempt=$((readiness_attempt + 1))
+    done
 
     if ! status_app || [ ! -S "\${SOCKET_PATH}" ]; then
         report_error "Application failed to start. Check \${LOG_FILE}."

@@ -49,7 +49,7 @@ onBeforeUnmount(cleanup);
 </script>
 
 <template>
-  <span class="indicator-hint" @click.stop @keydown.stop>
+  <span v-if="text.trim()" class="indicator-hint" @click.stop @keydown.stop>
     <button ref="trigger" type="button" class="indicator-hint-toggle" :aria-label="label"
       :aria-expanded="open" :aria-controls="open ? id : undefined"
       @click="toggle" @focusout="blur" @keydown.esc="close">!</button>

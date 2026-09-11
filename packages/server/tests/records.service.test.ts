@@ -2004,10 +2004,8 @@ test("returns concrete trend values from reviewed and archived reports", () => {
     assert.equal(trends[0].unit, "mmol/L");
     assert.equal(trends[0].quality, "high");
     assert.deepEqual(new Set(trends[0].sourceNames), new Set(["空腹血糖", "血糖"]));
-    assert.equal(trends[0].excludedPoints.length, 1);
-    assert.equal(trends[0].excludedPoints[0].itemName, "GLU");
-    assert.equal(trends[0].excludedPoints[0].resultText, "阴性");
-    assert.match(trends[0].excludedPoints[0].reason, /尿液|没有可靠数值|不归入血糖趋势/);
+    // A urine result has no blood-glucose identity, even as an excluded point.
+    assert.equal(trends[0].excludedPoints.length, 0);
     assert.equal(trends[0].pointCount, 2);
     assert.equal(trends[0].latestValue, 6.8);
     assert.equal(Number(trends[0].delta.toFixed(1)), 1.6);

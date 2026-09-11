@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import {
-  ArrowDown, ArrowUp, Camera, CheckCircle2, ChevronRight, CircleAlert, FileImage, FileText,
+  ArrowUp, ArrowDown, Camera, CheckCircle2, ChevronRight, CircleAlert, FileImage, FileText,
   Folder, FolderOpen, HardDrive, ImagePlus, LoaderCircle, RefreshCw, RotateCw, UploadCloud, X
 } from "@lucide/vue";
 import { useAppContext } from "../composables/useAppContext";
+import { useToast } from "../composables/useToast";
+import UploadOrganizer from "../components/UploadOrganizer.vue";
+import ImageViewer from "../components/ImageViewer.vue";
 import { apiUrl, request, requestUpload } from "../utils/api";
 import { describeTechnical } from "../utils/error";
 import { getDeploymentCopy } from "../utils/deployment-copy";
@@ -53,7 +56,125 @@ type SelectedLocalFile = { rootId: string; path: string; name: string; size: num
 
 
 const app = useAppContext();
+const toast = useToast();
 const items = ref<QueueItem[]>([]);
+const uploadList = ref<HTMLElement | null>(null);
+const sortId = ref('');
+const selectedUploadId = ref('');
+const sortPosition = ref({ x: 0, y: 0 });
+const sortItem = computed(() => items.value.find(item => item.id === sortId.value));
+let sortTimer: ReturnType<typeof setTimeout> | undefined;
+let sortPointer: { id: number; itemId: string; pointerType: string; x: number; y: number; original: QueueItem[] } | null = null;
+let suppressSortClickUntil = 0;
+function finishUploadSort(cancel = false) {
+  clearTimeout(sortTimer);
+  const pointer = sortPointer;
+  sortPointer = null;
+  if (sortId.value) {
+    suppressSortClickUntil = performance.now() + 250;
+    if (!cancel) selectedUploadId.value = sortId.value;
+    if (cancel && pointer) items.value = pointer.original;
+  }
+  sortId.value = '';
+  if (pointer && uploadList.value?.hasPointerCapture(pointer.id)) uploadList.value.releasePointerCapture(pointer.id);
+}
+function pressUploadItem(event: PointerEvent, id: string) {
+  if (event.button !== 0 || uploading.value || items.value.length < 2 || (event.target as HTMLElement).closest('.upload-page-actions, input, select, textarea')) return;
+  finishUploadSort();
+  sortPointer = { id: event.pointerId, itemId: id, pointerType: event.pointerType, x: event.clientX, y: event.clientY, original: [...items.value] };
+  sortTimer = setTimeout(beginUploadSort, 380);
+}
+function beginUploadSort() {
+  if (!sortPointer || !uploadList.value) return;
+  clearTimeout(sortTimer);
+  sortId.value = sortPointer.itemId;
+  sortPosition.value = { x: sortPointer.x, y: sortPointer.y };
+  uploadList.value.setPointerCapture(sortPointer.id);
+}
+function moveUploadSort(event: PointerEvent) {
+  if (!sortPointer || sortPointer.id !== event.pointerId) return;
+  if (!sortId.value) {
+    if (Math.hypot(event.clientX - sortPointer.x, event.clientY - sortPointer.y) <= 8) return;
+    // A mouse drag starts on movement; touch movement before the long press
+    // remains ordinary scrolling instead of accidentally reordering files.
+    if (sortPointer.pointerType === 'touch') { finishUploadSort(); return; }
+    beginUploadSort();
+  }
+  event.preventDefault();
+  sortPosition.value = { x: event.clientX, y: event.clientY };
+  const row = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-upload-sort]');
+  if (!row || !uploadList.value?.contains(row)) return;
+  const from = items.value.findIndex(item => item.id === sortId.value);
+  const to = items.value.findIndex(item => item.id === row.dataset.uploadSort);
+  if (from >= 0 && to >= 0 && from !== to) move(from, to - from);
+}
+function endUploadSort(event: PointerEvent) {
+  if (sortPointer?.id !== event.pointerId) return;
+  if (event.type === 'pointerup' && sortId.value) moveUploadSort(event);
+  finishUploadSort(event.type !== 'pointerup');
+}
+function filterSortClick(event: MouseEvent) {
+  if (sortId.value || performance.now() < suppressSortClickUntil) { event.preventDefault(); event.stopPropagation(); }
+}
+onDeactivated(() => finishUploadSort(true));
+onBeforeUnmount(() => finishUploadSort(true));
+const organizationMode = ref('');
+const organizationAttention = ref(0);
+const organizationPlan = ref<string[][]>([]);
+const localOrganizationPlan = ref<string[][]>([]);
+watch(organizationMode, () => finishUploadSort(true));
+const localOrganizationMode = ref('');
+const organizerFiles = computed(() => items.value.map(item => ({ id: item.id, name: item.file.name, previewUrl: item.previewUrl })));
+const uploadPreviewId = ref('');
+const uploadPreviewPages = computed(() => items.value.filter(item => item.previewUrl).map(item => ({ key: item.id, fullUrl: item.previewUrl, label: item.file.name })));
+const canSubmitOrganization = computed(() => items.value.length === 1 || organizationPlan.value.length > 0);
+type ImportTask = { key: string; label: string; status: 'waiting' | 'uploading' | 'completed' | 'failed'; error: string; sent: number; browserFiles?: QueueItem[]; localFiles?: SelectedLocalFile[]; memberId: string; reportId?: string };
+const importTasks = ref<ImportTask[]>([]);
+const batchRunning = ref(false);
+const batchCompleted = computed(() => importTasks.value.filter(task => task.status === 'completed').length);
+async function runImportTasks() {
+  if (batchRunning.value) return;
+  batchRunning.value = true;
+  for (const task of importTasks.value) if (task.status === 'failed') task.status = 'waiting';
+  const pending = importTasks.value.filter(task => task.status === 'waiting');
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < pending.length) {
+      const task = pending[cursor++];
+      task.status = 'uploading'; task.error = '';
+      try {
+        let uploaded: UploadResult;
+        if (task.browserFiles) {
+          const started = await request<{ received: number[] }>('uploads/staged', { method: 'POST', body: JSON.stringify({ requestKey: task.key, memberId: task.memberId, files: task.browserFiles.map(item => ({ originalName: item.file.name, size: item.file.size, rotation: item.rotation })) }) });
+          task.sent = started.received.length;
+          for (const [index, item] of task.browserFiles.entries()) {
+            if (started.received.includes(index)) continue;
+            const body = new FormData(); body.append('file', item.file, item.file.name);
+            await requestUpload(`uploads/staged/${task.key}/files/${index}`, body);
+            task.sent += 1;
+          }
+          uploaded = await request<UploadResult>(`uploads/staged/${task.key}/complete`, { method: 'POST' });
+          // Only discard temporary files after receiving the durable receipt.
+          await request(`uploads/staged/${task.key}`, { method: 'DELETE' }).catch(() => {});
+        } else {
+          const files = task.localFiles!;
+          uploaded = await request<UploadResult>('local-files/import', { method: 'POST', body: JSON.stringify({ memberId: task.memberId, requestKey: task.key,
+            ...(files.every(file => file.rootId === '__authorized') ? { authorizedPaths: files.map(file => file.path) } : { files: files.map(file => ({ rootId: file.rootId, path: file.path })) }) }) });
+          task.sent = files.length;
+        }
+        task.reportId = uploaded.reportId; task.status = 'completed';
+        app.notifyDataChanged();
+      } catch (cause) { task.status = 'failed'; task.error = cause instanceof Error ? cause.message : '导入失败，请重试'; }
+    }
+  };
+  try { await Promise.all([worker(), worker()]); } finally { batchRunning.value = false; }
+}
+async function clearImportTasks() {
+  if (batchRunning.value) return;
+  if (importTasks.value.some(task => task.status !== 'completed') && !window.confirm('放弃未完成的上传？已创建的报告不会删除。')) return;
+  await Promise.all(importTasks.value.filter(task => task.browserFiles).map(task => request(`uploads/staged/${task.key}`, { method: 'DELETE' }).catch(() => {})));
+  importTasks.value = []; clearQueue(); selectedLocalFiles.value = [];
+}
 const dragging = ref(false);
 const uploading = ref(false);
 const error = ref("");
@@ -204,6 +325,12 @@ async function requestFnosUserPaths(flow: FnosAuthorizationFlow) {
 async function submitAuthorizedFnosPaths(paths: string[], memberId = app.selectedMemberId.value) {
   if (!paths.length) return;
   if (!memberId) throw new Error("请先选择报告所属成员");
+  if (paths.length > 1) {
+    if (paths.length > 1000) throw new Error('一次导入最多 1000 个文件');
+    selectedLocalFiles.value = paths.map(path => ({ rootId: '__authorized', path, name: path.split('/').pop() || '文件', size: 0 }));
+    localBrowserOpen.value = true;
+    return;
+  }
   localImporting.value = true;
   localError.value = "";
   error.value = "";
@@ -290,16 +417,16 @@ function addFiles(files: File[]) {
     error.value = `不支持文件“${unsupported.name}”的格式`;
     return;
   }
-  if (items.value.length + files.length > 24) {
-    error.value = "一次最多上传 24 个文件";
+  if (items.value.length + files.length > 1000) {
+    error.value = "一次导入最多选择 1000 个文件";
     return;
   }
   if (files.some((file) => file.size > 40 * 1024 * 1024)) {
     error.value = "单个文件不能超过 40 MB";
     return;
   }
-  if (totalBytes.value + files.reduce((sum, file) => sum + file.size, 0) > 200 * 1024 * 1024) {
-    error.value = "单次上传不能超过 200 MB";
+  if (totalBytes.value + files.reduce((sum, file) => sum + file.size, 0) > 2 * 1024 * 1024 * 1024) {
+    error.value = "一次导入总大小不能超过 2 GB";
     return;
   }
   /* 入队过程的同步异常（如旧浏览器缺失 API）必须浮现给用户，避免“选完文件毫无反应” */
@@ -339,15 +466,31 @@ function drop(event: DragEvent) {
 }
 
 function remove(index: number) {
+  finishUploadSort(true);
+  if (items.value[index]?.id === selectedUploadId.value) selectedUploadId.value = '';
+  uploadPreviewId.value = '';
   const [removed] = items.value.splice(index, 1);
   if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
 }
 
-function move(index: number, direction: -1 | 1) {
+function move(index: number, direction: number) {
   const target = index + direction;
   if (target < 0 || target >= items.value.length) return;
   const [item] = items.value.splice(index, 1);
   items.value.splice(target, 0, item);
+}
+
+async function moveWithButton(id: string, direction: number) {
+  if (uploading.value) return;
+  finishUploadSort(true);
+  const index = items.value.findIndex(item => item.id === id);
+  if (index < 0 || index + direction < 0 || index + direction >= items.value.length) return;
+  move(index, direction);
+  selectedUploadId.value = id;
+  await nextTick();
+  const row = Array.from(uploadList.value?.querySelectorAll<HTMLElement>('[data-upload-sort]') || [])
+    .find(element => element.dataset.uploadSort === id);
+  row?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 function rotate(item: QueueItem) {
@@ -355,6 +498,10 @@ function rotate(item: QueueItem) {
 }
 
 function clearQueue() {
+  finishUploadSort();
+  selectedUploadId.value = '';
+  uploadPreviewId.value = '';
+  organizationMode.value = '';
   for (const item of items.value) if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
   items.value = [];
 }
@@ -422,16 +569,16 @@ function toggleLocalFile(entry: LocalImportEntry) {
     selectedLocalFiles.value.splice(index, 1);
     return;
   }
-  if (selectedLocalFiles.value.length >= 24) {
-    localError.value = "一次最多导入 24 个文件";
+  if (selectedLocalFiles.value.length >= 1000) {
+    localError.value = "一次导入最多选择 1000 个文件";
     return;
   }
   if ((entry.size || 0) > 40 * 1024 * 1024) {
     localError.value = "单个文件不能超过 40 MB";
     return;
   }
-  if (localSelectionBytes.value + (entry.size || 0) > 200 * 1024 * 1024) {
-    localError.value = "单次导入不能超过 200 MB";
+  if (localSelectionBytes.value + (entry.size || 0) > 2 * 1024 * 1024 * 1024) {
+    localError.value = "一次导入总大小不能超过 2 GB";
     return;
   }
   selectedLocalFiles.value.push({
@@ -443,28 +590,21 @@ function toggleLocalFile(entry: LocalImportEntry) {
 }
 
 async function submitLocalImport() {
-  if (!selectedLocalFiles.value.length || !app.selectedMemberId.value) return;
-  localImporting.value = true;
-  localError.value = "";
-  error.value = "";
-  result.value = null;
-  try {
-    result.value = await request<UploadResult>("local-files/import", {
-      method: "POST",
-      body: JSON.stringify({
-        memberId: app.selectedMemberId.value,
-        files: selectedLocalFiles.value.map(({ rootId, path }) => ({ rootId, path }))
-      })
-    });
-    clearQueue();
-    selectedLocalFiles.value = [];
-    localBrowserOpen.value = false;
-    startPolling();
-  } catch (cause) {
-    localError.value = cause instanceof Error ? cause.message : "从 NAS 导入失败";
-  } finally {
-    localImporting.value = false;
+  if (!selectedLocalFiles.value.length || !app.selectedMemberId.value || batchRunning.value) return;
+  const selectedFiles = [...selectedLocalFiles.value];
+  const plan = selectedFiles.length === 1 ? [[selectedFiles[0].rootId + ':' + selectedFiles[0].path]] : localOrganizationPlan.value;
+  if (!plan.length) { localError.value = '请完成所有文件的报告分组'; return; }
+  const tasks = plan.map((ids, index) => ({
+    key: createItemId(), label: `报告 ${index + 1}`, memberId: app.selectedMemberId.value!,
+    status: 'waiting' as const, sent: 0, error: '',
+    localFiles: ids.map(id => selectedFiles.find(file => file.rootId + ':' + file.path === id)!)
+  }));
+  if (tasks.some(task => task.localFiles.some(file => !file) || (task.localFiles.some(file => file.rootId === '__authorized') && !task.localFiles.every(file => file.rootId === '__authorized')))) {
+    localError.value = '请分别导入直接授权文件和目录文件'; return;
   }
+  importTasks.value = tasks;
+  localBrowserOpen.value = false;
+  await runImportTasks();
 }
 
 function stopPolling() {
@@ -535,9 +675,21 @@ async function retryJob(job: ProcessingJob) {
 }
 
 async function submit() {
+  if (uploading.value || batchRunning.value || importTasks.value.length) return;
   if (!items.value.length) return;
+  if (!canSubmitOrganization.value) {
+    if (!organizationMode.value) organizationAttention.value += 1;
+    toast.show(organizationMode.value === 'custom' ? '请先完成全部文件分组' : '请先选择报告组织方式');
+    return;
+  }
   if (!app.selectedMemberId.value) {
     error.value = "请先选择报告所属成员";
+    return;
+  }
+  if (items.value.length > 1) {
+    const files = [...items.value];
+    importTasks.value = organizationPlan.value.map((ids, index) => ({ key: createItemId(), label: `报告 ${index + 1}`, memberId: app.selectedMemberId.value!, status: 'waiting', sent: 0, error: '', browserFiles: ids.map(id => ({ ...files.find(item => item.id === id)! })) }));
+    await runImportTasks();
     return;
   }
   uploading.value = true;
@@ -583,11 +735,12 @@ onActivated(() => {
 <template>
   <section class="plain-page upload-page">
     <div class="page-intro">
-      <div><h2>上传健康报告</h2><p>保存到 {{ app.selectedMember.value?.displayName || "当前成员" }} 的档案，多张图片会合并为同一份报告</p></div>
+      <div><h2>上传健康报告</h2><p>保存到 {{ app.selectedMember.value?.displayName || "当前成员" }} 的档案</p></div>
       <span v-if="items.length" class="count-label">{{ items.length }} 个文件 · {{ formatBytes(totalBytes) }}</span>
     </div>
 
     <div
+      v-if="!importTasks.length"
       class="drop-zone"
       :class="{ dragging }"
       @dragenter.prevent="dragging = true"
@@ -597,7 +750,7 @@ onActivated(() => {
     >
       <span class="drop-icon"><ImagePlus :size="30" /></span>
       <strong>拖放报告到这里</strong>
-      <span class="drop-hint">HEIC、JPEG、PNG、WebP 或多页 PDF，按下方顺序识别为一份报告</span>
+      <span class="drop-hint">HEIC、JPEG、PNG、WebP 或多页 PDF，多文件可选择报告组织方式</span>
       <div class="drop-actions">
         <label class="primary-button file-button upload-picker">
           <UploadCloud :size="18" /><span>选择文件</span>
@@ -651,25 +804,45 @@ onActivated(() => {
       </div>
     </section>
 
-    <div v-if="items.length" class="upload-pages">
-      <article v-for="(item, index) in items" :key="item.id" class="upload-page-item">
-        <div class="page-thumbnail">
-          <img v-if="item.previewUrl" :src="item.previewUrl" alt="" :style="{ transform: `rotate(${item.rotation}deg)` }" />
+    <section v-if="importTasks.length" class="upload-batch-results" aria-label="导入进度">
+      <header><strong>已保存 {{ batchCompleted }} / {{ importTasks.length }} 份报告</strong><span>{{ batchRunning ? '请保持页面打开，文件逐份上传中' : '已保存的报告将继续后台识别' }}</span></header>
+      <article v-for="task in importTasks" :key="task.key">
+        <strong>{{ task.label }}</strong><span>{{ task.status === 'completed' ? '已保存 · 已进入识别队列' : task.status === 'failed' ? '上传失败' : task.status === 'uploading' ? `正在保存 · ${task.sent} / ${task.browserFiles?.length || task.localFiles?.length} 个文件` : '等待上传' }}</span>
+        <p v-if="task.error" role="alert">{{ task.error }}</p>
+        <RouterLink v-if="task.reportId" to="/records">查看档案</RouterLink>
+      </article>
+      <div class="form-actions"><button v-if="importTasks.some(task => task.status === 'failed')" class="primary-button" type="button" :disabled="batchRunning" @click="runImportTasks">重试失败报告</button><button class="soft-action-button" type="button" :disabled="batchRunning" @click="clearImportTasks">{{ importTasks.some(task => task.status !== 'completed') ? '放弃未完成任务' : '继续导入' }}</button></div>
+    </section>
+    <UploadOrganizer v-if="!importTasks.length" :files="organizerFiles" :attention="organizationAttention" @mode="organizationMode = $event" @plan="organizationPlan = $event" />
+    <Teleport to="body">
+      <ImageViewer v-if="uploadPreviewId && uploadPreviewPages.some(page => page.key === uploadPreviewId)" :pages="uploadPreviewPages" :start-index="uploadPreviewPages.findIndex(page => page.key === uploadPreviewId)" @close="uploadPreviewId = ''" />
+    </Teleport>
+    <Teleport to="body">
+      <div v-if="sortItem" class="upload-sort-ghost" :style="{ left: sortPosition.x + 'px', top: sortPosition.y + 'px' }" aria-hidden="true">
+        <img v-if="sortItem.previewUrl" :src="sortItem.previewUrl" alt="" draggable="false" /><FileText v-else :size="24" /><span>{{ sortItem.file.name }}</span>
+      </div>
+    </Teleport>
+    <div v-if="items.length && !importTasks.length" ref="uploadList" class="upload-pages" @pointermove="moveUploadSort" @pointerup="endUploadSort" @pointercancel="endUploadSort" @lostpointercapture="endUploadSort" @pointerleave="!sortId && finishUploadSort()" @touchmove="sortId && $event.preventDefault()" @click.capture="filterSortClick" @keydown.esc="finishUploadSort(true)">
+      <template v-if="organizationMode !== 'custom'">
+      <article v-for="(item, index) in items" :key="item.id" :data-upload-sort="item.id" class="upload-page-item upload-sortable" :class="{ 'is-sorting': sortId === item.id, 'is-selected': selectedUploadId === item.id }" tabindex="0" aria-label="长按拖动排序，也可用上下方向键调整" @pointerdown="pressUploadItem($event, item.id)" @click="selectedUploadId = item.id" @dragstart.prevent @contextmenu.prevent @keydown.up.self.prevent="move(index, -1)" @keydown.down.self.prevent="move(index, 1)">
+        <button class="page-thumbnail upload-thumbnail-preview" type="button" :disabled="!item.previewUrl" :aria-label="item.previewUrl ? `放大预览 ${item.file.name}` : `${item.file.name} 暂不支持预览`" @click="uploadPreviewId = item.id">
+          <img v-if="item.previewUrl" :src="item.previewUrl" alt="" draggable="false" :style="{ transform: `rotate(${item.rotation}deg)` }" />
           <FileText v-else-if="item.file.type === 'application/pdf' || /\.pdf$/i.test(item.file.name)" :size="28" />
           <FileImage v-else :size="28" />
           <span>{{ index + 1 }}</span>
-        </div>
-        <div class="upload-page-info"><strong>{{ item.file.name }}</strong><span>{{ formatBytes(item.file.size) }}<template v-if="item.rotation"> · 旋转 {{ item.rotation }}°</template></span></div>
+        </button>
+        <div class="upload-page-info"><strong>{{ item.file.name }}</strong><span><template v-if="organizationMode === 'independent'">报告 {{ index + 1 }} · </template>{{ formatBytes(item.file.size) }}<template v-if="item.rotation"> · 旋转 {{ item.rotation }}°</template></span></div>
         <div class="upload-page-actions">
-          <button type="button" title="向上移动" :disabled="index === 0" @click="move(index, -1)"><ArrowUp :size="17" /></button>
-          <button type="button" title="向下移动" :disabled="index === items.length - 1" @click="move(index, 1)"><ArrowDown :size="17" /></button>
+          <button class="upload-touch-sort" type="button" title="上移" aria-label="上移文件" :disabled="index === 0 || uploading" @click.stop="moveWithButton(item.id, -1)"><ArrowUp :size="17" /></button>
+          <button class="upload-touch-sort" type="button" title="下移" aria-label="下移文件" :disabled="index === items.length - 1 || uploading" @click.stop="moveWithButton(item.id, 1)"><ArrowDown :size="17" /></button>
           <button type="button" title="顺时针旋转" @click="rotate(item)"><RotateCw :size="17" /></button>
           <button class="danger-action" type="button" title="移除" @click="remove(index)"><X :size="18" /></button>
         </div>
       </article>
+      </template>
       <div class="upload-submit">
-        <span>{{ items.length }} 个文件 · {{ formatBytes(totalBytes) }}，提交后离开页面仍会继续处理</span>
-        <button class="primary-button" type="button" :disabled="uploading" @click="submit">
+        <span>{{ items.length }} 个文件 · {{ formatBytes(totalBytes) }}<template v-if="canSubmitOrganization">，提交后离开页面仍会继续处理</template></span>
+        <button class="primary-button" type="button" :disabled="uploading || batchRunning" @click="submit">
           <LoaderCircle v-if="uploading" class="spin-icon" :size="18" />
           <UploadCloud v-else :size="18" />
           {{ uploading ? "正在保存" : "保存并开始识别" }}
@@ -756,15 +929,16 @@ onActivated(() => {
               </template>
               <p v-if="localTruncated" class="local-file-limit">目录内容较多，仅显示前 500 项，请进入更具体的子目录。</p>
             </div>
+            <UploadOrganizer :files="selectedLocalFiles.map(file => ({ id: `${file.rootId}:${file.path}`, name: file.name }))" @mode="localOrganizationMode = $event" @plan="localOrganizationPlan = $event" />
           </div>
 
           <p v-if="(localError || localAvailability?.message) && localRoots.length" class="local-file-error">{{ localError || localAvailability?.message }}</p>
           <footer class="local-file-footer">
             <span>已选 {{ selectedLocalFiles.length }} 个文件<template v-if="selectedLocalFiles.length"> · {{ formatBytes(localSelectionBytes) }}</template></span>
-            <button class="primary-button" type="button" :disabled="!selectedLocalFiles.length || localImporting" @click="submitLocalImport">
+            <button class="primary-button" type="button" :disabled="!selectedLocalFiles.length || localImporting || (selectedLocalFiles.length > 1 && !localOrganizationPlan.length)" @click="submitLocalImport">
               <LoaderCircle v-if="localImporting" class="spin-icon" :size="18" />
               <HardDrive v-else :size="18" />
-              {{ localImporting ? "正在导入" : "导入并开始识别" }}
+              {{ localImporting ? "正在导入" : selectedLocalFiles.length > 1 && !localOrganizationPlan.length ? (localOrganizationMode === "custom" ? "请完成全部文件分组" : "请选择组织方式") : "导入并开始识别" }}
             </button>
           </footer>
         </section>

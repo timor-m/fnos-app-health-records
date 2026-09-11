@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { mappedOcrMeasurement, mappedOcrUnit, mappedOcrResultCells, splitOcrTableCells } from "./ocr-table-columns";
+import { cleanOcrResult } from "../utils/ocr-result";
 import { getDatabase } from "../database/client";
 import { createId } from "../utils/identifier";
 import {
@@ -744,17 +746,16 @@ function splitColonValueCell(
  * 3. 无法按格定位时回退整行（保持原有行为）。
  * 只要单元格产生了候选就不整行回退，避免整行首数字兜底接受错配值。
  */
-function observationResultRegions(line: string, names: string[]) {
+function observationResultRegions(line: string, names: string[], header?: string | null) {
+  const mapped = mappedOcrResultCells(line, header);
+  if (mapped !== null) return mapped;
   const regions: string[] = [];
   const push = (value: string | null | undefined) => {
     const text = String(value || "").trim();
     if (text && !regions.includes(text)) regions.push(text);
   };
   const fragments = observationNameFragments(names);
-  const cells = line
-    .split(/[|｜]/)
-    .map((cell) => cell.trim())
-    .filter(Boolean);
+  const cells = splitOcrTableCells(line);
   if (cells.length > 1) {
     for (let index = 0; index < cells.length; index += 1) {
       const remainder = cellRemainderAfterFragment(cells[index], fragments);
@@ -793,8 +794,9 @@ function observationResultMatches(
   line: string,
   item: AiObservation,
   names: string[],
+  header?: string | null,
 ) {
-  return observationResultRegions(line, names).some((region) =>
+  return observationResultRegions(line, names, header).some((region) =>
     observationResultInRegionMatches(region, item),
   );
 }
@@ -829,6 +831,15 @@ function observationNameMatches(
   item: AiObservation,
 ) {
   const names = [item.itemName, item.normalizedName || ""].filter(Boolean);
+  if (line.projectHeaderCells) {
+    const measurement = mappedOcrMeasurement(line.text, line.tableHeaderText);
+    const source = normalizedEvidenceText(measurement?.name || '');
+    // In parallel groups even a one-character name difference can identify another item.
+    const matched = names.some(name => source === normalizedEvidenceText(name))
+      || line.dictionaryFacts.some(fact => [fact.displayName, fact.alias].some(alias =>
+        names.some(name => normalizedEvidenceText(alias) === normalizedEvidenceText(name))));
+    return { matched, names };
+  }
   const sourceMatched = names.some((name) =>
     fuzzyEvidenceContains(line.text, name),
   ) || observationNameFragments(names).some((fragment) => {
@@ -879,13 +890,13 @@ function exactEvidenceForObservation(
       return page.lines
         .filter(
           (line) =>
-            line.candidateKind === "scalar" && unit.text.includes(line.text),
+            !line.tableStructureUnsafe && line.candidateKind === "scalar" && unit.text.includes(line.text),
         )
         .flatMap((line) => {
           const name = observationNameMatches(line, item);
           if (
             !name.matched ||
-            !observationResultMatches(line.text, item, name.names)
+            !observationResultMatches(line.text, item, name.names, line.tableHeaderText)
           )
             return [];
           const quoteMatched =
@@ -1024,6 +1035,16 @@ function validatedObservation(
   const inferredContext =
     page && line ? nearestContext(plan, page, line.index) : null;
   const sectionName = inferredContext?.section || item.sectionName;
+  const measurement = line && !line.tableStructureUnsafe ? mappedOcrMeasurement(line.text, line.tableHeaderText) : null;
+  if (measurement) {
+    const resultText = cleanOcrResult(measurement.result);
+    const numeric = resultText.match(/^[↑↓▲▼⬆⬇]?\s*(?:<=|>=|<|>|≤|≥)?\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s*[%‰↑↓▲▼⬆⬇]?$/);
+    return {
+      ...item, sectionName, itemName: measurement.name, normalizedName: null,
+      resultText, numericValue: numeric && Number.isFinite(Number(numeric[1])) ? Number(numeric[1]) : null,
+      unit: item.unit || mappedOcrUnit(line!.text, line!.tableHeaderText), evidence,
+    };
+  }
   const cells = (firstEvidence?.quote || "")
     .split(/[|｜]/)
     .map((cell) => cell.trim())
@@ -2114,7 +2135,8 @@ function supplementUnits(plan: AiExtractionPlan, result: AiExtractionResult) {
   )) {
     for (const candidate of unitCandidateLines(plan, unit)) {
       if (resultMatchesCandidateLine(result, candidate.line)) continue;
-      if (candidate.line.candidateResolutionReason !== "supplement_required")
+      if (candidate.line.candidateResolutionReason !== "supplement_required"
+        && !(!candidate.line.tableStructureUnsafe && mappedOcrMeasurement(candidate.line.text, candidate.line.tableHeaderText)))
         continue;
       const key = `${candidate.page.pageNumber}:${unit.extractionMode}`;
       const current = byPageAndMode.get(key) || [];
@@ -2920,7 +2942,7 @@ function updateCandidateQuality(
             : "duplicate_evidence:同指标同结果已由其他原文位置覆盖"
           : item.line.candidateResolutionReason === "ambiguous_layout"
             ? "ambiguous_layout:版面中存在多个无明确结果列的数值，保留人工核对"
-            : "supplement_required:补提取后仍未找到可验证的对应事实",
+            : "supplement_required:尚未找到可验证的对应事实，需核对原件",
       );
     }
     db.prepare(

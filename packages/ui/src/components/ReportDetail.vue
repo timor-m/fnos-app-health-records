@@ -8,6 +8,7 @@ import {
 import ClinicalFactEditor from "./ClinicalFactEditor.vue";
 import DateTimePicker from "./DateTimePicker.vue";
 import OcrTextOverlay from "./OcrTextOverlay.vue";
+import OriginalOrientation from "./OriginalOrientation.vue";
 import ReportStructuredSectionEditor from "./ReportStructuredSectionEditor.vue";
 import FormSelect from "./FormSelect.vue";
 import IndicatorHint from "./IndicatorHint.vue";
@@ -15,7 +16,7 @@ import ImageViewer, { type ImageViewerPage } from "./ImageViewer.vue";
 import MorphologyFindingEditor from "./MorphologyFindingEditor.vue";
 import { request, apiUrl } from "../utils/api";
 import { downloadDirectUrl, downloadStreamedFile } from "../utils/download";
-import { describeObservationAbnormal, formatObservationNormalization, formatReferenceRange } from "../utils/indicator-display";
+import { describeObservationAbnormal, observationAttentionHint, formatReferenceRange } from "../utils/indicator-display";
 import { formatDatabaseTime, formatDatabaseTimeWithYear } from "../utils/time";
 import { hasEmptyCompletedOcr, resolveAiTriggerState } from "../utils/ai-trigger-state";
 import { resolveClinicalEvidenceNavigation } from "../utils/clinical-evidence-navigation";
@@ -792,10 +793,6 @@ function observationFlagClass(item: ReportDetail["observations"][number]) {
   };
 }
 
-function observationInterpretationLine(item: ReportDetail["observations"][number]) {
-  return observationAbnormalDisplay(item).explanation;
-}
-
 function observationValueLine(item: ReportDetail["observations"][number]) {
   const result = (item.resultText || "").trim();
   const unit = (item.unit || "").trim();
@@ -813,10 +810,6 @@ function observationReferenceLine(item: ReportDetail["observations"][number]) {
     referenceText: item.referenceText,
     unit: item.referenceText ? null : item.unit,
   }, "");
-}
-
-function observationNormalizationLine(item: ReportDetail["observations"][number]) {
-  return formatObservationNormalization(item);
 }
 
 function medicationDetail(item: ReportDetail["medications"][number]) {
@@ -904,6 +897,27 @@ function openClinicalEvidence(evidence: ClinicalEvidence) {
     return;
   }
   openOriginalViewer(navigation.pageIndex);
+}
+
+function removeObservation(item: ReportDetail['observations'][number]) {
+  confirmDialog.ask({
+    title: '删除指标',
+    message: '删除这条结构化指标及其人工修改，原件不受影响。此操作无法直接撤销；重新解析报告时可能再次提取该指标。',
+    confirmText: '删除', danger: true,
+    run: async () => {
+      try {
+        detail.value = await request<ReportDetail>(`reports/${encodeURIComponent(props.reportId)}/observations/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
+        if (editingObservationId.value === item.id) {
+          editingObservationId.value = null;
+          observationEditorOpen.value = false;
+        }
+        emit('updated');
+        toast.show('指标已删除');
+      } catch (cause) {
+        toast.show(cause instanceof Error ? cause.message : '删除失败');
+      }
+    },
+  });
 }
 
 function removeClinicalFact(type: ClinicalFactType, fact: { id: string }) {
@@ -2152,11 +2166,9 @@ onActivated(() => {
           </header>
           <div class="observation-list">
             <article v-for="item in visibleObservations" :key="item.id">
-              <strong>{{ item.itemName }}</strong>
+              <div class="observation-title"><strong>{{ item.itemName }}</strong><IndicatorHint v-if="observationAttentionHint(item)" :text="observationAttentionHint(item)" label="查看指标待核对提示" /></div>
               <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
               <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
-              <IndicatorHint v-if="item.displayReason || observationInterpretationLine(item) || observationNormalizationLine(item) || item.canonicalExplanation"
-                :text="[item.displayReason, observationInterpretationLine(item), observationNormalizationLine(item), item.canonicalExplanation].filter(Boolean).join('\n')" label="查看指标说明" />
             </article>
           </div>
           <div class="observation-panel-footer">
@@ -2407,12 +2419,11 @@ onActivated(() => {
                 @keydown.enter.prevent="openObservationEditor(item)"
                 @keydown.space.prevent="openObservationEditor(item)"
               >
-                <strong>{{ item.itemName }}</strong>
+              <div class="observation-title"><strong>{{ item.itemName }}</strong><IndicatorHint v-if="observationAttentionHint(item)" :text="observationAttentionHint(item)" label="查看指标待核对提示" /></div>
                 <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
                 <button class="observation-edit-button" type="button" title="编辑指标" @click.stop="openObservationEditor(item)"><Pencil :size="15" /></button>
+                <button class="observation-edit-button observation-delete-button" type="button" title="删除指标" aria-label="删除指标" @click.stop="removeObservation(item)"><Trash2 :size="15" /></button>
                 <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}<em v-if="item.manualReviewed" class="observation-manual-chip">人工校对</em></span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
-              <IndicatorHint v-if="item.displayReason || observationInterpretationLine(item) || observationNormalizationLine(item) || item.canonicalExplanation"
-                :text="[item.displayReason, observationInterpretationLine(item), observationNormalizationLine(item), item.canonicalExplanation].filter(Boolean).join('\n')" label="查看指标说明" />
               </article>
             </div>
           </section>
@@ -2428,12 +2439,11 @@ onActivated(() => {
                 @keydown.enter.prevent="openObservationEditor(item)"
                 @keydown.space.prevent="openObservationEditor(item)"
               >
-                <strong>{{ item.itemName }}</strong>
+              <div class="observation-title"><strong>{{ item.itemName }}</strong><IndicatorHint v-if="observationAttentionHint(item)" :text="observationAttentionHint(item)" label="查看指标待核对提示" /></div>
                 <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
                 <button class="observation-edit-button" type="button" title="编辑指标" @click.stop="openObservationEditor(item)"><Pencil :size="15" /></button>
+                <button class="observation-edit-button observation-delete-button" type="button" title="删除指标" aria-label="删除指标" @click.stop="removeObservation(item)"><Trash2 :size="15" /></button>
                 <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}<em v-if="item.manualReviewed" class="observation-manual-chip">人工校对</em></span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
-              <IndicatorHint v-if="item.displayReason || observationInterpretationLine(item) || observationNormalizationLine(item) || item.canonicalExplanation"
-                :text="[item.displayReason, observationInterpretationLine(item), observationNormalizationLine(item), item.canonicalExplanation].filter(Boolean).join('\n')" label="查看指标说明" />
               </article>
             </div>
           </section>
@@ -2444,6 +2454,7 @@ onActivated(() => {
                 <button v-if="observationSourcePage" class="plain-icon-button" type="button" title="打开原件" @click="openOriginalViewer(observationSourcePageIndex)"><Maximize2 :size="16" /></button>
               </header>
               <div v-if="observationSourcePage" class="observation-source-stage">
+                <OriginalOrientation :image="observationOriginalImage" :page-key="observationSourcePage.id">
                 <div class="observation-source-image-wrapper">
                   <img
                     ref="observationOriginalImage"
@@ -2463,6 +2474,7 @@ onActivated(() => {
                     :interactive="false"
                   />
                 </div>
+                </OriginalOrientation>
                 <span>第 {{ observationSourcePage.pageNumber }} 页</span>
                 <small v-if="selectedObservation && !selectedObservation.evidence" class="observation-source-hint">这条指标暂无可定位的原件证据</small>
                 <small v-else-if="ocrDetailLoading" class="observation-source-hint">正在读取证据位置...</small>
@@ -2604,6 +2616,7 @@ onActivated(() => {
                     @keydown.enter="openOriginalViewer(editOriginalIndex)"
                     @keydown.space.prevent="openOriginalViewer(editOriginalIndex)"
                   >
+                    <OriginalOrientation :image="editOriginalImage" :page-key="currentOriginalPage.id">
                     <div class="edit-original-image-wrapper">
                       <img
                         ref="editOriginalImage"
@@ -2615,6 +2628,7 @@ onActivated(() => {
                       />
                       <OcrTextOverlay v-if="showOcrOverlay && ocrDetailPage?.pageId === currentOriginalPage.id && loadedOriginalImagePageId === currentOriginalPage.id" :image="editOriginalImage" :lines="ocrDetailPage.lines" :coord-width="ocrDetailPage.coordWidth" :coord-height="ocrDetailPage.coordHeight" />
                     </div>
+                    </OriginalOrientation>
                     <span>第 {{ currentOriginalPage.pageNumber }} 页</span>
                   </div>
                 </Transition>
@@ -2768,7 +2782,8 @@ onActivated(() => {
               <p v-if="page.qualityLevel && page.qualityLevel !== 'good'" class="preview-hint">{{ page.qualityReason || "OCR 文本质量不足，AI 整理可能不完整，可尝试重新 OCR 或启用视觉模型兜底。" }}</p>
               <div v-if="ocrComparePageNumber === page.pageNumber" class="ocr-page-compare">
                 <div class="ocr-page-compare__original">
-                  <div v-if="reviewOriginalUrl(page.pageNumber)" class="ocr-page-compare__image">
+                  <OriginalOrientation v-if="reviewOriginalUrl(page.pageNumber)" :image="ocrCompareImage" :page-key="page.pageId">
+                  <div class="ocr-page-compare__image">
                     <img :ref="setOcrCompareImage" :src="reviewOriginalUrl(page.pageNumber)" :alt="`第 ${page.pageNumber} 页原件`" decoding="async" @load="onOcrCompareImageLoad(page.pageId)" />
                     <OcrTextOverlay
                       v-if="ocrDetailPage?.pageId === page.pageId && loadedOcrCompareImagePageId === page.pageId"
@@ -2779,6 +2794,7 @@ onActivated(() => {
                       :highlight-line-ids="diagnosticSourceLineIds"
                     />
                   </div>
+                  </OriginalOrientation>
                   <p v-else class="preview-hint">未找到这一页的原件预览。</p>
                 </div>
                 <div class="ocr-page-compare__text">

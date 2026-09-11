@@ -12,6 +12,7 @@ import type { RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 import { writeLog } from "../utils/logger";
 import { getAppConfig } from "../utils/runtime-config";
+import { storageMigrationPaused } from '../utils/storage-migration-state';
 import { assertMemberAccess, assertMemberManage } from "./member.service";
 import {
   requestWorker,
@@ -108,7 +109,7 @@ function hasOcrRuntime(config = getAppConfig()) {
     }
   }
   const statusPath = join(
-    config.storageDir,
+    config.runtimeDir,
     "config",
     "ocr-install-status.json",
   );
@@ -207,6 +208,7 @@ function safeStoragePath(relativePath: string) {
 }
 
 export function claimNextJob() {
+  if (storageMigrationPaused()) return null;
   const db = getDatabase();
   db.exec("BEGIN IMMEDIATE");
   try {
@@ -1367,9 +1369,10 @@ export async function processNextJob(
 }
 
 async function tick() {
-  if (busy) return;
+  if (busy || storageMigrationPaused()) return;
   const config = getAppConfig();
   if (!hasOcrRuntime(config)) return;
+  if (config.storageError) return;
   busy = true;
   try {
     lastRunAt = new Date().toISOString();
@@ -1401,6 +1404,8 @@ export function stopJobRunner() {
   started = false;
   return { busy };
 }
+
+export function isStorageJobActive() { return busy || Boolean(activeJob); }
 
 export function getJobRunnerStatus() {
   const config = getAppConfig();

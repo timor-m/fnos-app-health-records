@@ -14,7 +14,7 @@ AI 在“我的 -> AI 配置”中设置。AI 连接以“连接配置”为单�
 
 “单次请求超时”控制每个报告解析单元等待 AI 返回的最长时间，默认 600 秒，可设置为 30～3600 秒。本地模型首次加载或 NAS 推理较慢时可适当提高；修改后新发起的解析任务生效。
 
-MiniMax 选择内置预设后，中国大陆默认使用 `https://api.minimaxi.com/v1`，填写 API Key 即可使用默认的 `MiniMax-M2.7`。当前 MiniMax M2 系列在本应用中仅用于 OCR 文本整理，请保持视觉增强关闭；海外账号可将地址改为 `https://api.minimax.io/v1`。
+MiniMax 选择内置预设后，中国大陆默认使用 `https://api.minimaxi.com/v1`，填写 API Key 即可使用默认的 `MiniMax-M2.7`。MiniMax M2 系列仅用于 OCR 文本整理；使用视觉增强时请将视觉模型填写为支持图片输入的 MiniMax-M3，并测试确认；海外账号可将地址改为 `https://api.minimax.io/v1`。
 
 `qwen2.5:7b` 可作为 Ollama 文本模型使用，但不能填写到视觉模型栏。首次测试前建议先执行 `ollama run qwen2.5:7b` 完成下载和冷启动；NAS 性能较低时，首次响应可能需要较长时间。长报告建议为模型提供至少 16K 上下文，Ollama 的 OpenAI-compatible API 不能在单次请求中调整上下文，需要通过 Modelfile 创建对应配置。
 

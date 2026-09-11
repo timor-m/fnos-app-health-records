@@ -302,3 +302,25 @@ export function updateManualObservation(
   }
   normalizeReportObservations(reportId);
 }
+
+export function deleteManualObservation(user: RequestUser, reportId: string, observationId: string) {
+  managedReport(user, reportId);
+  const db = getDatabase();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (!db.prepare('SELECT 1 FROM observations WHERE id = ? AND report_id = ?').get(observationId, reportId)) {
+      throw createError({ statusCode: 404, statusMessage: '指标不存在' });
+    }
+    // Remove the manual override as well, otherwise the next extraction re-adds it.
+    db.prepare('DELETE FROM observation_field_overrides WHERE observation_id = ? AND report_id = ?').run(observationId, reportId);
+    db.prepare('DELETE FROM observations WHERE id = ? AND report_id = ?').run(observationId, reportId);
+    db.prepare('UPDATE reports SET source_version = source_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(reportId);
+    db.prepare(`INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
+      VALUES (?, ?, 'observation.manual_delete', 'observation', ?, '{}')`).run(createId('audit'), user.id, observationId);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  normalizeReportObservations(reportId);
+}

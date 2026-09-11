@@ -32,10 +32,12 @@ export default defineEventHandler(async (event) => {
   if (!memberId) throw createError({ statusCode: 400, statusMessage: "请选择报告所属成员" });
 
   let rotations: number[] = [];
+  let expectedPages: Array<{ rotation?: number; size?: number }> | undefined;
   const manifest = textPart(parts, "manifest");
   if (manifest) {
     try {
       const parsed = JSON.parse(manifest) as { pages?: Array<{ rotation?: number }> };
+      expectedPages = parsed.pages;
       rotations = Array.isArray(parsed.pages) ? parsed.pages.map((page) => Number(page.rotation || 0)) : [];
     } catch {
       throw createError({ statusCode: 400, statusMessage: "页面顺序信息无效" });
@@ -48,7 +50,11 @@ export default defineEventHandler(async (event) => {
     data: part.data,
     rotation: rotations[index] || 0
   }));
-  const result = createUpload(getRequestUser(event), memberId, files);
+  const requestKey = textPart(parts, 'requestKey') || undefined;
+  if (requestKey && (!Array.isArray(expectedPages) || expectedPages.length !== files.length || expectedPages.some((page, index) => page.size !== files[index]?.data.byteLength))) {
+    throw createError({ statusCode: 400, statusMessage: '文件清单与接收内容不一致，请重试整份报告' });
+  }
+  const result = createUpload(getRequestUser(event), memberId, files, requestKey);
   setResponseStatus(event, 201);
   return ok(result);
 });

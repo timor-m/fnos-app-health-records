@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { Bell, Bot, ChevronRight, ChevronsUpDown, ClipboardList, DatabaseBackup, GitMerge, Info, KeyRound, LogOut, ScrollText, ServerCog, SunMoon, Trash2, UsersRound, Wrench } from "@lucide/vue";
+import { Bell, Bot, ChevronRight, ChevronsUpDown, ClipboardList, DatabaseBackup, GitMerge, HardDrive, Info, KeyRound, LogOut, ScrollText, ServerCog, SunMoon, Trash2, UsersRound, Wrench } from "@lucide/vue";
 import FormSelect from "../components/FormSelect.vue";
 import MemberSwitcher from "../components/MemberSwitcher.vue";
 import { useAppContext } from "../composables/useAppContext";
@@ -56,6 +56,7 @@ const reminderBadge = computed(() => {
       <RouterLink to="/me/duplicates"><GitMerge :size="20" /><div><strong>重复报告检测</strong><span>手动扫描并合并或删除重复报告</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink to="/me/trash"><Trash2 :size="20" /><div><strong>回收站</strong><span>恢复或永久删除已移除报告</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink to="/me/data"><DatabaseBackup :size="20" /><div><strong>备份与恢复</strong><span>成员清单导出，管理员可完整备份和恢复</span></div><ChevronRight :size="18" /></RouterLink>
+      <RouterLink v-if="app.session.value?.isAdmin && ['fnos', 'development'].includes(app.session.value.authMode)" to="/me/storage"><HardDrive :size="20" /><div><strong>存储设置</strong><span>档案位置与存储空间</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink v-if="app.session.value?.isAdmin" to="/me/audit"><ClipboardList :size="20" /><div><strong>用户操作日志</strong><span>报告、成员、提醒和维护操作记录</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink v-if="app.session.value?.isAdmin" to="/me/ai-audit"><Bot :size="20" /><div><strong>AI 审计</strong><span>调用次数、失败、耗时和 Token 消耗</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink v-if="app.session.value?.isAdmin" to="/me/system-logs"><ScrollText :size="20" /><div><strong>系统日志</strong><span>运行异常、日志占用与清理</span></div><ChevronRight :size="18" /></RouterLink>

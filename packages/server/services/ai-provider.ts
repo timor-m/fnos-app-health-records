@@ -60,7 +60,7 @@ export const aiProviderCatalog: Record<AiProviderKey, AiProviderOption> = {
     defaultTextModel: "MiniMax-M2.7",
     defaultVisionModel: "",
     defaultMaxOutputTokens: 2_048,
-    modelHint: "中国大陆使用 api.minimaxi.com；MiniMax M2 系列当前仅作为文本模型使用"
+    modelHint: "中国大陆使用 api.minimaxi.com；M2 系列仅支持文本，M3 可用于视觉增强，请测试确认"
   },
   ollama: {
     label: "Ollama",
@@ -107,4 +107,9 @@ export function resolveAiTemperature(
   // Kimi's OpenAI-compatible endpoint currently accepts temperature=1 only.
   if (provider === "kimi" || provider === "minimax" || /^kimi-/i.test(model.trim()) || /^minimax-/i.test(model.trim())) return 1;
   return Number.isFinite(requestedTemperature) ? requestedTemperature : 0;
+}
+
+// 只拦截已知纯文本的 M2 系列；其它模型由连接测试验证图片输入能力。
+export function isMiniMaxM2Model(model: string) {
+  return /(?:^|\/)minimax-m2(?:$|[.\-_:])/i.test(model.trim());
 }

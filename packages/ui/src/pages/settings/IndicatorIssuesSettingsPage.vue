@@ -520,10 +520,9 @@ onMounted(() => {
             />
           </label>
           <div class="maintenance-issue-main">
-            <strong>{{ issue.rawName }}</strong>
+            <div class="observation-title"><strong>{{ issue.rawName }}</strong><IndicatorHint v-if="!issue.trendEligible && issue.reason" :text="issue.reason" label="查看待核对原因" /></div>
             <span>{{ issue.sectionName || "未分组" }} · 来源：{{ sourceOriginLabels[issue.sourceOrigin] }}</span>
             <p class="indicator-original-result">原始结果：{{ formatRawIndicatorResult(issue.resultText, issue.unit, "未读取到原始结果") }}</p>
-            <IndicatorHint :text="issue.reason" :label="issue.trendEligible ? '查看标准化提示' : '查看待核对原因'" />
             <p v-if="issue.candidateCanonicalName" class="indicator-candidate-summary">
               当前候选：{{ issue.candidateCanonicalName }}（{{ issue.candidateCanonicalKey }}）
               <template v-if="issue.candidateDefaultUnit"> · 标准单位 {{ issue.candidateDefaultUnit }}</template>

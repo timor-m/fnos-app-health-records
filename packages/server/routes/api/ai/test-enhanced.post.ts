@@ -3,7 +3,8 @@ import { ok } from "../../../utils/api-response";
 import { getRequestUser } from "../../../utils/request-user";
 import { isAdministrator } from "../../../domain/request-user";
 import { findAiProfile, parseStoredSettings, resolveActiveProfile, resolveAiBaseUrl } from "../../../services/ai-settings.service";
-import { normalizeAiProvider, aiProviderCatalog } from "../../../services/ai-provider";
+import { normalizeAiProvider, aiProviderCatalog, isMiniMaxM2Model } from "../../../services/ai-provider";
+import { aiVisionProbeImageUrl } from "../../../services/ai-vision-probe";
 import { executeAiChatCompletion } from "../../../services/ai-runtime.service";
 
 type TestStep = {
@@ -20,8 +21,6 @@ type TestResult = {
   totalElapsedMs: number;
 };
 
-// 用于多模态探测的 32x32 红色图片（base64）
-const PROBE_IMAGE_B64 = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAJ0lEQVR42u3NsQkAAAjAsP7/tF7hIASyp6lTCQQCgUAgEAgEgi/BAjLD/C5w/SM9AAAAAElFTkSuQmCC";
 
 // 图片探测提示词
 const IMAGE_PROBE_PROMPT = "What is the single dominant color of this image? Reply with ONLY the color name, nothing else.";
@@ -53,7 +52,7 @@ export default defineEventHandler(async (event) => {
   const baseUrl = resolveAiBaseUrl(provider, body.baseUrl, current.baseUrl);
   const modelTimeoutMs = provider === "ollama" ? 120_000 : 15_000;
 
-  if (provider === "minimax" && body.visionEnabled === true) {
+  if (isMiniMaxM2Model(visionModel) && body.visionEnabled === true) {
     throw createError({ statusCode: 400, statusMessage: "MiniMax M2 系列当前不支持视觉增强，请关闭视觉增强" });
   }
 
@@ -193,7 +192,7 @@ export default defineEventHandler(async (event) => {
             role: "user",
             content: [
               { type: "text", text: "reply ok" },
-              { type: "image_url", image_url: { url: `data:image/png;base64,${PROBE_IMAGE_B64}` } }
+              { type: "image_url", image_url: { url: aiVisionProbeImageUrl } }
             ]
           }],
           temperature: 0,
@@ -258,7 +257,7 @@ export default defineEventHandler(async (event) => {
             role: "user",
             content: [
               { type: "text", text: IMAGE_PROBE_PROMPT },
-              { type: "image_url", image_url: { url: `data:image/png;base64,${PROBE_IMAGE_B64}` } }
+              { type: "image_url", image_url: { url: aiVisionProbeImageUrl } }
             ]
           }],
           temperature: 0,

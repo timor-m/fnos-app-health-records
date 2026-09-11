@@ -1,5 +1,7 @@
 import { getDatabase } from "../database/client";
 import { createId } from "../utils/identifier";
+import { cleanIndicatorName } from "../utils/indicator-name";
+import { cleanOcrResult } from "../utils/ocr-result";
 import { getAiTaskSettings } from "./ai-settings.service";
 import { backfillMemberBloodTypeFromReport } from "./member.service";
 import { aiProviderHasRequiredApiKey, resolveAiMaxOutputTokens, resolveAiTemperature } from "./ai-provider";
@@ -2600,162 +2602,6 @@ function uniqueObservationEvidence(evidence: AiEvidence[]) {
     );
 }
 
-function repairedTransposedDecimal(
-  resultText: string,
-  referenceLow: number | null,
-  referenceHigh: number | null,
-) {
-  const match = resultText.match(/^(\d+)[`'’](\d+)$/);
-  if (!match || (referenceLow === null && referenceHigh === null)) return null;
-  const candidates = [
-    Number(`${match[1]}.${match[2]}`),
-    Number(`${match[2]}.${match[1]}`),
-  ].filter(
-    (value, index, values) =>
-      Number.isFinite(value) &&
-      values.indexOf(value) === index &&
-      (referenceLow === null || value >= referenceLow) &&
-      (referenceHigh === null || value <= referenceHigh),
-  );
-  return candidates.length === 1 ? candidates[0] : null;
-}
-
-function isCorruptedPlateletDistributionWidth(
-  itemName: string,
-  resultText: string,
-  numericValue: number | null,
-  unit: string | null,
-  referenceHigh: number | null,
-) {
-  return Boolean(
-    /(?:血小板.*分布宽度|\bPDV?W\b)/i.test(itemName) &&
-      /^[↑↓▲▼⬆⬇]/.test(resultText) &&
-      numericValue !== null &&
-      !unit &&
-      referenceHigh !== null &&
-      numericValue > referenceHigh * 3,
-  );
-}
-
-const cbcDifferentialPercentageSpecs = [
-  {
-    itemCode: "NEUT%",
-    itemName: "中性粒细胞百分比(NEUT%)",
-    normalizedName: "中性粒细胞百分比",
-    pattern: /(?:中性粒细胞百分比|NEUT%)/i,
-  },
-  {
-    itemCode: "LYMPH%",
-    itemName: "淋巴细胞百分比(LYMPH%)",
-    normalizedName: "淋巴细胞百分比",
-    pattern: /(?:淋巴细胞百分比|LYMPH%)/i,
-  },
-  {
-    itemCode: "MONO%",
-    itemName: "单核细胞百分比(MONO%)",
-    normalizedName: "单核细胞百分比",
-    pattern: /(?:单核细胞百分比|MONO%)/i,
-  },
-  {
-    itemCode: "EO%",
-    itemName: "嗜酸性粒细胞百分比(EO%)",
-    normalizedName: "嗜酸性粒细胞百分比",
-    pattern: /(?:(?:嗜|啫)酸性粒细胞百分比|EO%)/i,
-  },
-  {
-    itemCode: "BASO%",
-    itemName: "嗜碱性粒细胞百分比(BASO%)",
-    normalizedName: "嗜碱性粒细胞百分比",
-    pattern: /(?:(?:嗜|啫)碱性粒细胞百分比|BASO%)/i,
-  },
-] as const;
-
-function completeCbcDifferentialPercentages(observations: AiObservation[]) {
-  const matched = cbcDifferentialPercentageSpecs.map((spec) => ({
-    spec,
-    observation: observations.find(
-      (observation) =>
-        spec.pattern.test(observation.itemName) ||
-        spec.pattern.test(observation.normalizedName || ""),
-    ),
-  }));
-  const present = matched.filter(
-    (entry) =>
-      entry.observation && entry.observation.numericValue !== null,
-  );
-  const missing = matched.filter((entry) => !entry.observation);
-  if (present.length !== 4 || missing.length !== 1) return observations;
-  const reliableInputs = present.every((entry) => {
-    const observation = entry.observation!;
-    const value = observation.numericValue!;
-    return (
-      value >= 0 &&
-      value <= 100 &&
-      (observation.referenceHigh === null ||
-        value <=
-          Math.max(
-            observation.referenceHigh * 3,
-            observation.referenceHigh + 20,
-          ))
-    );
-  });
-  if (!reliableInputs) return observations;
-  const sourceEvidence = observations
-    .flatMap((observation) => observation.evidence)
-    .find((evidence) => missing[0].spec.pattern.test(evidence.quote));
-  if (!sourceEvidence) return observations;
-  const sum = present.reduce(
-    (total, entry) => total + (entry.observation?.numericValue || 0),
-    0,
-  );
-  const numericValue = Number((100 - sum).toFixed(1));
-  if (!Number.isFinite(numericValue) || numericValue < 0 || numericValue > 100)
-    return observations;
-  const cells = sourceEvidence.quote
-    .split(/[|｜]/)
-    .map((cell) => cell.trim());
-  const itemIndex = cells.findIndex((cell) =>
-    missing[0].spec.pattern.test(cell),
-  );
-  if (/^[-+]?\d+(?:\.\d+)?[↑↓▲▼⬆⬇]?$/.test(cells[itemIndex + 1] || ""))
-    return observations;
-  const referenceMatch = cells
-    .slice(itemIndex + 1)
-    .find((cell) =>
-      /^[-+]?\d+(?:\.\d+)?\s*[-~～]\s*[-+]?\d+(?:\.\d+)?$/.test(
-        cell,
-      ),
-    )
-    ?.match(
-      /([-+]?\d+(?:\.\d+)?)\s*[-~～]\s*([-+]?\d+(?:\.\d+)?)/,
-    );
-  const referenceLow = referenceMatch ? Number(referenceMatch[1]) : null;
-  const referenceHigh = referenceMatch ? Number(referenceMatch[2]) : null;
-  const abnormalFlag =
-    referenceLow !== null && numericValue < referenceLow
-      ? ("low" as const)
-      : referenceHigh !== null && numericValue > referenceHigh
-        ? ("high" as const)
-        : null;
-  return [
-    ...observations,
-    {
-      sectionName: present[0].observation?.sectionName || null,
-      itemCode: missing[0].spec.itemCode,
-      itemName: missing[0].spec.itemName,
-      normalizedName: missing[0].spec.normalizedName,
-      resultText: `${numericValue}${abnormalFlag === "low" ? "↓" : abnormalFlag === "high" ? "↑" : ""}`,
-      numericValue,
-      unit: "%",
-      referenceLow,
-      referenceHigh,
-      referenceText: referenceMatch?.[0] || null,
-      abnormalFlag,
-      method: "calculated:differential_percentage_complement",
-      evidence: [sourceEvidence],
-    },
-  ];
-}
 
 /**
  * 最终落库前执行不会改变数据库结构的最小安全校验：拒绝明确的元数据/日期/区间残片，
@@ -2763,7 +2609,8 @@ function completeCbcDifferentialPercentages(observations: AiObservation[]) {
  */
 export function sanitizeReportObservations(observations: AiObservation[]) {
   const sanitized = observations.flatMap((observation) => {
-    const normalizedItemName = observation.itemName.normalize("NFKC").trim();
+    const cleanedName = cleanIndicatorName(observation.itemName);
+    const normalizedItemName = cleanedName.name;
     const embeddedValue = normalizedItemName.match(
       /^(.+?)[：:]\s*(?:<=|>=|<|>|≤|≥)?\s*([-+]?\d+(?:\.\d+)?)(?:\s*[^\s]+)?$/,
     );
@@ -2803,26 +2650,20 @@ export function sanitizeReportObservations(observations: AiObservation[]) {
       return [];
 
     const rawUnit = observation.unit?.normalize("NFKC").trim() || null;
-    let unit = /^9\/[lL]$/.test(rawUnit || "") ? "g/L" : rawUnit;
+    const unit = rawUnit;
     const placeholderResult = /^(?:[-—–\/\\]|无|未填写)$/i.test(
       observation.resultText.trim(),
     );
     const qualitativeUnit = Boolean(
       unit && qualitativeResultUnitPattern.test(unit),
     );
-    let resultText =
+    const resultText =
       qualitativeUnit && placeholderResult
         ? unit!
-        : observation.resultText.normalize("NFKC").trim();
-    const repairedDecimal = repairedTransposedDecimal(
-      resultText,
-      observation.referenceLow,
-      observation.referenceHigh,
-    );
-    if (repairedDecimal !== null) resultText = String(repairedDecimal);
-    const parsedResult = strictNumericObservationResult(resultText);
+        : cleanOcrResult(observation.resultText);
+    const parsedResult = strictNumericObservationResult(resultText.replace(/^[↑↓▲▼⬆⬇]\s*/, ''));
     const numericValue =
-      repairedDecimal ??
+      /^\d+[`'’]\d+$/.test(resultText) ? null :
       (parsedResult !== null &&
       (observation.numericValue === null ||
         !sameObservationNumber(observation.numericValue, parsedResult))
@@ -2833,25 +2674,6 @@ export function sanitizeReportObservations(observations: AiObservation[]) {
       high: observation.referenceHigh,
       text: observation.referenceText,
     });
-    if (
-      !unit &&
-      /(?:红细胞压积|\bHCT\b)/i.test(itemName) &&
-      numericValue !== null &&
-      numericValue <= 1.5 &&
-      (reference.high === null || reference.high <= 1.5)
-    ) {
-      unit = "L/L";
-    }
-    if (
-      isCorruptedPlateletDistributionWidth(
-        itemName,
-        resultText,
-        numericValue,
-        unit,
-        reference.high,
-      )
-    )
-      return [];
     const explicitHigh = /[↑▲⬆]|偏高/.test(resultText);
     const explicitLow = /[↓▼⬇]|偏低/.test(resultText);
     const inRange =
@@ -2867,6 +2689,7 @@ export function sanitizeReportObservations(observations: AiObservation[]) {
       {
         ...observation,
         itemName,
+        itemCode: observation.itemCode || cleanedName.code,
         resultText,
         numericValue,
         unit: qualitativeUnit ? null : unit,
@@ -2878,7 +2701,7 @@ export function sanitizeReportObservations(observations: AiObservation[]) {
       },
     ];
   });
-  return completeCbcDifferentialPercentages(sanitized);
+  return sanitized;
 }
 
 function compactPersistedEvidence(value: unknown) {

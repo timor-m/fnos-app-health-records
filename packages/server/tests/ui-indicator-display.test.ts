@@ -4,10 +4,24 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   describeObservationAbnormal,
+  observationAttentionHint,
   formatObservationNormalization,
   formatRawIndicatorResult,
   formatReferenceRange
 } from "../../ui/src/utils/indicator-display.ts";
+
+test('attention hints hide ordinary normalization and retain actionable issues', () => {
+  const normal = { displayTier: 'primary', displayCategory: 'standardized', displayReason: '已标准化',
+    normalizationExcludedReason: null, abnormalConflict: false, abnormalStatus: 'reported', abnormalReason: '正常',
+    referenceStatus: 'trusted', referenceReason: null };
+  assert.equal(observationAttentionHint(normal), '');
+  assert.equal(observationAttentionHint({ ...normal, displayCategory: 'medical_candidate', normalizationExcludedReason: '未命中字典', displayReason: '机构内原始数值' }), '');
+  assert.equal(observationAttentionHint({ ...normal, displayTier: 'secondary', displayReason: '单位冲突' }), '单位冲突');
+  assert.equal(observationAttentionHint({ ...normal, abnormalConflict: true, abnormalReason: '标记冲突' }), '标记冲突');
+  assert.equal(observationAttentionHint({ ...normal, referenceStatus: 'raw_only', referenceReason: '范围待核实' }), '范围待核实');
+  assert.equal(observationAttentionHint({ ...normal, displayTier: 'secondary', displayCategory: 'qualitative_finding' }), '');
+  assert.equal(observationAttentionHint({ ...normal, referenceStatus: 'missing' }), '');
+});
 
 test("indicator display preserves raw values and never duplicates the raw unit", () => {
   assert.equal(formatRawIndicatorResult("480", "mIU/L"), "480 mIU/L");

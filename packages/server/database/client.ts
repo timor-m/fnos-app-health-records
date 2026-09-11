@@ -1,7 +1,8 @@
 import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
+import { createError } from 'h3';
 import { getAppConfig } from "../utils/runtime-config";
 import {
   databaseMigrations,
@@ -21,6 +22,7 @@ import {
 import { schemaSql, schemaVersion } from "./schema";
 
 let database: DatabaseSync | null = null;
+let openedDatabasePath: string | null = null;
 
 const countedTables = [
   "users",
@@ -92,7 +94,7 @@ function appliedSchemaVersion(db: DatabaseSync) {
 function isUnreleasedSchemaVersion(db: DatabaseSync, currentVersion: number) {
   if (currentVersion <= 16 || currentVersion > 19) return false;
   if (currentVersion <= schemaVersion && tableExists(db, "institution_trend_projects")) return false;
-  // Distinguish legacy development v17-v19 from the released institution-project migration.
+  // Distinguish older development drafts from the institution-project test migration.
   const columns = db.prepare("PRAGMA table_info(schema_migrations)").all() as Array<{ name: string }>;
   const marker = columns.some(column => column.name === "checksum")
     ? db.prepare("SELECT checksum FROM schema_migrations WHERE version = 17").get() as { checksum: string } | undefined
@@ -252,7 +254,9 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
   }
 
   const pendingMigrations = databaseMigrations.filter((migration) => migration.version > currentVersion);
-  if (pendingMigrations.length) {
+  // Complete older v17 test drafts without renumbering their existing records.
+  if (pendingMigrations.length || !tableExists(db, "upload_receipts")
+    || !tableExists(db, "institution_trend_auto_rules") || !tableExists(db, "institution_trend_auto_decisions")) {
     backupDatabaseBeforeMigration(db, storageDir, databasePath, currentVersion, schemaVersion);
   }
 
@@ -301,12 +305,24 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
 }
 
 export function getDatabase() {
-  if (database) return database;
-  const { storageDir } = getAppConfig();
+  const config = getAppConfig();
+  if (config.storageError) {
+    closeDatabase();
+    throw createError({ statusCode: 503, statusMessage: config.storageError });
+  }
+  const requestedPath = resolve(config.storageDir, 'db', 'health-records.sqlite');
+  if (database) {
+    if (openedDatabasePath !== requestedPath) {
+      throw createError({ statusCode: 503, statusMessage: '档案目录已变化，数据库尚未完成安全切换，已暂停访问。请通过迁移流程关闭旧连接后重新打开。' });
+    }
+    return database;
+  }
+  const { storageDir } = config;
   ensureStorageDirectories(storageDir);
   const databasePath = join(storageDir, "db", "health-records.sqlite");
   mkdirSync(dirname(databasePath), { recursive: true });
   database = new DatabaseSync(databasePath);
+  openedDatabasePath = requestedPath;
   database.exec("PRAGMA foreign_keys = ON");
   database.exec("PRAGMA journal_mode = WAL");
   database.exec("PRAGMA busy_timeout = 5000");
@@ -382,6 +398,7 @@ export function getDatabaseStatus() {
 export function closeDatabase() {
   database?.close();
   database = null;
+  openedDatabasePath = null;
   unreleasedSchemaVersion = null;
 }
 

@@ -2,6 +2,7 @@ import { defineEventHandler, setResponseHeader, setResponseStatus } from "h3";
 import { getDatabase, getUnreleasedSchemaMaintenance } from "../database/client";
 import { fail } from "../utils/api-response";
 import { getAppConfig } from "../utils/runtime-config";
+import { storageMigrationPaused } from "../utils/storage-migration-state";
 
 function maintenancePage(apiBase: string, databaseVersion: number, supportedVersion: number) {
   return `<!doctype html>
@@ -110,6 +111,16 @@ function maintenancePage(apiBase: string, databaseVersion: number, supportedVers
 }
 
 export default defineEventHandler((event) => {
+  if (storageMigrationPaused()) {
+    setResponseStatus(event, 503);
+    setResponseHeader(event, 'retry-after', '5');
+    return fail('档案迁移维护中，业务访问已暂停。请等待迁移完成或由管理员恢复迁移。');
+  }
+  const storageError = getAppConfig().storageError;
+  if (storageError) {
+    setResponseStatus(event, 503);
+    return fail(storageError);
+  }
   getDatabase();
   const maintenance = getUnreleasedSchemaMaintenance();
   if (!maintenance) return;

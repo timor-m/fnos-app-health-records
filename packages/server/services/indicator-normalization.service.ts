@@ -1,6 +1,7 @@
 import { getDatabase } from "../database/client";
 import { createHash } from "node:crypto";
 import { createId } from "../utils/identifier";
+import { cleanIndicatorName } from "../utils/indicator-name";
 import { isAdministrator, type RequestUser } from "../domain/request-user";
 import { createError } from "h3";
 import {
@@ -312,7 +313,7 @@ const indicatorCodePattern = /^[A-Za-z][A-Za-z0-9.+-]{0,15}[#%]?$/;
 export function indicatorNameCandidates(value: string | null | undefined) {
   // Only remove edge footnote markers from lookup candidates; keep persisted source
   // names, internal operators and measurement qualifiers intact.
-  const raw = (value || "").normalize("NFKC").replace(/^[\s*﹡]+|[\s*﹡]+$/g, "");
+  const raw = cleanIndicatorName(value || "").name;
   if (!raw) return [];
   const candidates = new Set<string>();
   const add = (candidate: string | null | undefined) => {
@@ -789,12 +790,15 @@ function observationEvidenceQualityIssue(row: ObservationRow) {
 
   const rawUnit = row.unit?.trim() || null;
   if (!manuallyReviewed && rawUnit) {
+    // A printed multiplication sign before a power-of-ten unit is notation, not a unit prefix.
+    const compactUnit = (text: string | null) => compactObservationEvidence(text)
+      .replace(/(?<![a-z])x(?=10\^\d+\/)/gi, '');
     const unitCandidates = [...new Set([rawUnit, normalizeUnit(rawUnit)].filter(Boolean))]
-      .map(compactObservationEvidence);
+      .map(compactUnit);
     const containsUnit = (quote: string) => unitCandidates.some(unit => {
       const escaped = unit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       // A smaller unit token must not match inside another prefix or compound unit (g/L in mg/L).
-      const unitText = quote.split(/[（）()，,。:：;；、|｜]+/).map(compactObservationEvidence).join(' ');
+      const unitText = quote.split(/[（）()，,。:：;；、|｜]+/).map(compactUnit).join(' ');
       return new RegExp(`(?<![a-zµμ])${escaped}(?![a-zµμ/])`, 'i').test(unitText);
     });
     const unitAnchored = quotes.some(containsUnit)
@@ -1120,7 +1124,40 @@ function normalizeObservationAutomatically(row: ObservationRow): NormalizationRe
   if (deviceExclusionReason) return excludedFunctionalDeviceObservation(row, deviceExclusionReason);
   const noiseExclusionReason = observationNoiseExclusionReason(row);
   if (noiseExclusionReason) return excludedObservationNoise(row, noiseExclusionReason);
-  const candidates = candidateAliases(row);
+  // A contradictory specimen is an identity mismatch, not a confidence penalty.
+  // Use the row's section first: a comprehensive report can contain several specimens.
+  const specimenSection = getDatabase().prepare(`
+    SELECT content_text AS content FROM report_structured_sections
+    WHERE report_id = ? AND section_key = 'laboratory_specimen' AND is_deleted = 0
+    ORDER BY CASE source WHEN 'manual' THEN 0 ELSE 1 END, updated_at DESC, id LIMIT 1
+  `).get(row.reportId) as { content: string } | undefined;
+  const specimenContext = (text: string) => {
+    const urine = /尿常规|尿沉渣|尿镜检|尿液|尿标本|^尿$|\burine\b/i.test(text);
+    const stool = /便常规|粪便|大便|\bstool\b/i.test(text);
+    const blood = /血常规|全血|血清|血浆|\bblood\b/i.test(text);
+    const count = Number(urine) + Number(stool) + Number(blood);
+    return count === 1 ? urine ? 'urine' : stool ? 'stool' : 'blood'
+      : count > 1 ? 'mixed' : null;
+  };
+  const specimen = specimenContext(row.sectionName || '')
+    || specimenContext(specimenSection?.content || '')
+    || specimenContext(row.reportType)
+    || specimenContext((getDatabase().prepare('SELECT title FROM reports WHERE id = ?')
+      .get(row.reportId) as { title: string } | undefined)?.title || '');
+  const candidates = candidateAliases(row).filter(({ alias }) => {
+    const blood = /^cbc_/.test(alias.canonicalKey) || ['whole_blood', 'serum', 'plasma'].includes(alias.specimen || '');
+    const urine = alias.specimen === 'urine' || alias.canonicalKey.startsWith('urine_');
+    const stool = alias.canonicalKey.startsWith('stool_');
+    if (specimen === 'urine' && (blood || stool)) return false;
+    if (specimen === 'stool' && (blood || urine)) return false;
+    if (specimen === 'blood' && (urine || stool)) return false;
+    // Instrument counts per volume must not borrow microscopy counts per field.
+    // Do not discard arbitrary unit conflicts: those still require review.
+    if (specimen === 'urine' && alias.canonicalKey === 'urine_casts'
+      && /^(?:个)?\/(?:u|µ|μ)l$/i.test(normalizeUnit(row.unit) || '')
+      && !resolveIndicatorUnitCompatibility(alias.canonicalKey, normalizeUnit(row.unit), alias.defaultUnit, alias.allowedUnitsJson).compatible) return false;
+    return true;
+  });
   if (!candidates.length) {
     return {
       observationId: row.id,

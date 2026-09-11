@@ -556,34 +556,29 @@ def line_key(text: str) -> str:
 
 
 def merge_pdf_text_and_ocr_lines(pdf_lines: list[dict[str, Any]], ocr_lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Prefer embedded PDF text, then add OCR-only content.
-
-    Many hospital PDFs contain a partial text layer plus scanned/table images.
-    Returning the text layer alone misses the image content; returning OCR alone
-    may lose exact digital text. This merge keeps exact PDF text and adds OCR
-    lines whose normalized text is not already present.
-    """
+    """Deduplicate only equal text at the same position, including signs/units."""
     merged: list[dict[str, Any]] = []
-    seen: set[str] = set()
-
-    for line in pdf_lines:
+    for line in [*pdf_lines, *ocr_lines]:
         text = str(line.get("text", "")).strip()
-        key = line_key(text)
-        if not key or key in seen:
+        if not text:
             continue
-        seen.add(key)
-        merged.append({**line, "id": f"line_{len(merged) + 1}"})
-
-    for line in ocr_lines:
-        text = str(line.get("text", "")).strip()
-        key = line_key(text)
-        if not key or key in seen:
+        key = re.sub(r"\s+", "", unicodedata.normalize("NFKC", text)).casefold()
+        bounds = line_rect(line)
+        duplicate = False
+        for previous in merged:
+            prior_key = re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(previous.get("text", "")))).casefold()
+            prior = line_rect(previous)
+            if prior_key != key or not bounds or not prior:
+                continue
+            a,b,c,d = bounds
+            x,y,z,w = prior
+            overlap = max(0,min(c,z)-max(a,x))*max(0,min(d,w)-max(b,y))
+            # Require substantial overlap in BOTH boxes; adjacent rows are distinct evidence.
+            if overlap / max(1, (c-a)*(d-b), (z-x)*(w-y)) >= .6:
+                duplicate = True
+                break
+        if duplicate:
             continue
-        # Skip very short OCR fragments when PDF text is already present; these
-        # fragments are often punctuation/noise around table borders.
-        if len(key) <= 1 and pdf_lines:
-            continue
-        seen.add(key)
         merged.append({**line, "id": f"line_{len(merged) + 1}"})
 
     return merged
@@ -1347,11 +1342,21 @@ def retry_suspicious_table_rows(
         return primary_lines, []
 
 
-def recognize_image(engine: Any, image_path: Path, image_role: str | None) -> tuple[list[dict[str, Any]], Any]:
+def enhance_page_lines(image_path, lines, scale=1):
+    from table_structure import enhance
+    enhanced = enhance(image_path, scale_line_boxes(lines, 1 / scale))
+    # Keep canonical evidence coordinates; only carry structural annotations back.
+    return [{**line, **{key: item[key] for key in ("tableCell", "tableUnsafe", "tableDiagnostics") if key in item}}
+            for line, item in zip(lines, enhanced)]
+
+
+def recognize_image(engine: Any, image_path: Path, image_role: str | None, enhance_tables: bool = True) -> tuple[list[dict[str, Any]], Any]:
     if image_role != "date":
         result, engine_elapsed = engine(str(image_path))
         primary_lines = normalize_result(result)
         lines, table_attempts = retry_suspicious_table_rows(engine, image_path, primary_lines)
+        if enhance_tables:
+            lines = enhance_page_lines(image_path, lines)
         if not table_attempts:
             return lines, engine_elapsed
         return lines, {
@@ -1439,6 +1444,21 @@ def recognize_input(
                     )
         del embedded, blocks
         if not should_ocr_pdf_page(embedded_lines, image_coverage):
+            from table_structure import enhance
+            if os.environ.get("OCR_TABLE_ENHANCEMENT", "auto") != "off" and (Path(os.environ.get("STORAGE_DIR", ".data")) / "ocr-table/active.json").exists():
+                try:
+                    with tempfile.TemporaryDirectory(prefix="health-table-pdf-") as temp_name:
+                        image_path = Path(temp_name) / "page.png"
+                        render_scale = pdf_render_scale()
+                        pixmap = pdf_operation(lambda: page.get_pixmap(matrix=fitz.Matrix(render_scale, render_scale), alpha=False))
+                        from PIL import Image
+                        with Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples) as image:
+                            with image.rotate(-rotation, expand=True) as rotated:
+                                rotated.save(image_path)
+                        del pixmap
+                        embedded_lines = enhance_page_lines(image_path, embedded_lines, render_scale)
+                except Exception:
+                    pass  # Optional structure inference must not break valid PDF text.
             return embedded_lines, {
                 "source": "pdf_text",
                 "page": index + 1,
@@ -1467,10 +1487,11 @@ def recognize_input(
             else:
                 pdf_operation(lambda: pixmap.save(image_path), "PDF page render cannot be decoded")
                 del pixmap
-            ocr_lines, elapsed = recognize_image(engine, image_path, image_role)
+            ocr_lines, elapsed = recognize_image(engine, image_path, image_role, enhance_tables=False)
             ocr_lines = scale_line_boxes(ocr_lines, render_scale)
             if embedded_lines:
                 lines = merge_pdf_text_and_ocr_lines(embedded_lines, ocr_lines)
+                lines = enhance_page_lines(image_path, lines, render_scale)
                 return lines, {
                     "source": "pdf_text_plus_render",
                     "page": index + 1,
@@ -1482,6 +1503,7 @@ def recognize_input(
                     "imageCoverage": round(image_coverage, 4),
                     "ocr": elapsed,
                 }, coord
+            ocr_lines = enhance_page_lines(image_path, ocr_lines, render_scale)
             return ocr_lines, {
                 "source": "pdf_render",
                 "page": index + 1,

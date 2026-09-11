@@ -501,6 +501,19 @@ function validateOcrResponse(response: WorkerEnvelope): ResponseValidation {
     usedIds.add(id);
 
     const line: Record<string, unknown> = { id, text: rawLine.text };
+    if (rawLine.tableUnsafe === true) line.tableUnsafe = true;
+    if (isRecord(rawLine.tableDiagnostics)) {
+      const { status, mapped, unsafe } = rawLine.tableDiagnostics;
+      if (["disabled", "unavailable", "applied", "partial", "no_structure", "failed"].includes(String(status))
+        && Number.isInteger(mapped) && Number(mapped) >= 0 && Number(mapped) <= workerMaxOcrLines()
+        && Number.isInteger(unsafe) && Number(unsafe) >= 0 && Number(unsafe) <= workerMaxOcrLines()) {
+        line.tableDiagnostics = { status, mapped, unsafe };
+      }
+    }
+    if (validOcrTableCell(rawLine.tableCell)) {
+      const { table, row, column, columns } = rawLine.tableCell;
+      line.tableCell = { table, row, column, columns };
+    }
     if (rawLine.confidence !== undefined) {
       line.confidence = rawLine.confidence;
     }
@@ -743,6 +756,7 @@ async function startWorker() {
     }
     const process = spawn(config.ocrPythonBin, [config.ocrWorkerScript], {
       stdio: ["pipe", "pipe", "pipe"],
+      env: { ...globalThis.process.env, STORAGE_DIR: config.runtimeDir },
     });
     child = process;
     liveProcesses.add(process);
@@ -1104,3 +1118,4 @@ export function stopWorker() {
 }
 
 process.once("exit", stopWorker);
+import { validOcrTableCell } from "./ocr-table-structure";

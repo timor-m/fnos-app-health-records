@@ -9,12 +9,13 @@ export default defineEventHandler(async (event) => {
     memberId?: unknown;
     files?: Array<{ rootId?: unknown; path?: unknown; rotation?: unknown }>;
     authorizedPaths?: unknown;
+    requestKey?: string;
   } | null;
   const memberId = String(body?.memberId || "").trim();
   if (!memberId) throw createError({ statusCode: 400, statusMessage: "请选择报告所属成员" });
   const result = Array.isArray(body?.authorizedPaths)
-    ? await importAuthorizedFnosFiles(user, memberId, body.authorizedPaths)
-    : await importLocalFilesForUser(user, memberId, body?.files || []);
+    ? await importAuthorizedFnosFiles(user, memberId, body.authorizedPaths, body.requestKey)
+    : await importLocalFilesForUser(user, memberId, body?.files || [], body?.requestKey);
   setResponseStatus(event, 201);
   return ok(result);
 });

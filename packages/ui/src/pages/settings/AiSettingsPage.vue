@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   AlertCircle,
   Bot,
@@ -17,6 +17,8 @@ import {
 } from "@lucide/vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import FormSelect from "../../components/FormSelect.vue";
+import { isMiniMaxM2Model } from "../../../../server/services/ai-provider";
+import { aiVisionModelHint } from "../../utils/ai-vision-model-hint";
 import { request } from "../../utils/api";
 
 type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "minimax" | "ollama" | "custom";
@@ -115,7 +117,10 @@ const editor = ref({
 const currentEditorProvider = computed(() =>
   ai.value.providers.find((provider) => provider.key === editor.value.provider) || null
 );
-const supportsVision = computed(() => editor.value.provider !== "minimax");
+const supportsVision = computed(() => !isMiniMaxM2Model(editor.value.visionModel));
+watch(supportsVision, (supported) => {
+  if (!supported) editor.value.visionEnabled = false;
+});
 
 const modelListLoading = ref(false);
 const textModelList = ref<Array<{ id: string; name: string }>>([]);
@@ -126,24 +131,9 @@ const showVisionModelDropdown = ref(false);
 const enhancedTesting = ref(false);
 const testSteps = ref<Array<{ name: string; status: string; message: string; elapsedMs?: number }>>([]);
 
-const visionModelHint = computed(() => {
-  if (!supportsVision.value) return "MiniMax M2 系列当前仅支持文本整理，不能用于视觉增强";
-  const model = editor.value.visionModel.trim().toLowerCase();
-  if (!model) return "请填写视觉模型名称";
-  if (editor.value.textModel.trim() && model === editor.value.textModel.trim().toLowerCase()) {
-    return "视觉模型与文本模型相同，请确认该模型确实支持图片输入";
-  }
-  if (editor.value.provider === "ollama" && /^qwen2\.5(?::|$)/i.test(model) && !/vl/i.test(model)) {
-    return "qwen2.5 是文本模型，不能用于视觉增强；请关闭视觉增强或改用明确支持图片输入的模型";
-  }
-  if (/(\b|[-_:])(vl|vision|visual|llava|moondream|internvl|minicpm[-_]?v|idefics|pixtral|qwen[\w.-]*vl|gemma[\w.-]*3)(\b|[-_:])/i.test(model)) {
-    return "已识别为可能支持图片输入的模型，请继续测试确认";
-  }
-  if (/(embedding|rerank|bge[-_]|text[-_]?embedding|nomic[-_]embed|deepseek[-_]?r1|deepseek[-_]?v3|deepseek[-_]?v4|qwen[-_]?(turbo|plus|max)|kimi[-_]|glm[-_]|gpt[-_]?(3\.5|4\.1-mini)|llama[23](\.\d+)?$)/i.test(model)) {
-    return "模型名称看起来更像文本模型，建议更换支持图片输入的模型并点击“测试视觉模型”验证";
-  }
-  return "无法仅根据模型名称确认视觉能力，请点击“测试视觉模型”验证";
-});
+const visionModelHint = computed(() =>
+  aiVisionModelHint(editor.value.provider, editor.value.textModel, editor.value.visionModel)
+);
 
 function newProfileId() {
   let id = "";
@@ -199,7 +189,6 @@ function changeEditorProvider() {
   editor.value.baseUrl = preset.defaultBaseUrl;
   editor.value.textModel = preset.defaultTextModel;
   editor.value.visionModel = preset.defaultVisionModel;
-  if (preset.key === "minimax") editor.value.visionEnabled = false;
   testSteps.value = [];
 }
 
@@ -601,8 +590,8 @@ onUnmounted(() => {
               <label>
                 <span>视觉模型</span>
                 <div class="model-input-group">
-                  <input v-model.trim="editor.visionModel" :disabled="!supportsVision" :placeholder="supportsVision ? currentEditorProvider?.defaultVisionModel || '填写支持图片输入的模型' : 'MiniMax M2 系列不支持图片输入'" />
-                  <button type="button" class="model-refresh-btn" :disabled="modelListLoading || !supportsVision" @click="fetchModelList('vision')" title="获取模型列表">
+                  <input v-model.trim="editor.visionModel" :placeholder="currentEditorProvider?.defaultVisionModel || '填写支持图片输入的模型'" />
+                  <button type="button" class="model-refresh-btn" :disabled="modelListLoading" @click="fetchModelList('vision')" title="获取模型列表">
                     <LoaderCircle v-if="modelListLoading" class="spin-icon" :size="14" />
                     <RefreshCw v-else :size="14" />
                   </button>
@@ -637,9 +626,9 @@ onUnmounted(() => {
                 <AlertCircle v-else :size="16" />
               </div>
               <div class="test-step-content">
-                <strong>{{ step.name }}</strong>
-                <span>{{ step.message }}</span>
-                <small v-if="step.elapsedMs !== undefined">{{ step.elapsedMs }} ms</small>
+                <strong class="test-step-name">{{ step.name }}</strong>
+                <span class="test-step-message">{{ step.message }}</span>
+                <small v-if="step.elapsedMs !== undefined" class="test-step-time">{{ step.elapsedMs }} ms</small>
               </div>
             </div>
           </div>

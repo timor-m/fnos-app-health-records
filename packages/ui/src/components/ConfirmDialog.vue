@@ -11,7 +11,7 @@ useScrollLock(open);
 
 <template>
   <Teleport to="body">
-    <div v-if="confirmDialog.state.value" class="modal-backdrop report-edit-backdrop" @click.self="confirmDialog.cancel">
+    <div v-if="confirmDialog.state.value" class="modal-backdrop report-edit-backdrop confirm-backdrop" @click.self="confirmDialog.cancel">
       <section class="modal-panel confirm-modal" role="alertdialog" aria-modal="true" :aria-label="confirmDialog.state.value.title">
         <header>
           <div><CircleAlert :size="20" /><h3>{{ confirmDialog.state.value.title }}</h3></div>

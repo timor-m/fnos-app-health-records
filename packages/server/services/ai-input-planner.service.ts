@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { recoverHeaderAlignedTable, validOcrTableCell, type OcrTableCell } from "./ocr-table-structure";
+import { isExplicitOcrTableHeader, isCurrentResultColumn, splitOcrTableCells, mappedOcrMeasurement, ocrProjectColumnGroups } from "./ocr-table-columns";
 import {
   measurementUnitPattern,
   inferUnknownUnit,
@@ -39,6 +41,8 @@ export const aiInputPlanningPolicy = {
 } as const;
 
 type RawOcrLine = {
+  tableUnsafe?: boolean;
+  tableCell?: unknown;
   id?: unknown;
   text?: unknown;
   confidence?: unknown;
@@ -127,6 +131,7 @@ export type LocalObservationFact = {
 };
 
 export type PlannedOcrLine = {
+  tableStructureUnsafe?: boolean;
   id: string;
   sourceLineIds: string[];
   sourceCells: PlannedOcrCell[];
@@ -146,6 +151,7 @@ export type PlannedOcrLine = {
   sectionName?: string | null;
   reportSectionName?: string | null;
   tableHeaderText?: string | null;
+  projectHeaderCells?: PlannedOcrCell[];
   tableHeaderSourceLineIds?: string[];
   tableHeaderSourcePageNumber?: number | null;
   expectedLocalObservationCount?: number;
@@ -253,6 +259,7 @@ const tableHeaderContentPattern =
   /\d|[。；;]|建议|随诊|复查|诊治|(?:^|[|｜\s(（:：])(?:阴性|阳性|弱阳性|正常|异常|未见|偏高|偏低)(?=[|｜\s)）:：]|$)/;
 
 function isTableHeaderRow(text: string) {
+  if (isExplicitOcrTableHeader(text)) return true;
   return (
     (tableHeaderPattern.test(text) || tcdTableHeaderPattern.test(text)) &&
     !tableHeaderContentPattern.test(text)
@@ -1159,6 +1166,7 @@ const quantitativeUltrasoundBoneSyntheticLinePrefix =
 
 function isCoordinateSyntheticLine(line: Pick<PlannedOcrLine, "id">) {
   return (
+    line.id.startsWith("rapid_table_layout_") ||
     line.id.startsWith(bodyCompositionSyntheticLinePrefix) ||
     line.id.startsWith(quantitativeUltrasoundBoneSyntheticLinePrefix)
   );
@@ -1697,6 +1705,8 @@ function mergeVisualRow(
         : `layout_row_${ordered.map((line) => line.id).join("_")}`,
     sourceLineIds: ordered.flatMap((line) => line.sourceLineIds),
     sourceCells,
+    ...(ordered.length === 1 && ordered[0].projectHeaderCells
+      ? { projectHeaderCells: ordered[0].projectHeaderCells } : {}),
     index,
     text,
     confidence: ordered.every((line) => line.confidence !== null)
@@ -2215,7 +2225,7 @@ function cleanContextLabel(value: string) {
 }
 
 function splitTableCells(value: string) {
-  return value.split(/[|｜]/).map((cell) => cell.trim());
+  return splitOcrTableCells(value);
 }
 
 /*
@@ -3036,12 +3046,7 @@ function parseLocalObservation(
   const nameIndex = singleCell ? 0 : headerNameIndex >= 0 ? headerNameIndex : 0;
   const headerResultIndex = singleCell
     ? -1
-    : (tableHeader?.findIndex(
-        (cell) =>
-          /(?:本次结果|检查结果|检验结果|测定值|实测值?|测量值|结果)/.test(
-            cell,
-          ) && !/(?:历史|既往|上次|前次|往年|预测|预计|%\s*预测)/.test(cell),
-      ) ?? -1);
+    : (tableHeader?.findIndex(isCurrentResultColumn) ?? -1);
   const onlyHistoricalResultColumns =
     !singleCell &&
     headerResultIndex < 0 &&
@@ -4503,6 +4508,7 @@ function parseLocalObservations(
   unitPattern: RegExp,
   patientSex?: PatientSex | null,
 ) {
+  if (line.tableStructureUnsafe) return [];
   const bloodPressure = parseExplicitBloodPressureObservations(
     line,
     pageNumber,
@@ -4754,6 +4760,12 @@ function annotatePageLines(
   let contentRegion = inheritContext ? previous.contentRegion : null;
   const annotated = lines.map((line): PlannedOcrLine => {
     let role = line.role;
+    const enclosingHeader = { tableHeader, tableHeaderCells, tableHeaderSourcePageNumber };
+    if (line.projectHeaderCells) {
+      tableHeaderCells = line.projectHeaderCells;
+      tableHeader = tableHeaderCells.map(cell => cell.text);
+      tableHeaderSourcePageNumber = pageNumber;
+    }
     if (line.boundary === "section") {
       const heading = cleanSectionHeading(line.text);
       if (heading && reportHeadingPattern.test(heading)) {
@@ -4838,6 +4850,12 @@ function annotatePageLines(
       (line.role === "noise" &&
         line.contentRole === "chart_axis" &&
         !line.candidate);
+    const tableMeasurement = !line.tableStructureUnsafe && !line.boundary
+      && effectiveLine.sourceCells.length === tableHeader?.length
+      ? mappedOcrMeasurement(effectiveLine.text, tableHeader?.join(" | ")) : null;
+    const structuredCandidate = Boolean(tableMeasurement
+      && !metadataCandidatePattern.test(tableMeasurement.name)
+      && !/[。；;]/.test(tableMeasurement.result));
     const content = preservedChartAxis
       ? {
           contentRole: "chart_axis" as const,
@@ -4850,7 +4868,7 @@ function annotatePageLines(
             role === "metadata" ||
             metadataCandidatePattern.test(effectiveLine.text) ||
             metadataRowPattern.test(effectiveLine.text),
-          candidate: line.candidate,
+          candidate: line.candidate || structuredCandidate,
           morphology:
             line.candidateKind === "morphology" ||
             isMorphologyCandidate(effectiveLine.text),
@@ -4863,8 +4881,8 @@ function annotatePageLines(
     const candidate =
       !filteredDeviceParameter &&
       content.contentRole === "measurement" &&
-      effectiveLine.candidate;
-    const candidateKind = candidate ? effectiveLine.candidateKind : null;
+      (effectiveLine.candidate || structuredCandidate);
+    const candidateKind = candidate ? (effectiveLine.candidateKind || "scalar") : null;
     const dictionaryFacts = candidate ? effectiveLine.dictionaryFacts : [];
     if (filteredDeviceParameter) role = "noise";
     if (
@@ -4915,7 +4933,7 @@ function annotatePageLines(
       candidateKind === "scalar"
         ? repeatedMeasurementHeaderGroups(tableHeader).length
         : 0;
-    return {
+    const annotatedLine: PlannedOcrLine = {
       ...withRole,
       sectionName,
       reportSectionName: reportSection,
@@ -4930,6 +4948,10 @@ function annotatePageLines(
         ? { expectedLocalObservationCount }
         : {}),
     };
+    if (line.projectHeaderCells) {
+      ({ tableHeader, tableHeaderCells, tableHeaderSourcePageNumber } = enclosingHeader);
+    }
+    return annotatedLine;
   });
   const enriched = deduplicateBodyCompositionCoreEvidence(
     enrichLocalObservationsWithNamedReferences(annotated),
@@ -5522,7 +5544,7 @@ function parseLines(
   let parsed: RawOcrLine[] = [];
   try {
     const candidate = JSON.parse(value) as unknown;
-    parsed = Array.isArray(candidate) ? (candidate as RawOcrLine[]) : [];
+    parsed = Array.isArray(candidate) ? recoverHeaderAlignedTable(candidate as RawOcrLine[]) : [];
   } catch {
     parsed = [];
   }
@@ -5582,17 +5604,89 @@ function parseLines(
       },
     ];
   });
+  const tableGroups = new Map<string, Array<{ line: PlannedOcrLine; cell: OcrTableCell }>>();
+  for (const raw of parsed) {
+    if (!validOcrTableCell(raw.tableCell)) continue;
+    const line = lines.find(item => item.id === raw.id);
+    if (!line) continue;
+    const key = `${raw.tableCell.table}:${raw.tableCell.row}`;
+    const group = tableGroups.get(key) || [];
+    group.push({ line, cell: raw.tableCell });
+    tableGroups.set(key, group);
+  }
+  const consumed = new Set<string>();
+  const tableRows: PlannedOcrLine[] = [];
+  for (const [key, group] of tableGroups) {
+    const count = group[0].cell.columns;
+    if (group.some(item => item.cell.columns !== count)) continue;
+    const sources = group.map(item => item.line);
+    const row = mergeVisualRow(sources, Math.min(...sources.map(line => line.index)), aliases, unitPattern);
+    const sourceCells = Array.from({ length: count }, (_, index) => {
+      const members = group.filter(item => item.cell.column === index).map(item => item.line)
+        .sort((a, b) => (boxRect(a.box)?.top ?? a.index) - (boxRect(b.box)?.top ?? b.index));
+      return { index, text: members.map(item => item.text).join(" "),
+        sourceLineIds: members.flatMap(item => item.sourceLineIds), box: members[0]?.box ?? null };
+    });
+    // OCR can join a unit and an explicit reference limit into one text box.
+    // Split only at the printed comparator, keeping the same original evidence ID.
+    if (key.startsWith('table_99:') && key !== 'table_99:0') {
+      const header = tableGroups.get('table_99:0') || [];
+      const unitIndex = header.find(item => item.line.text === '单位')?.cell.column;
+      const referenceIndex = header.find(item => /^(参考范围|参考值|参考区间)$/.test(item.line.text))?.cell.column;
+      if (unitIndex !== undefined && referenceIndex !== undefined && !sourceCells[referenceIndex].text) {
+        const unit = sourceCells[unitIndex];
+        const split = unit.text.match(/^([A-Za-zµμ][A-Za-zµμ0-9/ .^²³·%\-]*?)([<>≤≥]\s*\d+(?:\.\d+)?)$/);
+        if (split && split[1].includes('/')) {
+          sourceCells[referenceIndex] = { ...unit, index: referenceIndex, text: split[2] };
+          sourceCells[unitIndex] = { ...unit, text: split[1].trim() };
+        }
+      }
+    }
+    const headerGroup = [...tableGroups.values()].filter(items =>
+      items[0].cell.table === group[0].cell.table && items[0].cell.row <= group[0].cell.row
+      && items[0].cell.columns === count
+    ).sort((a, b) => b[0].cell.row - a[0].cell.row).find(items => {
+      const text = Array.from({ length: count }, (_, column) => items.filter(item => item.cell.column === column).map(item => item.line.text).join(' ')).join(' | ');
+      return isExplicitOcrTableHeader(text);
+    });
+    const headerCells = headerGroup && Array.from({ length: count }, (_, index) => {
+      const members = headerGroup.filter(item => item.cell.column === index).map(item => item.line);
+      return { index, text: members.map(item => item.text).join(' '), sourceLineIds: members.flatMap(item => item.sourceLineIds), box: members[0]?.box ?? null };
+    });
+    const projectGroups = headerCells ? ocrProjectColumnGroups(headerCells.map(cell => cell.text).join(' | ')) : [];
+    if (projectGroups.length && headerGroup !== group) {
+      for (const { start, end } of projectGroups) {
+        const members = group.filter(item => item.cell.column >= start && item.cell.column < end).map(item => item.line);
+        if (!members.length) continue;
+        const cells = sourceCells.slice(start, end).map((cell, index) => ({ ...cell, index,
+          text: mutualRecognitionMarkerPattern.test(cell.text.trim()) ? '' : cell.text }));
+        const text = cells.map(cell => cell.text).join(' | ');
+        tableRows.push({ ...mergeVisualRow(members, Math.min(...members.map(line => line.index)), aliases, unitPattern),
+          id: `rapid_table_layout_${pageNumber}_${key}_${start}`, text, sourceCells: cells,
+          sourceLineIds: members.flatMap(line => line.sourceLineIds), boundary: boundaryFor(text),
+          projectHeaderCells: headerCells!.slice(start, end).map((cell, index) => ({ ...cell, index })) });
+      }
+      sources.forEach(line => consumed.add(line.id));
+      continue;
+    }
+    const text = sourceCells.map(cell => cell.text).join(" | ");
+    tableRows.push({ ...row, id: `rapid_table_layout_${pageNumber}_${key}`, text, sourceCells,
+      sourceLineIds: sources.flatMap(line => line.sourceLineIds), boundary: boundaryFor(text) });
+    sources.forEach(line => consumed.add(line.id));
+  }
+  const structuredLines = [...lines.filter(line => !consumed.has(line.id)), ...tableRows]
+    .sort((a, b) => a.index - b.index);
   return mergeWrappedPageLines(
     reconstructPageLayout(
       repairQuantitativeUltrasoundBoneScorePairs(
-        repairBodyCompositionCoordinatePairs(lines),
+        repairBodyCompositionCoordinatePairs(structuredLines),
       ),
       aliases,
       unitPattern,
     ),
     aliases,
     unitPattern,
-  );
+  ).map(line => ({ ...line, tableStructureUnsafe: parsed.some(raw => raw.tableUnsafe && line.sourceLineIds.includes(String(raw.id))) }));
 }
 
 function repeatedLineFingerprint(value: string) {

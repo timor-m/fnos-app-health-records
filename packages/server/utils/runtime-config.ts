@@ -2,6 +2,7 @@ import templateConfig from "../../../template.config.json" with { type: "json" }
 import packageJson from "../../../package.json" with { type: "json" };
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { resolveArchiveLocation } from './archive-storage';
 
 export type AppRuntimeConfig = {
   appName: string;
@@ -17,6 +18,9 @@ export type AppRuntimeConfig = {
   logMaxBytes: number;
   logMaxFiles: number;
   storageDir: string;
+  runtimeDir: string;
+  storageRelocated: boolean;
+  storageError: string | null;
   servicePort: number;
   ocrPythonBin: string;
   ocrWorkerScript: string;
@@ -66,11 +70,13 @@ export function getAppConfig(): AppRuntimeConfig {
   const productionDataDir = process.env.TRIM_PKGVAR
     ? resolve(process.env.TRIM_PKGVAR, "data")
     : `/var/apps/${appName}/var/data`;
-  const storageDir = process.env.STORAGE_DIR || (isDevelopment ? developmentDataDir : productionDataDir);
-  const stored = persistedConfig(storageDir);
+  const runtimeDir = process.env.STORAGE_DIR || (isDevelopment ? developmentDataDir : productionDataDir);
+  const authMode = resolvedAuthMode(isDevelopment);
+  const location = resolveArchiveLocation(runtimeDir, authMode === 'fnos' || authMode === 'development');
+  const { storageDir } = location;
+  const stored = persistedConfig(runtimeDir);
   const applicationDir = process.env.TRIM_APPDEST || process.cwd();
   const ocrRoot = isDevelopment ? resolve(process.cwd(), "packages", "ocr-worker") : resolve(applicationDir, "ocr-worker");
-  const authMode = resolvedAuthMode(isDevelopment);
 
   return {
     appName,
@@ -88,8 +94,11 @@ export function getAppConfig(): AppRuntimeConfig {
     logMaxBytes: boundedInteger(process.env.APP_LOG_MAX_BYTES, 5 * 1024 * 1024, 256 * 1024, 100 * 1024 * 1024),
     logMaxFiles: boundedInteger(process.env.APP_LOG_MAX_FILES, 5, 1, 20),
     storageDir,
+    runtimeDir,
+    storageRelocated: location.relocated,
+    storageError: location.error,
     servicePort: Number(process.env.SERVICE_PORT || stored.servicePort || stored.directPort || templateConfig.localDevPort),
-    ocrPythonBin: process.env.OCR_PYTHON_BIN || join(storageDir, "ocr-venv", "bin", "python"),
+    ocrPythonBin: process.env.OCR_PYTHON_BIN || join(runtimeDir, "ocr-venv", "bin", "python"),
     ocrWorkerScript: process.env.OCR_WORKER_SCRIPT || join(ocrRoot, "worker.py"),
     ocrSetupScript: process.env.OCR_SETUP_SCRIPT || join(ocrRoot, "setup-runtime.sh")
   };

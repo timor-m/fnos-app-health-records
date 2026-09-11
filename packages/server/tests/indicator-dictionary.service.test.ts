@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -17,6 +17,8 @@ import {
   listIndicatorNormalizationIssues,
   normalizeReportObservations
 } from "../services/indicator-normalization.service.ts";
+
+const bundledRevision = JSON.parse(readFileSync(new URL("../../../dictionary/remote/indicators.json", import.meta.url), "utf8")).revision;
 
 const admin: RequestUser = {
   id: "dictionary-admin",
@@ -348,8 +350,8 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
       "app://dictionary/remote",
     );
     assert.equal(fallbackCheck.sourceKind, "bundled");
-    assert.equal(fallbackCheck.latestRevision, 15);
-    assert.match(fallbackCheck.sourceFailures.at(-1) || "", /远程 revision 4.*内置 revision 15/);
+    assert.equal(fallbackCheck.latestRevision, bundledRevision);
+    assert.match(fallbackCheck.sourceFailures.at(-1) || "", new RegExp(`远程 revision 4.*内置 revision ${bundledRevision}`));
     assert.deepEqual(requestedHosts.slice(0, 2), ["gitee.com", "gitee.com"]);
     assert.deepEqual(getIndicatorDictionaryStatus(admin).remoteBaseUrls, [
       "https://gitee.com/timor-m/health-records-dictionary/raw/main/",
@@ -359,7 +361,7 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
 
     failedHosts.clear();
     redirectGiteeRaw = true;
-    bundle = remoteBundleUsingCoreCategory(15);
+    bundle = remoteBundleUsingCoreCategory(bundledRevision);
     requestedHosts.length = 0;
     const giteeCheck = await checkRemoteIndicatorDictionary(admin);
     assert.equal(giteeCheck.sourceUrl, "https://gitee.com/timor-m/health-records-dictionary/raw/main/");
@@ -373,7 +375,7 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
     const bundledCheck = await checkRemoteIndicatorDictionary(admin);
     assert.equal(bundledCheck.sourceUrl, "app://dictionary/remote");
     assert.equal(bundledCheck.sourceKind, "bundled");
-    assert.equal(bundledCheck.latestRevision, 15);
+    assert.equal(bundledCheck.latestRevision, bundledRevision);
     assert.deepEqual(requestedHosts.slice(0, 3), ["gitee.com", "gitee.com", "timor-m.github.io"]);
     assert.equal(bundledCheck.sourceFailures.length, 3);
 
@@ -382,7 +384,7 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
       useBundledFallback: true,
     });
     assert.equal(bundledUpdate.sourceKind, "bundled");
-    assert.equal(bundledUpdate.revision, 15);
+    assert.equal(bundledUpdate.revision, bundledRevision);
     assert.deepEqual(requestedHosts, []);
   } finally {
     globalThis.fetch = originalFetch;

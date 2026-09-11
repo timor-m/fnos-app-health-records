@@ -1,0 +1,4 @@
+rapid-table==3.0.2
+rapid-layout==1.2.1
+onnxruntime==1.19.2
+Pillow>=10,<12

@@ -57,7 +57,7 @@ function parseConfiguredPaths(value: string | undefined) {
 function configuredPaths() {
   const config = getAppConfig();
   if (config.authMode === "fnos") {
-    const snapshotPath = join(config.storageDir, "config", "fnos-authorized-paths");
+    const snapshotPath = join(config.runtimeDir, "config", "fnos-authorized-paths");
     if (existsSync(snapshotPath)) {
       try {
         return parseConfiguredPaths(readFileSync(snapshotPath, "utf8"));
@@ -433,11 +433,12 @@ export async function listLocalImportDirectoryForUser(
 export function importLocalFiles(
   user: RequestUser,
   memberId: string,
-  files: Array<{ rootId?: unknown; path?: unknown; rotation?: unknown }>
+  files: Array<{ rootId?: unknown; path?: unknown; rotation?: unknown }>,
+  requestKey?: string
 ) {
   if (!Array.isArray(files)) throw createError({ statusCode: 400, statusMessage: "请选择要导入的文件" });
   if (!files.length) throw createError({ statusCode: 400, statusMessage: "请选择至少一个报告文件" });
-  if (files.length > 24) throw createError({ statusCode: 413, statusMessage: "一次最多导入 24 个文件" });
+  if (files.length > 1000) throw createError({ statusCode: 413, statusMessage: "一次最多导入 1000 个文件" });
   const seen = new Set<string>();
   const resolved = files.map((file) => {
     const root = getRoot(String(file.rootId || ""));
@@ -460,7 +461,7 @@ export function importLocalFiles(
       rotation: Number(file.rotation || 0)
     };
   });
-  return createUploadFromLocalFiles(user, memberId, resolved);
+  return createUploadFromLocalFiles(user, memberId, resolved, requestKey);
 }
 
 function resolveFilesFromRoots(
@@ -469,7 +470,7 @@ function resolveFilesFromRoots(
 ) {
   if (!Array.isArray(files)) throw createError({ statusCode: 400, statusMessage: "请选择要导入的文件" });
   if (!files.length) throw createError({ statusCode: 400, statusMessage: "请选择至少一个报告文件" });
-  if (files.length > 24) throw createError({ statusCode: 413, statusMessage: "一次最多导入 24 个文件" });
+  if (files.length > 1000) throw createError({ statusCode: 413, statusMessage: "一次最多导入 1000 个文件" });
   const seen = new Set<string>();
   return files.map((file) => {
     const root = getRootFrom(roots, String(file.rootId || ""));
@@ -488,23 +489,25 @@ function resolveFilesFromRoots(
 export async function importLocalFilesForUser(
   user: RequestUser,
   memberId: string,
-  files: Array<{ rootId?: unknown; path?: unknown; rotation?: unknown }>
+  files: Array<{ rootId?: unknown; path?: unknown; rotation?: unknown }>,
+  requestKey?: string
 ) {
   if (getAppConfig().authMode !== "fnos") {
     if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可从 NAS 导入报告" });
-    return importLocalFiles(user, memberId, files);
+    return importLocalFiles(user, memberId, files, requestKey);
   }
   const inspected = await inspectLocalImportRootsForUser(user);
   const resolved = resolveFilesFromRoots(inspected.roots, files);
   if (isFnosUserFileApiConfigured()) await requireFnosUserReadable(user, resolved.map((file) => file.sourcePath));
   else if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "当前飞牛系统不支持个人文件导入" });
-  return createUploadFromLocalFiles(user, memberId, resolved);
+  return createUploadFromLocalFiles(user, memberId, resolved, requestKey);
 }
 
 export async function importAuthorizedFnosFiles(
   user: RequestUser,
   memberId: string,
-  pathValues: unknown
+  pathValues: unknown,
+  requestKey?: string
 ) {
   if (getAppConfig().authMode !== "fnos" || !isFnosUserFileApiConfigured()) {
     throw createError({ statusCode: 400, statusMessage: "当前部署环境不支持飞牛用户文件授权" });
@@ -512,7 +515,7 @@ export async function importAuthorizedFnosFiles(
   if (!Array.isArray(pathValues) || !pathValues.length) {
     throw createError({ statusCode: 400, statusMessage: "请选择至少一个报告文件" });
   }
-  if (pathValues.length > 24) throw createError({ statusCode: 413, statusMessage: "一次最多导入 24 个文件" });
+  if (pathValues.length > 1000) throw createError({ statusCode: 413, statusMessage: "一次最多导入 1000 个文件" });
   const requestedPaths = pathValues.map((value) => String(value || "").trim());
   if (requestedPaths.some((path) => !path || path.length > 4096 || !isAbsolute(path) || path.includes("\0") || !supportedName.test(path))) {
     throw createError({ statusCode: 400, statusMessage: "所选文件路径或格式无效" });
@@ -541,5 +544,5 @@ export async function importAuthorizedFnosFiles(
   if (canonicalPaths.some((path, index) => path !== requestedPaths[index])) {
     await requireFnosUserReadable(user, canonicalPaths);
   }
-  return createUploadFromLocalFiles(user, memberId, resolved);
+  return createUploadFromLocalFiles(user, memberId, resolved, requestKey);
 }

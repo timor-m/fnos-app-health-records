@@ -47,6 +47,51 @@ function page(pageNumber: number, lines: string[]) {
   };
 }
 
+test("table structure restores cells that OCR never emitted without fabricating evidence", () => {
+  const rows = [
+    ["项目名称", "缩写", "结果", "单位", "异常", "参考范围"],
+    ["尿比重", "SG", "1.015", "", "", "1.005-1.030"],
+  ];
+  const raw = rows.flatMap((cells, row) => cells.flatMap((text, column) => text ? [{
+    id: `cell-${row}-${column}`, text, confidence: .99,
+    box: [column * 100, row * 40, column * 100 + 90, row * 40 + 20],
+    tableCell: { table: "table_0", row, column, columns: 6 },
+  }] : []));
+  const input = JSON.stringify(raw);
+  const [page] = rebuildOcrPages([{ pageId: "table-page", pageNumber: 1, linesJson: input }]);
+  const line = page.lines.find(line => line.text.startsWith("尿比重"));
+  assert.ok(line);
+  assert.equal(line.text, "尿比重 | SG | 1.015 |  |  | 1.005-1.030");
+  assert.equal(line.sourceCells[3].text, "");
+  assert.deepEqual(line.sourceCells[3].sourceLineIds, []);
+  assert.equal(line.localObservation?.unit, null);
+  assert.equal(line.localObservation?.numericValue, 1.015);
+  assert.equal(JSON.stringify(raw), input);
+  const unsafe = raw.map(line => line.tableCell.row === 1 ? { ...line, tableCell: undefined, tableUnsafe: true } : line);
+  const [fallback] = rebuildOcrPages([{ pageId: "table-page", pageNumber: 1, linesJson: JSON.stringify(unsafe) }]);
+  const unsafeLine = fallback.lines.find(line => line.text.startsWith("尿比重"));
+  assert.equal(unsafeLine?.tableStructureUnsafe, true);
+  assert.deepEqual(unsafeLine?.localObservations, []);
+});
+
+test("structured result columns qualify unknown numeric and textual items after abbreviation", () => {
+  const raw = [
+    ["项目名称", "缩写", "结果", "单位", "异常", "参考范围"],
+    ["合成计数项", "SYN", "0", "", "", ""],
+    ["合成描述项", "SYN-T", "清亮", "", "", ""],
+    ["空结果项目", "EMPTY", "", "", "", "0-9"],
+  ].flatMap((cells, row) => cells.flatMap((text, column) => text ? [{
+    id: `structured-${row}-${column}`, text, confidence: .99,
+    box: [column*100,row*40,column*100+90,row*40+20],
+    tableCell: {table:"table_0",row,column,columns:6},
+  }] : []));
+  const [result] = rebuildOcrPages([{pageId:"structured",pageNumber:1,linesJson:JSON.stringify(raw)}]);
+  for (const name of ["合成计数项", "合成描述项"]) {
+    assert.equal(result.lines.find(line => line.text.startsWith(name))?.candidateKind, "scalar");
+  }
+  assert.equal(result.lines.find(line => line.text.startsWith("空结果项目"))?.localObservations.length, 0);
+});
+
 test("packs sparse indicator pages together without a small fixed page split", () => {
   const rows = Array.from({ length: 10 }, (_, index) =>
     page(index + 1, [
@@ -1005,6 +1050,7 @@ test("removes repeated page noise while preserving table headers and medical row
 
 test("keeps the current single-request adapter while exposing the full OCR plan", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-ai-plan-"));
+  closeDatabaseForTests();
   process.env.STORAGE_DIR = storageDir;
   try {
     const db = getDatabase();
