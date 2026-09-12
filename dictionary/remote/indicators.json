@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 19,
+  "revision": 20,
   "indicators": [
     {
       "canonicalKey": "lipid_ldl_hdl_ratio",
@@ -2366,7 +2366,9 @@
       "aliases": [
         "类酵母菌",
         "酵母样菌",
-        "酵母样真菌"
+        "酵母样真菌",
+        "念珠菌",
+        "霉菌"
       ],
       "allowedUnits": [],
       "sectionHints": [
@@ -2375,7 +2377,7 @@
         "妇科",
         "微生物"
       ],
-      "explanation": "显微镜检查中的类酵母菌描述，属于定性结果，应结合标本来源和原报告判读。"
+      "explanation": "显微镜检查或分泌物常规中的酵母样真菌（念珠菌/霉菌）结果，属于定性结果，应结合标本来源和原报告判读。"
     },
     {
       "canonicalKey": "cbc_mid_count",
@@ -4002,7 +4004,8 @@
       "unitDimension": "count_concentration",
       "aliases": [
         "上皮细胞计数",
-        "尿上皮细胞计数"
+        "尿上皮细胞计数",
+        "尿镜检上皮细胞"
       ],
       "allowedUnits": [
         "/LPF",
@@ -4185,6 +4188,266 @@
         "变态反应"
       ],
       "explanation": "血清总 IgE 测量值，常用于过敏性疾病筛查，应以原报告参考范围为准。"
+    },
+    {
+      "canonicalKey": "laboratory_aldosterone",
+      "displayName": "醛固酮",
+      "categoryKey": "laboratory_other",
+      "order": 83,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "pg/mL",
+      "unitDimension": "other",
+      "aliases": [
+        "醛固酮",
+        "ALD",
+        "醛固酮(ALD)",
+        "血清醛固酮"
+      ],
+      "allowedUnits": [
+        "pg/mL",
+        "ng/dL",
+        "pmol/L"
+      ],
+      "sectionHints": [
+        "高血压三项",
+        "肾素",
+        "内分泌",
+        "激素",
+        "生化"
+      ],
+      "explanation": "肾素-血管紧张素-醛固酮系统激素，常用于高血压病因筛查。立位与卧位采血参考范围不同，趋势对比时请留意采血体位条件。"
+    },
+    {
+      "canonicalKey": "laboratory_angiotensin_i_4c",
+      "displayName": "血管紧张素Ⅰ(4℃)",
+      "categoryKey": "laboratory_other",
+      "order": 84,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "plasma",
+      "defaultUnit": "ng/(mL·h)",
+      "unitDimension": "other",
+      "aliases": [
+        "血管紧张素Ⅰ(4°C)",
+        "AT-Ⅰ(4℃)"
+      ],
+      "allowedUnits": [
+        "ng/(mL·h)",
+        "ng/mL/h",
+        "μg/(L·h)"
+      ],
+      "sectionHints": [
+        "高血压三项",
+        "肾素",
+        "内分泌",
+        "激素"
+      ],
+      "explanation": "4℃条件下测定的血管紧张素Ⅰ，与37℃测定口径不同，不与未标注测定条件的结果合并；常与肾素活性、醛固酮联合用于高血压病因筛查。"
+    },
+    {
+      "canonicalKey": "secretion_trichomonas_vaginalis",
+      "displayName": "阴道毛滴虫",
+      "categoryKey": "laboratory_other",
+      "order": 85,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "滴虫",
+        "阴道滴虫",
+        "毛滴虫",
+        "阴道毛滴虫"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "分泌物",
+        "白带常规",
+        "妇科",
+        "镜检",
+        "微生物"
+      ],
+      "explanation": "阴道分泌物湿片镜检中的阴道毛滴虫结果，检出提示滴虫性阴道炎，应结合症状和原报告判读。"
+    },
+    {
+      "canonicalKey": "secretion_neisseria_gonorrhoeae",
+      "displayName": "淋病奈瑟菌",
+      "categoryKey": "laboratory_other",
+      "order": 86,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "淋球菌",
+        "革兰阴性双球菌",
+        "淋病双球菌",
+        "淋病奈瑟菌"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "分泌物",
+        "涂片",
+        "微生物",
+        "妇科",
+        "男科"
+      ],
+      "explanation": "分泌物涂片或培养中的淋病奈瑟菌（淋球菌）结果，检出提示淋球菌感染，应结合标本来源和原报告判读。"
+    },
+    {
+      "canonicalKey": "secretion_clue_cell",
+      "displayName": "线索细胞",
+      "categoryKey": "laboratory_other",
+      "order": 87,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "线索细胞",
+        "Clue Cell",
+        "线索细胞(Clue Cell)"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "分泌物",
+        "白带常规",
+        "妇科",
+        "镜检"
+      ],
+      "explanation": "线索细胞是细菌性阴道病的特征性镜检发现，阳性需结合胺试验、pH 等结果综合判断。"
+    },
+    {
+      "canonicalKey": "microscopy_fungal_hyphae",
+      "displayName": "真菌菌丝",
+      "categoryKey": "laboratory_other",
+      "order": 88,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "菌丝",
+        "假菌丝",
+        "菌丝/假菌丝",
+        "真菌菌丝",
+        "菌丝及假菌丝",
+        "真菌菌丝及假菌丝"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "镜检",
+        "分泌物",
+        "妇科",
+        "微生物"
+      ],
+      "explanation": "镜检发现真菌菌丝（含假菌丝）较仅见孢子更支持侵袭性真菌感染，应结合标本来源和原报告判读。"
+    },
+    {
+      "canonicalKey": "microscopy_budding_spore",
+      "displayName": "芽生孢子",
+      "categoryKey": "laboratory_other",
+      "order": 89,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "芽生孢子",
+        "出芽孢子"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "镜检",
+        "分泌物",
+        "妇科",
+        "微生物"
+      ],
+      "explanation": "镜检见芽生孢子提示酵母样真菌存在，常与菌丝结果同时报告，应结合标本来源和原报告判读。"
+    },
+    {
+      "canonicalKey": "infectious_hpv_other_12_high_risk",
+      "displayName": "其他12种高危型HPV",
+      "categoryKey": "infection_immunity",
+      "order": 81,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "其他12种高危型HPV",
+        "其他高危型HPV(12种)",
+        "其余12种高危型HPV",
+        "其他12种高危型HPV检测"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "HPV",
+        "人乳头瘤病毒",
+        "宫颈筛查",
+        "妇科"
+      ],
+      "explanation": "HPV分型检测中除16、18型外其他12种高危型（31/33/35/39/45/51/52/56/58/59/66/68型）合并报告的结果，应结合同次HPV检测和原报告判读。"
+    },
+    {
+      "canonicalKey": "infectious_ebv_vca_iga",
+      "displayName": "EB病毒VCA-IgA抗体",
+      "categoryKey": "infection_immunity",
+      "order": 82,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "serum",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "EBV VCA-IgA",
+        "EBVVCA-IgA",
+        "EBV-VCA-IgA",
+        "VCA-IgA",
+        "EB病毒壳抗原IgA抗体",
+        "EB病毒VCA-IgA"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "EB病毒",
+        "EBV",
+        "鼻咽癌筛查",
+        "血清学"
+      ],
+      "explanation": "EB病毒壳抗原IgA抗体，常用于鼻咽癌筛查，阳性结果需结合临床和进一步检查判读。"
+    },
+    {
+      "canonicalKey": "ophthalmology_color_vision",
+      "displayName": "辨色力",
+      "categoryKey": "ophthalmology_measurement",
+      "order": 7,
+      "kind": "categorical",
+      "valueType": "text",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "辨色力",
+        "辨色力检查",
+        "色觉",
+        "色觉检查"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "眼科",
+        "体检",
+        "辨色力",
+        "色觉"
+      ],
+      "explanation": "辨色力（色觉）检查结果，常见结论为正常、色弱或色盲，属于定性功能检查。"
     }
   ],
   "extensions": [
@@ -4639,6 +4902,38 @@
       "sectionHints": [
         "眼科",
         "视力"
+      ]
+    },
+    {
+      "canonicalKey": "urine_crystals",
+      "aliases": [
+        "结晶"
+      ],
+      "sectionHints": [
+        "尿常规",
+        "尿沉渣",
+        "尿镜检"
+      ]
+    },
+    {
+      "canonicalKey": "cbc_pct",
+      "aliases": [
+        "血小板容积比"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ]
+    },
+    {
+      "canonicalKey": "electrolyte_co2_cp",
+      "aliases": [
+        "血清总二氧化碳",
+        "血清总二氧化碳测定"
+      ],
+      "sectionHints": [
+        "电解质",
+        "生化"
       ]
     }
   ],
