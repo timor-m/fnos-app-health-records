@@ -698,6 +698,16 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .trend-card-header strong { min-width: 0; flex: 1 1 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
 .trend-card-header > div > span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trend-match-alias { color: var(--brand); font-size: 11px; font-weight: 700; }
+.scale-notation-switch {
+  justify-self: start; display: inline-flex; padding: 2px; border-radius: 8px;
+  background: var(--fill-1); gap: 2px;
+}
+.scale-notation-switch > button {
+  padding: 3px 10px; border: 0; border-radius: 6px; background: transparent;
+  color: var(--muted); font-size: 11px; font-weight: 700; cursor: pointer;
+}
+.scale-notation-switch > button:hover { color: var(--ink); }
+.scale-notation-switch > button.active { background: var(--surface); color: var(--brand-strong); box-shadow: var(--shadow-s); }
 .trend-delta {
   flex: 0 0 auto; padding: 3px 8px; border-radius: 999px; font-size: 11px; line-height: 1.35; font-style: normal; font-weight: 800;
   background: var(--chip-plain-bg); color: var(--muted);

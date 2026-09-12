@@ -107,6 +107,10 @@ import {
 } from "./observation-reference.service";
 import { assessTrendComparability } from "./trend-comparability.service";
 import { assessTrendChange } from "./trend-change-assessment.service";
+import {
+  canonicalValueForScale,
+  describeValueScale
+} from "./value-scale.service";
 import { assessTrendAbnormalContinuity } from "./trend-abnormal-continuity.service";
 import {
   reportDuplicateRuleConfig,
@@ -1680,6 +1684,11 @@ export function getReportDetail(
       } = row;
       return {
         ...observation,
+        // 登记了表示法的指标（如视力的小数/五分记录法）在趋势口径统一为 canonical 值，
+        // 报告详情同步展示换算后的趋势值。
+        canonicalValue: row.canonicalValue !== null
+          ? canonicalValueForScale(row.canonicalKey, row.canonicalValue)
+          : row.canonicalValue,
         manualReviewed: Boolean(row.manualReviewed),
         manualCreated: Boolean(row.manualCreated),
         referenceLow: reference.low,
@@ -5246,12 +5255,17 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       normalizeTrendUnit(row.unit) ||
       inferTrendUnitFromResultText(row.resultText);
     const reference = assessPersistedObservationReference(row);
-    const trendNumericValue =
+    const rawTrendNumericValue =
       numericValue === null
         ? null
         : usesCanonical
           ? (row.canonicalValue ?? numericValue)
           : numericValue;
+    // 登记了表示法的指标（如视力）统一换算为 canonical 口径，不同记录法才能跨报告比较。
+    const trendNumericValue =
+      rawTrendNumericValue !== null && usesCanonical
+        ? canonicalValueForScale(row.canonicalKey, rawTrendNumericValue)
+        : rawTrendNumericValue;
     const convertedReferenceLow =
       numericValue === null || reference.low === null
         ? null
@@ -5860,6 +5874,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
         kind: group.quality === 'raw' ? 'institution' as const : 'standard' as const,
         name: group.name,
         unit: group.unit,
+        valueScale: describeValueScale(group.indicatorKey),
         pinned: pinnedKeys.has(
           `${group.indicatorKey}\u0000${group.unit || ""}`,
         ),

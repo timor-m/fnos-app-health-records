@@ -22,11 +22,18 @@ import ReportDetailModal from "../components/ReportDetailModal.vue";
 import { apiUrl, request } from "../utils/api";
 import { matchTrendSearch } from "../utils/trends";
 import { describeObservationAbnormal, formatReferenceRange } from "../utils/indicator-display";
+import {
+  canonicalNotation,
+  convertScaledValue,
+  formatScaledValue,
+  notationTitle,
+  scaledDeltaPrecision
+} from "../utils/value-scale";
 import { useAppContext } from "../composables/useAppContext";
 import { usePullRefresh } from "../composables/usePullRefresh";
 import { useRefreshOnActivate } from "../composables/useRefreshOnActivate";
 import { useToast } from "../composables/useToast";
-import type { IndicatorNormalizationMetrics, OcrPageDetail, TrendExcludedPoint, TrendPoint, TrendSeries } from "../types/api";
+import type { IndicatorNormalizationMetrics, OcrPageDetail, TrendExcludedPoint, TrendPoint, TrendSeries, TrendValueScale } from "../types/api";
 
 const app = useAppContext();
 const route = useRoute();
@@ -37,6 +44,26 @@ const query = ref("");
 const groupFilter = ref("all");
 const attentionFilter = ref<"all" | "attention" | "abnormal" | "near_boundary" | "unflagged">("all");
 const collapsedGroups = ref(new Set<string>());
+// 登记了表示法的序列（如视力的小数/五分记录法）可按类型切换显示，选择跨会话保留。
+const SCALE_NOTATION_STORAGE_KEY = "health-records:trend-scale-notation";
+const LEGACY_VISION_SCALE_STORAGE_KEY = "health-records:trend-vision-scale";
+const scaleNotations = ref<Record<string, string>>(loadScaleNotations());
+
+function loadScaleNotations() {
+  let stored: Record<string, string> = {};
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SCALE_NOTATION_STORAGE_KEY) || "{}");
+    if (parsed && typeof parsed === "object") stored = parsed;
+  } catch { /* 本地偏好损坏时回退默认表示法 */ }
+  // 迁移旧版视力记录方式偏好
+  const legacyVision = localStorage.getItem(LEGACY_VISION_SCALE_STORAGE_KEY);
+  if (legacyVision && !stored.visual_acuity) {
+    stored = { ...stored, visual_acuity: legacyVision };
+    localStorage.removeItem(LEGACY_VISION_SCALE_STORAGE_KEY);
+    localStorage.setItem(SCALE_NOTATION_STORAGE_KEY, JSON.stringify(stored));
+  }
+  return stored;
+}
 const detailPopoverStyle = ref<Record<string, string>>({});
 const detailPopoverPlacement = ref<"above" | "below">("below");
 const previewReportId = ref<string | null>(null);
@@ -314,13 +341,61 @@ function formatNumber(value: number | null) {
   return value.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
 }
 
+function scaleOf(item: TrendSeries) {
+  return item.valueScale || null;
+}
+
+function notationOf(scale: TrendValueScale) {
+  const stored = scaleNotations.value[scale.type];
+  return scale.notations.some((entry) => entry.key === stored) ? stored : canonicalNotation(scale);
+}
+
+function setScaleNotation(scale: TrendValueScale, notation: string) {
+  scaleNotations.value = { ...scaleNotations.value, [scale.type]: notation };
+  localStorage.setItem(SCALE_NOTATION_STORAGE_KEY, JSON.stringify(scaleNotations.value));
+}
+
+function scaleNotationTitle(item: TrendSeries) {
+  const scale = scaleOf(item);
+  return scale ? notationTitle(scale, notationOf(scale)) : "";
+}
+
+/** 登记了表示法的序列按当前选择换算展示值，其余序列保持原值。 */
+function formatSeriesNumber(item: TrendSeries, value: number | null) {
+  if (value === null) return "—";
+  const scale = scaleOf(item);
+  if (scale) return formatScaledValue(scale, value, notationOf(scale));
+  return formatNumber(value);
+}
+
+/** 非 canonical 表示法下差值也按展示口径换算（如视力五分模式 +0.1 表示提升一行）。 */
+function displayDelta(item: TrendSeries) {
+  if (item.delta === null) return null;
+  const scale = scaleOf(item);
+  if (!scale) return item.delta;
+  const notation = notationOf(scale);
+  if (notation === canonicalNotation(scale) || item.latestValue === null || item.previousValue === null) {
+    return item.delta;
+  }
+  const diff = convertScaledValue(scale, item.latestValue, notation) - convertScaledValue(scale, item.previousValue, notation);
+  const precision = scaledDeltaPrecision(scale, notation);
+  return precision === null ? diff : Number(diff.toFixed(precision));
+}
+
+/** 差值绝对值的格式化：表示法提供精度时按精度，否则通用数字格式。 */
+function formatDeltaMagnitude(item: TrendSeries, delta: number) {
+  const scale = scaleOf(item);
+  const precision = scale ? scaledDeltaPrecision(scale, notationOf(scale)) : null;
+  return precision === null ? formatNumber(Math.abs(delta)) : Math.abs(delta).toFixed(precision);
+}
+
 function formatDate(value: string | null) {
   if (!value) return "日期待确认";
   return value.slice(0, 10);
 }
 
-function pointValue(point: TrendPoint, unit: string | null) {
-  return [formatNumber(point.numericValue), unit].filter(Boolean).join(" ");
+function pointValue(item: TrendSeries, point: TrendPoint) {
+  return [formatSeriesNumber(item, point.numericValue), item.unit].filter(Boolean).join(" ");
 }
 
 /* 部分报告的 resultText 已包含单位，避免 “89 mmHg mmHg” 重复展示 */
@@ -398,7 +473,7 @@ function hasReferenceInfo(point: TrendPoint) {
 function trendValueRange(item: TrendSeries) {
   if (item.pointCount < 2 || item.typicalMinValue === null || item.typicalMaxValue === null) return null;
   if (item.typicalMinValue === item.typicalMaxValue) return null;
-  return `${formatNumber(item.typicalMinValue)} - ${formatNumber(item.typicalMaxValue)}${item.unit || ""}`;
+  return `${formatSeriesNumber(item, item.typicalMinValue)} - ${formatSeriesNumber(item, item.typicalMaxValue)}${item.unit || ""}`;
 }
 
 function trendValueRangeLabel(item: TrendSeries) {
@@ -447,7 +522,10 @@ function deltaText(item: TrendSeries) {
   if (!item.latestChangeConclusionAllowed || item.latestChangeStatus === "needs_review") return "变化待核验";
   if (item.latestChangeStatus === "unchanged" || item.delta === 0) return "较上次持平";
   if (item.delta === null) return "变化待核验";
-  return `较上次 ${item.delta > 0 ? "+" : ""}${formatNumber(item.delta)}`;
+  const delta = displayDelta(item);
+  if (delta === null) return "变化待核验";
+  if (delta === 0) return "较上次持平";
+  return `较上次 ${delta > 0 ? "+" : delta < 0 ? "-" : ""}${formatDeltaMagnitude(item, delta)}`;
 }
 
 function deltaClass(item: TrendSeries) {
@@ -499,7 +577,8 @@ function abnormalContinuityLabel(item: TrendSeries) {
 
 function latestChangeDetail(item: TrendSeries) {
   if (item.delta === null) return "目前没有可计算的前次差值";
-  const delta = `${item.delta > 0 ? "+" : ""}${formatNumber(item.delta)}${item.unit || ""}`;
+  const value = displayDelta(item) ?? item.delta;
+  const delta = `${value > 0 ? "+" : value < 0 ? "-" : ""}${formatDeltaMagnitude(item, value)}${item.unit || ""}`;
   return `算术差值 ${delta} · ${intervalLabel(item.latestIntervalDays)} · ${magnitudeLabel(item)}`;
 }
 
@@ -576,7 +655,7 @@ function trendChartMinWidth(item: TrendSeries) {
 
 function trendNodeLabel(point: TrendPoint, item: TrendSeries) {
   const review = point.trendOutlier ? "，该点与其余记录差异较大" : "";
-  return `${item.name} ${pointValue(point, item.unit)}，${formatDate(point.reportIssuedAt)}${review}，点击查看来源`;
+  return `${item.name} ${pointValue(item, point)}，${formatDate(point.reportIssuedAt)}${review}，点击查看来源`;
 }
 
 function recentPoints(item: TrendSeries) {
@@ -802,7 +881,18 @@ onDeactivated(() => {
                 <strong>{{ item.name }}</strong>
                 <em class="trend-delta" :class="deltaClass(item)">{{ deltaText(item) }}</em>
               </div>
-              <span>{{ item.pointCount }} 个数据点 · {{ item.unit || "无单位" }} · {{ qualityLabel(item.quality) }}</span>
+              <span>{{ item.pointCount }} 个数据点 · {{ item.unit || (scaleOf(item) ? scaleNotationTitle(item) : "无单位") }} · {{ qualityLabel(item.quality) }}</span>
+              <span v-if="scaleOf(item)" class="scale-notation-switch" role="group" :aria-label="`${item.name}显示方式切换`">
+                <button
+                  v-for="notation in scaleOf(item)!.notations"
+                  :key="notation.key"
+                  type="button"
+                  :class="{ active: notationOf(scaleOf(item)!) === notation.key }"
+                  :aria-pressed="notationOf(scaleOf(item)!) === notation.key"
+                  :title="`按${notation.title || notation.label}显示`"
+                  @click="setScaleNotation(scaleOf(item)!, notation.key)"
+                >{{ notation.label }}</button>
+              </span>
               <small v-if="item.kind === 'institution'" class="trend-match-alias">{{ item.points[0]?.hospitalName }} · {{ item.points[0]?.comparisonMethod || '方法未注明' }} · {{ item.points[0]?.comparisonSpecimen || '标本未注明' }}</small>
               <small v-if="matchingAlias(item)" class="trend-match-alias">匹配名称：{{ matchingAlias(item) }}</small>
             </div>
@@ -822,7 +912,7 @@ onDeactivated(() => {
           <div class="trend-main">
             <div class="trend-latest">
               <span>最新值</span>
-              <strong>{{ formatNumber(item.latestValue) }}<small v-if="item.unit">{{ item.unit }}</small></strong>
+              <strong>{{ formatSeriesNumber(item, item.latestValue) }}<small v-if="item.unit">{{ item.unit }}</small></strong>
               <p>{{ formatDate(item.lastDate) }}<template v-if="item.pointCount === 1"> · 目前只有一次记录</template></p>
               <small v-if="showTrendChangeSummary(item)" class="trend-change-summary" :class="item.trendStatus">
                 {{ trendStatusLabel(item) }}<template v-if="item.latestIntervalDays !== null"> · {{ intervalLabel(item.latestIntervalDays) }}</template>
@@ -862,7 +952,7 @@ onDeactivated(() => {
                     <div>
                       <span>本次结果</span>
                       <p>
-                        {{ formatNumber(item.latestValue) }}{{ item.unit || "" }}
+                        {{ formatSeriesNumber(item, item.latestValue) }}{{ item.unit || "" }}
                         · {{ referenceSummary(latestPoint(item), item.unit) }}
                       </p>
                     </div>
@@ -923,7 +1013,7 @@ onDeactivated(() => {
                   :aria-label="trendNodeLabel(chartPoint.point, item)"
                   @click="openSourcePage(chartPoint.point, item)"
                 >
-                  <span class="trend-chart-value">{{ formatNumber(chartPoint.point.numericValue) }}</span>
+                  <span class="trend-chart-value">{{ formatSeriesNumber(item, chartPoint.point.numericValue) }}</span>
                   <i :class="pointFlagClass(chartPoint.point)"></i>
                   <time>{{ formatDate(chartPoint.point.reportIssuedAt) }}</time>
                 </button>
@@ -939,7 +1029,7 @@ onDeactivated(() => {
           <div class="trend-points">
             <article v-for="point in recentPoints(item)" :key="`${item.name}-${point.reportId}-${point.observationId}`">
               <div>
-                <strong>{{ pointValue(point, item.unit) }}<em v-if="pointFlagVisible(point)" class="trend-flag" :class="pointFlagClass(point)" :title="point.abnormalReason || undefined">{{ pointFlagLabel(point) }}</em></strong>
+                <strong>{{ pointValue(item, point) }}<em v-if="pointFlagVisible(point)" class="trend-flag" :class="pointFlagClass(point)" :title="point.abnormalReason || undefined">{{ pointFlagLabel(point) }}</em></strong>
                 <span>{{ formatDate(point.reportIssuedAt) }} · {{ point.hospitalName || "医院待整理" }}</span>
                 <small v-if="hasReferenceInfo(point)">{{ referenceSummary(point, item.unit) }}</small>
                 <small v-if="pointInterpretationLine(point)" class="trend-point-interpretation">{{ pointInterpretationLine(point) }}</small>

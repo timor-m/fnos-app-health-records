@@ -741,11 +741,17 @@ export type TrendPoint = {
   } | null;
 };
 
+export type TrendValueScale = {
+  type: string;
+  notations: Array<{ key: string; label: string; title?: string }>;
+};
+
 export type TrendSeries = {
   kind?: 'standard' | 'institution';
   indicatorKey: string;
   name: string;
   unit: string | null;
+  valueScale?: TrendValueScale | null;
   pinned: boolean;
   groupKey: string;
   groupName: string;

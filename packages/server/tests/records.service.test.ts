@@ -2547,3 +2547,76 @@ test("deduplicates report abnormal counts by canonical indicator", () => {
     rmSync(storageDir, { recursive: true, force: true });
   }
 });
+
+test("merges decimal and five-point vision records into one decimal-scale trend series", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-vision-scale-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(manager.id, manager.displayName);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('records-member', '本人', 'self', ?)
+    `).run(manager.id);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('records-member', ?, 'manager', ?)
+    `).run(manager.id, manager.id);
+
+    const decimalReport = createUpload(manager, "records-member", [{ originalName: "checkup-a.png", data: pngBytes() }]);
+    const fivePointReport = createUpload(manager, "records-member", [{ originalName: "checkup-b.png", data: anotherPngBytes() }]);
+    db.prepare(`
+      UPDATE reports SET title = '入职体检', report_type = 'checkup', status = 'ready',
+        hospital_name_raw = '示例体检中心', report_issued_at = '2026-01-10'
+      WHERE id = ?
+    `).run(decimalReport.reportId);
+    db.prepare(`
+      UPDATE reports SET title = '年度体检', report_type = 'checkup', status = 'ready',
+        hospital_name_raw = '示例体检中心', report_issued_at = '2026-07-21'
+      WHERE id = ?
+    `).run(fivePointReport.reportId);
+    db.prepare(`
+      INSERT INTO observations (id, report_id, section_name, item_name, result_text, numeric_value, unit)
+      VALUES
+        ('vision-decimal-right', ?, '眼科', '右眼裸眼视力', '0.8', 0.8, NULL),
+        ('vision-five-point-right', ?, '眼科', '右眼裸眼视力', '4.9', 4.9, NULL)
+    `).run(decimalReport.reportId, fivePointReport.reportId);
+    db.prepare(`
+      INSERT INTO observation_normalizations (
+        observation_id, indicator_id, canonical_key, canonical_name, canonical_value,
+        confidence, quality, matched_by, match_reason, version, source_origin, review_status
+      ) VALUES
+        ('vision-decimal-right', NULL, 'vision_uncorrected_right', '右眼裸眼视力', 0.8,
+          0.99, 'high', 'builtin_alias', 'test', 'v1', 'item_name', 'unreviewed'),
+        ('vision-five-point-right', NULL, 'vision_uncorrected_right', '右眼裸眼视力', 4.9,
+          0.99, 'high', 'builtin_alias', 'test', 'v1', 'item_name', 'unreviewed')
+    `).run();
+
+    const trends = listTrendSeries(manager, "records-member") as Array<{
+      indicatorKey: string;
+      valueScale?: { type: string; notations: Array<{ key: string; label: string }> } | null;
+      pointCount: number;
+      latestValue: number | null;
+      points: Array<{ numericValue: number; resultText: string }>;
+    }>;
+    const vision = trends.find((series) => series.indicatorKey === "vision_uncorrected_right");
+    assert.ok(vision, "视力指标应形成标准趋势序列");
+    assert.equal(vision.valueScale?.type, "visual_acuity");
+    assert.deepEqual(vision.valueScale?.notations.map((notation) => notation.key), ["decimal", "five_point"]);
+    assert.equal(vision.pointCount, 2);
+    assert.deepEqual(vision.points.map((point) => point.numericValue), [0.8, 0.8]);
+    // 原始记录值保留，五分记录报告的原文不因趋势换算而丢失
+    assert.deepEqual(vision.points.map((point) => point.resultText), ["0.8", "4.9"]);
+    assert.equal(vision.latestValue, 0.8);
+
+    // 报告详情里的趋势值同样按小数记录法展示
+    const detail = getReportDetail(manager, fivePointReport.reportId);
+    const observation = detail.observations.find((item) => item.id === "vision-five-point-right");
+    assert.equal(observation?.canonicalValue, 0.8);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
