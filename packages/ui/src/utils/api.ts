@@ -60,11 +60,14 @@ export async function request<T>(path: string, init?: RequestInit) {
   return parseApiPayload<T>(response.status, response.ok, await response.text());
 }
 
-function xhrUpload<T>(path: string, body: FormData): Promise<T> {
+function xhrUpload<T>(path: string, body: FormData, onProgress?: (percent: number) => void): Promise<T> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", apiUrl(path));
     xhr.timeout = 10 * 60 * 1000;
+    if (onProgress) xhr.upload.onprogress = event => {
+      if (event.lengthComputable) onProgress(Math.round(event.loaded / event.total * 100));
+    };
     xhr.onload = () => {
       try {
         resolve(parseApiPayload<T>(xhr.status, xhr.status >= 200 && xhr.status < 300, xhr.responseText));
@@ -78,7 +81,11 @@ function xhrUpload<T>(path: string, body: FormData): Promise<T> {
   });
 }
 
-export async function requestUpload<T>(path: string, body: FormData): Promise<T> {
+export async function requestUpload<T>(path: string, body: FormData, onProgress?: (percent: number) => void): Promise<T> {
+  if (onProgress) {
+    try { return await xhrUpload<T>(path, body, onProgress); }
+    catch (cause) { if (cause instanceof TypeError) throw networkError(cause); throw cause; }
+  }
   let response: Response;
   try {
     response = await fetch(apiUrl(path), { method: "POST", body });

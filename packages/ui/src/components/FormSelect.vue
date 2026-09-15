@@ -13,6 +13,7 @@ const props = defineProps<{
   ariaLabel?: string;
   emptyText?: string;
   hint?: string;
+  panelMinWidth?: number;
 }>();
 const emit = defineEmits<{ "update:modelValue": [value: string]; change: [value: string] }>();
 
@@ -35,8 +36,9 @@ function updatePanelPosition() {
     return;
   }
   const rect = root.value?.getBoundingClientRect();
+  const width = rect ? Math.min(Math.max(rect.width, props.panelMinWidth || 0), window.innerWidth - 24) : 0;
   panelStyle.value = rect
-    ? { position: "fixed", left: `${rect.left}px`, top: `${rect.bottom + 6}px`, width: `${rect.width}px` }
+    ? { position: "fixed", left: `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`, top: `${rect.bottom + 6}px`, width: `${width}px` }
     : {};
 }
 
@@ -96,6 +98,7 @@ onBeforeUnmount(() => {
       <div v-if="open" ref="layer" class="form-select-layer" @click.self="open = false">
         <div class="form-select-panel" :style="panelStyle" role="listbox" :aria-label="ariaLabel">
           <span class="sheet-grabber" aria-hidden="true"></span>
+          <slot name="panel" :pick="pick" :close="() => open = false">
           <p v-if="!options.length || hint" class="form-select-empty">{{ hint || emptyText || '暂无可选项' }}</p>
           <button
             v-for="option in options"
@@ -111,6 +114,7 @@ onBeforeUnmount(() => {
             <span>{{ option.label }}</span>
             <Check v-if="option.value === modelValue" :size="16" />
           </button>
+          </slot>
         </div>
       </div>
     </Teleport>

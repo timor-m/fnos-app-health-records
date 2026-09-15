@@ -238,6 +238,22 @@ test('legacy runtime directory may use a stable symlink alias', async () => {
   });
 });
 
+test('supplement files follow archive migration and verified old-copy cleanup', async () => {
+  await fixture(async (source, _target, rootId) => {
+    mkdirSync(join(source, 'report-notes/synthetic/original'), { recursive: true });
+    writeFileSync(join(source, 'report-notes/synthetic/original/fixture.jpg'), 'synthetic');
+    await startStorageMigration(rootId); await waitForStorageMigration();
+    const state = getStorageMigration()!;
+    assert.equal(state.phase, 'completed', state.error || 'migration failed');
+    const targetFile = join(state.target, 'report-notes/synthetic/original/fixture.jpg');
+    assert.equal(readFileSync(targetFile, 'utf8'), 'synthetic');
+    assert.equal((await previewStorageCleanup(state.id)).files, 3);
+    await cleanupStorageSource(state.id);
+    assert.equal(existsSync(join(source, 'report-notes/synthetic/original/fixture.jpg')), false);
+    assert.equal(readFileSync(targetFile, 'utf8'), 'synthetic');
+  });
+});
+
 test('cleanup removes only verified old files, retaining runtime, backups, new files and active archive', async () => {
   await fixture(async (source, _target, rootId) => {
     for (const dir of ['backups', 'secrets', 'config']) {

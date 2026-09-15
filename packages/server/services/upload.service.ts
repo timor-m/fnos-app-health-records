@@ -15,7 +15,7 @@ import {
 } from "./processing-job-batches.service";
 
 const maxFileCount = 1000;
-const maxFileBytes = 40 * 1024 * 1024;
+import { maxUploadFileBytes as maxFileBytes } from '../../shared/upload-limits';
 const maxTotalBytes = 2 * 1024 * 1024 * 1024;
 const pipelineVersion = "upload-v1";
 

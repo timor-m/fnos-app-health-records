@@ -29,8 +29,9 @@ function referencedFileCount(db: DatabaseSync, storagePath: string) {
     SELECT
       (SELECT COUNT(*) FROM report_pages WHERE storage_path = ?) +
       (SELECT COUNT(*) FROM report_pages WHERE thumbnail_path = ?) +
-      (SELECT COUNT(*) FROM health_members WHERE avatar_path = ?) AS count
-  `).get(storagePath, storagePath, storagePath) as { count: number };
+      (SELECT COUNT(*) FROM health_members WHERE avatar_path = ?) +
+      (SELECT COUNT(*) FROM report_note_assets WHERE storage_path = ? OR thumbnail_path = ? OR preview_path = ?) AS count
+  `).get(storagePath, storagePath, storagePath, storagePath, storagePath, storagePath) as { count: number };
   return Number(row.count || 0);
 }
 
@@ -138,6 +139,8 @@ function referencedStoragePaths() {
   const avatars = db.prepare("SELECT avatar_path AS avatarPath FROM health_members WHERE avatar_path IS NOT NULL")
     .all() as Array<{ avatarPath: string }>;
   for (const avatar of avatars) paths.add(avatar.avatarPath);
+  const assets = db.prepare('SELECT storage_path, thumbnail_path, preview_path FROM report_note_assets').all() as Array<{ storage_path: string; thumbnail_path: string; preview_path: string | null }>;
+  for (const asset of assets) for (const path of [asset.storage_path, asset.thumbnail_path, asset.preview_path]) if (path) paths.add(path);
   return paths;
 }
 
@@ -174,5 +177,6 @@ export function scanOrphanStorageFiles(minimumAgeMs = 24 * 60 * 60_000) {
 
   walk(join(storageRoot, "reports"));
   walk(join(storageRoot, "thumbnails"));
-  return { scannedRoots: 2, queued: enqueueFileGarbage(candidates, "orphan_scan", getDatabase(), 0) };
+  walk(join(storageRoot, "report-notes"));
+  return { scannedRoots: 3, queued: enqueueFileGarbage(candidates, "orphan_scan", getDatabase(), 0) };
 }

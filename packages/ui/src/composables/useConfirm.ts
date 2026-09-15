@@ -30,7 +30,8 @@ export function useConfirm() {
     current.loading = true;
     try {
       await current.run();
-      state.value = null;
+      /* run() 内可能再次 ask()（如删除账号遇数据守卫时追加强制确认），状态已被替换则不清理 */
+      if (state.value === current) state.value = null;
     } catch (cause) {
       /* run() 正常应自行处理错误；这里兜底漏网异常，避免弹层滞留且用户毫无反馈 */
       console.error("[health-records] 确认操作执行失败", cause);

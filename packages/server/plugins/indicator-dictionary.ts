@@ -3,6 +3,7 @@ import { getDatabase, getUnreleasedSchemaMaintenance } from "../database/client"
 import { ensureCoreDictionaryMaterialized } from "../services/indicator-dictionary.service";
 import { getAppConfig } from '../utils/runtime-config';
 import { storageMigrationPaused } from '../utils/storage-migration-state';
+import { syncBuiltinTrendGroups } from '../services/trend-groups.service';
 import {
   backfillLegacyMorphologyFindings,
   rebuildMorphologyTrackingIfNeeded
@@ -14,6 +15,7 @@ export default definePlugin(() => {
   // 未发版 schema 维护模式：跳过字典物化与形态学回填，等待维护页修复后再初始化
   if (getUnreleasedSchemaMaintenance()) return;
   ensureCoreDictionaryMaterialized();
+  syncBuiltinTrendGroups(getDatabase());
   backfillLegacyMorphologyFindings();
   rebuildMorphologyTrackingIfNeeded();
 });

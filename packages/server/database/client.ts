@@ -255,7 +255,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
 
   const pendingMigrations = databaseMigrations.filter((migration) => migration.version > currentVersion);
   // Complete older v17 test drafts without renumbering their existing records.
-  if (pendingMigrations.length || !tableExists(db, "upload_receipts")
+  if (pendingMigrations.length || !tableExists(db, "indicator_groups") || !tableExists(db, "indicator_group_members") || !tableExists(db, "report_notes") || !tableExists(db, "report_note_assets") || !tableExists(db, "upload_receipts")
     || !tableExists(db, "institution_trend_auto_rules") || !tableExists(db, "institution_trend_auto_decisions")) {
     backupDatabaseBeforeMigration(db, storageDir, databasePath, currentVersion, schemaVersion);
   }

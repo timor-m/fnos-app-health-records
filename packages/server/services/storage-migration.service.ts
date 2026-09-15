@@ -16,7 +16,7 @@ import { isStorageExportActive } from './records.service';
 
 const ownedMarker = '.health-records-migration.json';
 const cleanupManifestName = 'archive-cleanup.json';
-const cleanableDirectories = new Set(['db', 'reports', 'thumbnails', 'report-exports', 'upload-staging']);
+const cleanableDirectories = new Set(['db', 'reports', 'report-notes', 'thumbnails', 'report-exports', 'upload-staging']);
 type CleanupManifest = { version: 1; id: string; source: string; target: string; device: number; inode: number; files: Array<{ path: string; size: number; hash: string }> };
 let cleaning = false;
 const runtimeOnly = new Set(['ocr-venv', 'ocr-table', 'models', 'pip-cache', 'logs', 'tmp', 'cache']);

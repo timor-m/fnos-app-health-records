@@ -13,9 +13,13 @@ import {
   reportStructuredSectionSchemaSql
 } from "./migrations";
 
+import { reportNotesSchemaSql } from "./report-notes-draft";
+import { trendGroupsSchemaSql } from "./trend-groups-draft";
 export const schemaVersion = latestSchemaVersion;
 
 export const schemaSql = `
+${reportNotesSchemaSql}
+${trendGroupsSchemaSql}
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version INTEGER PRIMARY KEY,
   name TEXT NOT NULL DEFAULT '',

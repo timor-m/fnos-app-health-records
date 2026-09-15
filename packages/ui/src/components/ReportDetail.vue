@@ -6,6 +6,7 @@ import {
   Sparkles, Trash2, X
 } from "@lucide/vue";
 import ClinicalFactEditor from "./ClinicalFactEditor.vue";
+import ReportNotesPanel from './ReportNotesPanel.vue';
 import DateTimePicker from "./DateTimePicker.vue";
 import OcrTextOverlay from "./OcrTextOverlay.vue";
 import OriginalOrientation from "./OriginalOrientation.vue";
@@ -2380,6 +2381,7 @@ onActivated(() => {
       </div>
       <p v-else class="preview-hint">详情加载后会显示关联原件。</p>
     </article>
+    <ReportNotesPanel v-if="detail" :key="reportId" :report-id="reportId" />
   </div>
 
   </template>

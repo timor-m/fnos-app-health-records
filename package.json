@@ -28,6 +28,7 @@
     "dev:web": "vite --config packages/ui/vite.config.ts",
     "dev:server": "node scripts/dev.mjs",
     "test": "tsx --test packages/server/tests/*.test.ts",
+    "test:ui": "vitest run --config packages/ui/vitest.config.ts",
     "typecheck": "vue-tsc --noEmit -p tsconfig.json",
     "build:web": "vite build --config packages/ui/vite.config.ts",
     "build": "npm run build:web && nitro build",
@@ -70,10 +71,13 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@vue/test-utils": "^2.5.0",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
+    "happy-dom": "^20.14.5",
     "tsx": "^4.20.6",
     "typescript": "^5.9.2",
+    "vitest": "^5.0.0",
     "vue-tsc": "^3.0.5"
   }
 }

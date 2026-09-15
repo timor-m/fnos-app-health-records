@@ -666,6 +666,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
   display: grid; grid-template-columns: minmax(0, 1fr) 128px 128px;
   align-items: center; gap: 8px; margin-bottom: 6px;
 }
+
 .trend-search-field { min-height: 38px; max-width: none; }
 .trend-group-select, .trend-status-select { width: 128px; min-width: 0; }
 .trend-group-select .form-select-trigger, .trend-status-select .form-select-trigger { height: 38px; }
@@ -2265,12 +2266,14 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
 .account-summary strong { font-size: 13px; }
 .account-username { color: var(--muted); font-size: 11px; }
 .account-meta { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.account-role, .account-password-status {
+.account-role, .account-password-status, .account-status-disabled {
   display: inline-flex; align-items: center; min-height: 20px; padding: 2px 7px; border-radius: 999px;
   background: var(--brand-softer); color: var(--brand-strong); font-size: 10px; font-weight: 700; line-height: 1.3;
 }
 .account-password-status { background: var(--amber-soft); color: var(--amber); }
 .account-password-status.is-ready { background: var(--fill-2); color: var(--muted); }
+.account-status-disabled { background: var(--danger-soft); color: var(--danger); }
+.account-row.is-disabled .member-avatar, .account-row.is-disabled .account-summary { opacity: .55; }
 .account-actions { min-width: 0; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
 .account-action {
   min-height: 34px; padding: 0 10px; border: 0; border-radius: 999px;
@@ -2281,6 +2284,14 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
 .account-action-edit:hover:not(:disabled) { background: var(--brand-soft-hover); }
 .account-action-reset { background: var(--amber-soft); color: var(--amber); }
 .account-action-reset:hover:not(:disabled) { background: var(--amber-soft); filter: brightness(.97); }
+.account-action-rename { background: var(--fill-3); color: var(--ink-2); }
+.account-action-rename:hover:not(:disabled) { filter: brightness(.97); }
+.account-action-disable { background: var(--amber-soft); color: var(--amber); }
+.account-action-disable:hover:not(:disabled) { filter: brightness(.97); }
+.account-action-enable { background: var(--brand-soft); color: var(--brand-strong); }
+.account-action-enable:hover:not(:disabled) { background: var(--brand-soft-hover); }
+.account-action-delete { background: var(--danger-soft); color: var(--danger); }
+.account-action-delete:hover:not(:disabled) { filter: brightness(.97); }
 .account-action:disabled { opacity: .55; cursor: not-allowed; }
 .account-reset-error { padding: 12px 18px 16px; }
 .account-create-form {
@@ -4181,6 +4192,55 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
   font-size: 11px;
   color: var(--muted);
   font-family: monospace;
+}
+
+/* Report supplements share the existing card, dialog and button tokens. */
+.report-notes-panel .note-count { margin-left: 8px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.report-notes-timeline { list-style: none; margin: 0; padding: 0; }
+.report-note-card { padding: 16px 0; border-top: 1px solid var(--line); }
+.report-note-card:last-child { padding-bottom: 0; }
+.report-note-card > header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.report-note-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.7; margin: 10px 0; }
+.report-note-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 110px)); gap: 8px; margin-top: 12px; }
+.report-note-images button { aspect-ratio: 1; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-m); overflow: hidden; background: var(--fill-2); }
+.report-note-images img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.report-note-actions { display: flex; gap: 12px; margin-top: 8px; }
+.report-note-actions button { display: inline-flex; align-items: center; gap: 5px; min-height: 40px; padding: 4px 8px; border: 0; border-radius: var(--radius-m); background: transparent; color: var(--muted); font-size: 12px; }
+.report-note-actions button:hover { background: var(--fill-2); color: var(--ink); }
+.modal-panel.report-note-editor { width: min(640px, calc(100vw - 32px)); height: auto; min-height: 0; max-height: min(850px, calc(var(--note-viewport-height, 100dvh) - 32px)); display: flex; flex-direction: column; overflow: hidden; background: var(--surface); }
+.report-note-editor > header { flex: 0 0 auto; }
+.report-note-editor h3 { margin: 0; font-size: 17px; }
+.report-note-form { display: flex; flex-direction: column; min-height: 0; }
+.report-note-editor-body { padding: 18px 20px; overflow-y: auto; overscroll-behavior: contain; min-height: 0; }
+.report-note-label { display: block; font-size: 13px; color: var(--ink-2); margin-bottom: 8px; }
+.report-note-editor textarea { width: 100%; box-sizing: border-box; resize: vertical; min-height: 100px; max-height: 240px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-m); color: var(--ink); background: var(--fill-2); font: inherit; font-size: 14px; line-height: 1.6; }
+.report-note-upload-heading { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin: 18px 0 10px; font-size: 13px; }
+.report-note-upload-heading small, .report-note-selected-images small { color: var(--muted); font-size: 11px; }
+.report-note-selected-images { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.report-note-selected-images article { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.report-note-selected-preview { display: grid; place-items: center; padding: 0; width: 100%; aspect-ratio: 1.3; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-m); background: var(--fill-2); color: var(--muted); }
+.report-note-selected-preview img { width: 100%; height: 100%; object-fit: cover; }
+.report-note-filename { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.report-note-image-actions { display: flex; gap: 4px; }
+.report-note-image-actions button { flex: 1; min-width: 0; min-height: 40px; display: grid; place-items: center; border: 0; border-radius: var(--radius-m); color: var(--ink-2); background: var(--fill-2); padding: 0; }
+.report-note-upload-state { display: grid; gap: 4px; overflow-wrap: anywhere; }
+.report-note-upload-state progress { width: 100%; height: 5px; accent-color: var(--brand); }
+.report-note-add-image { margin-top: 12px; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px; width: 100%; min-height: 64px; border: 1px dashed var(--line); border-radius: var(--radius-m); background: var(--fill-2); color: var(--ink-2); font-size: 13px; }
+.report-note-add-image span { width: 100%; font-size: 11px; color: var(--muted); }
+.report-note-editor .report-note-editor-actions { flex: 0 0 auto; display: flex; margin: 0; padding: 12px 20px; gap: 10px; border-top: 1px solid var(--line); background: var(--surface); }
+.report-note-editor-actions button { flex: 1; min-height: 44px; border-radius: var(--radius-m); }
+@media (max-width: 760px), (pointer: coarse) {
+  .report-note-backdrop { padding: 0; align-items: end; }
+  .modal-panel.report-note-editor { width: 100%; max-height: calc(var(--note-viewport-height, 100dvh) * .94); border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
+  .report-note-editor-body { padding: 16px; }
+  .report-note-editor textarea { font-size: 16px; }
+  .report-note-editor .report-note-editor-actions { padding: 12px 16px calc(12px + var(--safe-bottom)); }
+  .report-note-selected-images { gap: 8px; }
+  .report-note-images { grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: 360px; }
+}
+@media (max-width: 420px) {
+  .report-note-selected-images { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .report-note-image-actions button { min-height: 44px; }
 }
 
 @media (max-width: 760px) {

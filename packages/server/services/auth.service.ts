@@ -389,3 +389,167 @@ export function resetLocalAccountPassword(actor: RequestUser, body: Record<strin
     mustChangePassword: true
   };
 }
+
+function findLocalAccountByUserId(userId: string) {
+  return getDatabase().prepare(`
+    SELECT la.id, la.user_id AS userId, la.username, u.display_name AS displayName,
+      u.is_gateway_admin AS isAdmin, la.disabled_at AS disabledAt
+    FROM local_accounts la JOIN users u ON u.id = la.user_id
+    WHERE la.user_id = ?
+  `).get(userId) as {
+    id: string;
+    userId: string;
+    username: string;
+    displayName: string;
+    isAdmin: number;
+    disabledAt: string | null;
+  } | undefined;
+}
+
+export function renameLocalAccount(actor: RequestUser, body: Record<string, unknown>) {
+  requireLocalAdministrator(actor);
+  const userId = requiredText(body.userId, "账号");
+  let username = "";
+  try {
+    username = cleanBootstrapUsername(requiredText(body.username, "用户名"));
+  } catch (cause) {
+    if (cause && typeof cause === "object" && "statusCode" in cause) throw cause;
+    throw createError({ statusCode: 400, statusMessage: "用户名需为 3-64 位字母、数字、点、下划线或短横线" });
+  }
+  const db = getDatabase();
+  const account = findLocalAccountByUserId(userId);
+  if (!account) throw createError({ statusCode: 404, statusMessage: "本地账号不存在" });
+  if (account.username === username) {
+    throw createError({ statusCode: 400, statusMessage: "新用户名与当前用户名相同" });
+  }
+  if (db.prepare("SELECT 1 FROM local_accounts WHERE username = ? AND user_id <> ?").get(username, userId)) {
+    throw createError({ statusCode: 409, statusMessage: "用户名已存在" });
+  }
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("UPDATE local_accounts SET username = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(username, account.id);
+    db.prepare("UPDATE user_identities SET subject = ? WHERE user_id = ? AND provider = 'local'").run(username, userId);
+    db.prepare("DELETE FROM login_attempts WHERE username = ?").run(account.username);
+    db.prepare(`
+      INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
+      VALUES (?, ?, 'auth.local_account_renamed', 'user', ?, ?)
+    `).run(createId("audit"), actor.id, userId, JSON.stringify({ previousUsername: account.username, username }));
+    db.exec("COMMIT");
+  } catch (cause) {
+    db.exec("ROLLBACK");
+    throw cause;
+  }
+  return { renamed: true, userId, previousUsername: account.username, username, displayName: account.displayName };
+}
+
+export function updateLocalAccountDisplayName(actor: RequestUser, body: Record<string, unknown>) {
+  requireLocalAdministrator(actor);
+  const userId = requiredText(body.userId, "账号");
+  const displayName = requiredText(body.displayName, "显示名称").slice(0, 40);
+  const db = getDatabase();
+  const account = findLocalAccountByUserId(userId);
+  if (!account) throw createError({ statusCode: 404, statusMessage: "本地账号不存在" });
+  if (account.displayName === displayName) {
+    throw createError({ statusCode: 400, statusMessage: "新显示名称与当前相同" });
+  }
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("UPDATE users SET display_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(displayName, userId);
+    db.prepare(`
+      INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
+      VALUES (?, ?, 'auth.local_account_display_name_changed', 'user', ?, ?)
+    `).run(createId("audit"), actor.id, userId, JSON.stringify({ previousDisplayName: account.displayName, displayName, username: account.username }));
+    db.exec("COMMIT");
+  } catch (cause) {
+    db.exec("ROLLBACK");
+    throw cause;
+  }
+  return { updated: true, userId, username: account.username, previousDisplayName: account.displayName, displayName };
+}
+
+export function setLocalAccountDisabled(actor: RequestUser, body: Record<string, unknown>) {
+  requireLocalAdministrator(actor);
+  const userId = requiredText(body.userId, "账号");
+  if (typeof body.disabled !== "boolean") {
+    throw createError({ statusCode: 400, statusMessage: "请指定停用或启用" });
+  }
+  const disabled = body.disabled;
+  const db = getDatabase();
+  const account = findLocalAccountByUserId(userId);
+  if (!account) throw createError({ statusCode: 404, statusMessage: "本地账号不存在" });
+  if (disabled && Number(account.isAdmin)) {
+    throw createError({ statusCode: 400, statusMessage: "管理员账号不能停用" });
+  }
+  if (disabled === Boolean(account.disabledAt)) {
+    return { userId, username: account.username, displayName: account.displayName, disabled, changed: false };
+  }
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    if (disabled) {
+      db.prepare("UPDATE local_accounts SET disabled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(account.id);
+      db.prepare("UPDATE auth_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND revoked_at IS NULL").run(userId);
+      db.prepare("DELETE FROM login_attempts WHERE username = ?").run(account.username);
+    } else {
+      db.prepare("UPDATE local_accounts SET disabled_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(account.id);
+    }
+    db.prepare(`
+      INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
+      VALUES (?, ?, ?, 'user', ?, ?)
+    `).run(createId("audit"), actor.id, disabled ? "auth.local_account_disabled" : "auth.local_account_enabled", userId, JSON.stringify({ username: account.username, sessionsRevoked: disabled }));
+    db.exec("COMMIT");
+  } catch (cause) {
+    db.exec("ROLLBACK");
+    throw cause;
+  }
+  return { userId, username: account.username, displayName: account.displayName, disabled, changed: true };
+}
+
+export function deleteLocalAccount(actor: RequestUser, body: Record<string, unknown>) {
+  requireLocalAdministrator(actor);
+  const userId = requiredText(body.userId, "账号");
+  const db = getDatabase();
+  const account = findLocalAccountByUserId(userId);
+  if (!account) throw createError({ statusCode: 404, statusMessage: "本地账号不存在" });
+  if (Number(account.isAdmin)) {
+    throw createError({ statusCode: 400, statusMessage: "管理员账号不能删除" });
+  }
+  /* 仅该账号持有权限的成员会在删除后变成无人可访问的孤儿数据，删除前要求显式确认 */
+  const force = body.force === true;
+  const exclusiveMembers = db.prepare(`
+    SELECT hm.id FROM health_members hm
+    JOIN member_permissions mp ON mp.member_id = hm.id AND mp.user_id = ?
+    WHERE hm.deleted_at IS NULL
+      AND NOT EXISTS (SELECT 1 FROM member_permissions other WHERE other.member_id = hm.id AND other.user_id <> ?)
+  `).all(userId, userId) as Array<{ id: string }>;
+  let exclusiveReportCount = 0;
+  if (exclusiveMembers.length) {
+    const placeholders = exclusiveMembers.map(() => "?").join(", ");
+    exclusiveReportCount = Number((db.prepare(`
+      SELECT COUNT(*) AS count FROM reports WHERE deleted_at IS NULL AND member_id IN (${placeholders})
+    `).get(...exclusiveMembers.map(member => member.id)) as { count: number }).count);
+  }
+  if (!force && exclusiveReportCount > 0) {
+    throw createError({
+      statusCode: 409,
+      statusMessage: `该账号名下有 ${exclusiveMembers.length} 个仅其管理的成员档案，共 ${exclusiveReportCount} 份报告；删除账号后这些数据将无法访问但仍占用存储。如确认不再使用，请选择“仍要删除”`
+    });
+  }
+  /* 仅移除登录身份与会话，保留 users/成员档案与健康数据，避免误删医疗资料 */
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("DELETE FROM local_accounts WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM user_identities WHERE user_id = ? AND provider = 'local'").run(userId);
+    db.prepare("DELETE FROM auth_sessions WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM login_attempts WHERE username = ?").run(account.username);
+    db.prepare("DELETE FROM member_permissions WHERE user_id = ?").run(userId);
+    db.prepare(`
+      INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
+      VALUES (?, ?, 'auth.local_account_deleted', 'user', ?, ?)
+    `).run(createId("audit"), actor.id, userId, JSON.stringify({ username: account.username, displayName: account.displayName, forced: force, exclusiveMemberCount: exclusiveMembers.length, exclusiveReportCount }));
+    db.exec("COMMIT");
+  } catch (cause) {
+    db.exec("ROLLBACK");
+    throw cause;
+  }
+  return { deleted: true, userId, username: account.username, displayName: account.displayName, exclusiveMemberCount: exclusiveMembers.length, exclusiveReportCount };
+}

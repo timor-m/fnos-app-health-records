@@ -1,0 +1,26 @@
+{
+  "groups": [
+    {"key":"anthropometry","parent":"general","name":"身高体重","keys":["body_height","body_weight","body_bmi","body_waist_circumference","body_hip_circumference","body_waist_hip_ratio","body_ideal_weight"]},
+    {"key":"blood_pressure","parent":"general","name":"血压","keys":["vital_systolic_bp","vital_diastolic_bp","vital_mean_arterial_pressure","vital_pulse_pressure"]},
+    {"key":"body_composition","parent":"general","name":"人体成分","keys":["body_fat_mass","body_fat_percentage","body_muscle_mass","body_fat_free_mass","body_total_water","body_basal_metabolic_rate"]},
+    {"key":"visual_acuity","parent":"ophthalmology","name":"视力","keys":["vision_uncorrected_right","vision_uncorrected_left","vision_corrected_right","vision_corrected_left"]},
+    {"key":"intraocular_pressure","parent":"ophthalmology","name":"眼压","keys":["ophthalmology_intraocular_pressure_right","ophthalmology_intraocular_pressure_left"]},
+    {"key":"cbc","parent":"laboratory","name":"血常规","categories":["blood_count"]},
+    {"key":"lipid_panel","parent":"laboratory","name":"血脂四项","keys":["lipid_tc","lipid_tg","lipid_hdl_c","lipid_ldl_c"]},
+    {"key":"glucose_metabolism","parent":"laboratory","name":"糖代谢","categories":["glucose_metabolism"]},
+    {"key":"liver_function","parent":"laboratory","name":"肝功能","categories":["liver_function"]},
+    {"key":"renal_function","parent":"laboratory","name":"肾功能","categories":["renal_function"]},
+    {"key":"thyroid_3","parent":"laboratory","name":"甲功三项","keys":["thyroid_tsh","thyroid_ft3","thyroid_ft4"]},
+    {"key":"thyroid_5","parent":"laboratory","name":"甲功五项","keys":["thyroid_tsh","thyroid_ft3","thyroid_ft4","thyroid_t3_total","thyroid_t4_total"]},
+    {"key":"thyroid_antibodies","parent":"laboratory","name":"甲状腺抗体","keys":["thyroid_tpo_antibody","thyroid_thyroglobulin_antibody","thyroid_tsh_receptor_antibody"]},
+    {"key":"coagulation","parent":"laboratory","name":"凝血功能","categories":["coagulation"]},
+    {"key":"urinalysis","parent":"laboratory","name":"尿常规","categories":["urinalysis"]},
+    {"key":"electrolytes","parent":"laboratory","name":"电解质","categories":["electrolytes"]},
+    {"key":"inflammation","parent":"laboratory","name":"炎症指标","keys":["inflammation_full_range_crp","inflammation_high_sensitivity_crp","inflammation_procalcitonin","laboratory_serum_amyloid_a","laboratory_esr"]},
+    {"key":"iron_metabolism","parent":"laboratory","name":"铁代谢","keys":["laboratory_ferritin"]},
+    {"key":"infection_immunity","parent":"laboratory","name":"感染及免疫","categories":["infection_immunity"]},
+    {"key":"ecg_metrics","parent":"functional","name":"心电图参数","keys":["ecg_heart_rate","ecg_pr_interval","ecg_qrs_duration","ecg_qtc_interval","ecg_qt_interval","ecg_p_axis","ecg_qrs_axis","ecg_t_axis","ecg_rv5_amplitude","ecg_sv1_amplitude","ecg_rv5_sv1_sum"]},
+    {"key":"pulmonary_function","parent":"functional","name":"肺功能","keys":["pulmonary_vc","pulmonary_ic","pulmonary_tv","pulmonary_irv","pulmonary_erv","pulmonary_fvc","pulmonary_fev1","pulmonary_fev1_fvc_ratio","pulmonary_fev1_vc_ratio","pulmonary_pef","pulmonary_fef25","pulmonary_fef50","pulmonary_fef75","pulmonary_mmef"]},
+    {"key":"bone_density","parent":"functional","name":"骨密度","keys":["qus_bone_t_score","qus_bone_z_score"]}
+  ]
+}

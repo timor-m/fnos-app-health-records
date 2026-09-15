@@ -15,6 +15,8 @@ import {
 import BackToTop from "../components/BackToTop.vue";
 import EmptyState from "../components/EmptyState.vue";
 import FormSelect from "../components/FormSelect.vue";
+import TrendGroupFilter from '../components/TrendGroupFilter.vue';
+import { flattenTrendGroups, type TrendGroupNode } from '../../../shared/trend-groups';
 import IndicatorHint from "../components/IndicatorHint.vue";
 import ImageViewer, { type ImageViewerPage } from "../components/ImageViewer.vue";
 import PullIndicator from "../components/PullIndicator.vue";
@@ -41,7 +43,14 @@ const loading = ref(true);
 const loadError = ref("");
 const series = ref<TrendSeries[]>([]);
 const query = ref("");
-const groupFilter = ref("all");
+const groupFilter = ref('');
+const groupTree = ref<TrendGroupNode[]>([]);
+const groupResultKeys = ref<Set<string> | null>(null);
+const groupResultOrder = computed(() => new Map([...(groupResultKeys.value || [])].map((key, index) => [key, index])));
+const groupPending = ref(false);
+const groupError = ref('');
+let groupRequest = 0;
+let loadRequest = 0;
 const attentionFilter = ref<"all" | "attention" | "abnormal" | "near_boundary" | "unflagged">("all");
 const collapsedGroups = ref(new Set<string>());
 // 登记了表示法的序列（如视力的小数/五分记录法）可按类型切换显示，选择跨会话保留。
@@ -112,15 +121,32 @@ const sourceViewerPages = computed<ImageViewerPage[]>(() => {
   }];
 });
 
-const groupOptions = computed(() => [
-  { value: "all", label: "全部分组" },
-  ...Array.from(new Map(
-    [...series.value]
-      .sort(compareTrendSeries)
-      .map((item) => [item.groupKey, { value: item.groupKey, label: item.groupName }])
-  ).values())
-]);
-const groupLabels = computed(() => Object.fromEntries(groupOptions.value.map((item) => [item.value, item.label])));
+const selectedGroup = computed(() => flattenTrendGroups(groupTree.value).find(g => groupFilter.value === g.key));
+const searchedGroupKeys = computed(() => {
+  const text = query.value.trim().toLocaleLowerCase();
+  return new Set(text ? flattenTrendGroups(groupTree.value).filter(g => g.name.toLocaleLowerCase().includes(text)).flatMap(g => g.indicatorKeys) : []);
+});
+
+async function filterGroups() {
+  const memberId = app.selectedMemberId.value;
+  const sequence = ++groupRequest;
+  groupError.value = '';
+  if (!memberId || !groupFilter.value.length) {
+    groupResultKeys.value = null;
+    groupPending.value = false;
+    return;
+  }
+  groupPending.value = true;
+  groupResultKeys.value = new Set();
+  const params = new URLSearchParams({ memberId });
+  params.append('groupKeys[]', groupFilter.value);
+  try {
+    const result = await request<TrendSeries[]>(`trends?${params}`);
+    if (sequence === groupRequest && memberId === app.selectedMemberId.value) groupResultKeys.value = new Set(result.map(item => item.indicatorKey));
+  } catch (error) {
+    if (sequence === groupRequest) groupError.value = error instanceof Error ? error.message : '分组筛选失败';
+  } finally { if (sequence === groupRequest) groupPending.value = false; }
+}
 const attentionOptions = [
   { value: "all", label: "全部状态" },
   { value: "attention", label: "需要关注" },
@@ -141,7 +167,7 @@ function matchingAlias(item: TrendSeries) {
 
 const filteredSeries = computed(() => {
   return series.value.filter((item) => {
-    if (groupFilter.value !== "all" && item.groupKey !== groupFilter.value) return false;
+    if (groupResultKeys.value && !groupResultKeys.value.has(item.indicatorKey)) return false;
     if (attentionFilter.value === "attention" && item.attentionPriority === "normal") return false;
     if (attentionFilter.value === "unflagged" && item.attentionPriority !== "normal") return false;
     if (
@@ -150,7 +176,7 @@ const filteredSeries = computed(() => {
       && attentionFilter.value !== "unflagged"
       && item.attentionLevel !== attentionFilter.value
     ) return false;
-    return matchTrendSearch(item, query.value).matches;
+    return searchedGroupKeys.value.has(item.indicatorKey) || matchTrendSearch(item, query.value).matches;
   });
 });
 
@@ -220,7 +246,7 @@ const trendSections = computed<TrendSection[]>(() => {
 });
 
 const hasActiveFilters = computed(() =>
-  Boolean(query.value.trim()) || groupFilter.value !== "all" || attentionFilter.value !== "all"
+  Boolean(query.value.trim()) || groupFilter.value.length > 0 || attentionFilter.value !== "all"
 );
 
 const trendCountSubtitle = computed(() => {
@@ -231,7 +257,7 @@ const trendCountSubtitle = computed(() => {
 
 const filterSummary = computed(() => {
   if (!series.value.length) return "";
-  const group = groupFilter.value === "all" ? "" : ` · ${groupLabels.value[groupFilter.value] || "当前分组"}`;
+  const group = selectedGroup.value ? ` · ${selectedGroup.value.name}` : '';
   const keyword = query.value.trim() ? ` · “${query.value.trim()}”` : "";
   const attention = attentionFilter.value === "abnormal"
     ? " · 报告已标异常"
@@ -244,22 +270,33 @@ const filterSummary = computed(() => {
 });
 
 async function load(memberId: string, silent = false) {
+  const sequence = ++loadRequest;
   if (!silent) loading.value = true;
   loadError.value = "";
   closeDetails();
   try {
-    const result = await request<TrendSeries[]>(`trends?memberId=${encodeURIComponent(memberId)}`);
-    if (app.selectedMemberId.value === memberId) series.value = result;
+    const params = `memberId=${encodeURIComponent(memberId)}`;
+    const [result, tree] = await Promise.all([
+      request<TrendSeries[]>(`trends?${params}`), request<TrendGroupNode[]>(`trends/groups?${params}`)
+    ]);
+    if (app.selectedMemberId.value === memberId && sequence === loadRequest) {
+      series.value = result;
+      groupTree.value = tree;
+      const availableKeys = new Set(flattenTrendGroups(tree).filter(g => g.indicatorCount > 0).map(g => g.key));
+      if (groupFilter.value && !availableKeys.has(groupFilter.value)) groupFilter.value = '';
+      else await filterGroups();
+    }
   }
   catch (cause) {
-    if (!silent && app.selectedMemberId.value === memberId) loadError.value = cause instanceof Error ? cause.message : "指标趋势加载失败";
+    if (!silent && app.selectedMemberId.value === memberId && sequence === loadRequest) loadError.value = cause instanceof Error ? cause.message : "指标趋势加载失败";
     throw cause;
   }
-  finally { if (!silent && app.selectedMemberId.value === memberId) loading.value = false; }
+  finally { if (!silent && app.selectedMemberId.value === memberId && sequence === loadRequest) loading.value = false; }
 }
 
 function compareTrendSeries(left: TrendSeries, right: TrendSeries) {
   return Number(right.pinned) - Number(left.pinned)
+    || ((groupResultOrder.value.get(left.indicatorKey) ?? 9999) - (groupResultOrder.value.get(right.indicatorKey) ?? 9999))
     || left.groupOrder - right.groupOrder
     || left.subgroupOrder - right.subgroupOrder
     || left.itemOrder - right.itemOrder
@@ -764,7 +801,14 @@ const { pullDistance, refreshing } = usePullRefresh(root, async () => {
 });
 
 watch(() => app.selectedMemberId.value, (memberId) => {
+  ++loadRequest;
+  ++groupRequest;
   series.value = [];
+  groupTree.value = [];
+  groupFilter.value = '';
+  groupResultKeys.value = null;
+  groupError.value = '';
+  groupPending.value = false;
   if (!memberId) return;
   load(memberId).catch(() => {});
 }, { immediate: true });
@@ -777,6 +821,7 @@ watch(() => app.session.value?.isAdmin, (isAdmin) => {
 watch([query, groupFilter, attentionFilter], () => {
   closeDetails();
 });
+watch(groupFilter, filterGroups);
 
 watch(trendCountSubtitle, (subtitle) => app.setTopbarSubtitle("trends", subtitle), { immediate: true });
 
@@ -833,17 +878,19 @@ onDeactivated(() => {
           <Search :size="18" />
           <input v-model="query" placeholder="搜索指标名" />
         </label>
-        <FormSelect v-model="groupFilter" class="trend-group-select records-filter-select" :options="groupOptions" aria-label="体检分组" />
+        <TrendGroupFilter v-model="groupFilter" :groups="groupTree" class="trend-group-select" />
         <FormSelect v-model="attentionFilter" class="trend-status-select records-filter-select" :options="attentionOptions" aria-label="指标状态" />
       </div>
       <p v-if="hasActiveFilters" class="trend-filter-summary">{{ filterSummary }}</p>
+      <p v-if="groupPending" role="status" class="trend-filter-summary">正在筛选…</p>
+      <p v-if="groupError" class="inline-panel-error">{{ groupError }}<button type="button" @click="filterGroups">重试</button></p>
       <RouterLink v-if="adminIssueCount > 0" class="trend-admin-issue-entry" to="/me/maintenance/indicator-issues">
         <CircleAlert :size="16" />
         <span>{{ adminIssueCount }} 组指标可核对或补充标准化</span>
         <ChevronRight :size="16" />
       </RouterLink>
       <EmptyState
-        v-if="!filteredSeries.length"
+        v-if="!filteredSeries.length && !groupPending && !groupError"
         title="没有符合条件的指标"
         description="换个指标名、体检分组或指标状态试试，也可以等待更多报告完成整理。"
       />

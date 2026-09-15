@@ -77,6 +77,7 @@ import {
   stopJobRunner,
 } from "./job-runner.service";
 import { enqueueFileGarbage } from "./file-gc.service";
+import { reportNoteFiles } from './report-note.service';
 import {
   captureRestoringAdministratorCredential,
   rebindRestoredAdministrator,
@@ -2900,7 +2901,9 @@ function purgeTrashedReport(
         },
       }),
     );
+    const noteFiles = reportNoteFiles(reportId);
     db.prepare("DELETE FROM reports WHERE id = ?").run(reportId);
+    enqueueFileGarbage(noteFiles, 'report_note_purge', db);
     enqueueFileGarbage(
       pages.flatMap((page) => [
         { storagePath: page.storagePath, fileKind: "original" as const },
@@ -6358,6 +6361,11 @@ const auditActionTitles: Record<string, string> = {
   "member.permission.update": "更新成员授权",
   "member.permission.remove": "移除成员授权",
   "backup.create": "创建完整备份",
+  "report.note.create": "添加补充记录",
+  "report.note.update": "编辑补充记录",
+  "report.note.delete": "删除补充记录",
+  "report.note.asset.upload": "添加补充图片",
+  "report.note.asset.delete": "删除补充图片",
   "backup.restore": "恢复完整备份",
   "backup.identity_rebind": "接管恢复数据权限",
   "backup.delete": "删除完整备份",
@@ -7210,6 +7218,7 @@ export type CreatedBackup = BackupSummary & {
 const backupFormatVersion = 1;
 const backupIncludedDirectories = [
   "reports",
+  "report-notes",
   "thumbnails",
   "config",
   "secrets",

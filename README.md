@@ -6,6 +6,7 @@
 
 ## 功能介绍
 
+- **补充记录**：为报告追加文字或多张图片，记录口头交代、后续说明等资料；与报告原件分开保存，不参与自动解析。[使用说明](docs/REPORT_NOTES.md)
 - **报告归档**：支持拍照、多图、HEIC、JPEG、PNG、WebP 和多页 PDF，支持从 NAS 目录导入。
 - **OCR 与 AI 整理**：提取医院、日期、科室、结论、建议、定量/定性指标和形态发现，长报告支持后台处理和断点恢复。
 - **原件核对**：保留原始文件、PDF 单页高清图和 OCR 证据，可从指标或趋势直接定位来源页和高亮区域。
@@ -70,6 +71,7 @@ docker compose up -d
 - [Docker 部署](./docs/DOCKER_DEPLOYMENT.md)
 - [配置说明](./docs/CONFIGURATION.md)
 - [多文件报告导入](./docs/REPORT_IMPORT.md)
+- [趋势分组筛选](./docs/TREND_GROUPS.md)
 - [备份、恢复与迁移](./docs/BACKUP_RESTORE.md)
 - [常见问题排查](./docs/TROUBLESHOOTING.md)
 - [指标字典维护](./dictionary/README.md)
