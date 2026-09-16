@@ -1,16 +1,29 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { Bell, Camera, ChartNoAxesCombined, ChevronsUpDown, FolderHeart, LayoutDashboard, Search, UserRound, X } from "@lucide/vue";
 import appIcon from "../assets/app-icon.png";
 import MemberSwitcher from "../components/MemberSwitcher.vue";
+import SetupGuideModal from "../components/SetupGuideModal.vue";
 import { useAppContext } from "../composables/useAppContext";
+import { request } from "../utils/api";
 
 const app = useAppContext();
 const route = useRoute();
 const memberSheetOpen = ref(false);
 const topbarSearchFocused = ref(false);
 const topbarSearchInput = ref<HTMLInputElement | null>(null);
+
+/* 首次使用引导：管理员且 OCR/AI 未配齐时自动弹出，完成引导或配置齐全后不再出现 */
+type SetupGuideStatus = { ocrInstalled: boolean; aiConfigured: boolean; guideDismissed: boolean };
+const setupGuideOpen = ref(false);
+onMounted(async () => {
+  if (!app.session.value?.isAdmin) return;
+  try {
+    const status = await request<SetupGuideStatus>("setup/status");
+    if (!status.guideDismissed && (!status.ocrInstalled || !status.aiConfigured)) setupGuideOpen.value = true;
+  } catch { /* 引导状态读取失败不影响正常使用 */ }
+});
 
 const accountRole = computed(() => {
   if (!app.session.value?.isAdmin) return "家庭成员";
@@ -229,5 +242,6 @@ const navItems = [
     </nav>
 
     <MemberSwitcher :open="memberSheetOpen" @close="memberSheetOpen = false" />
+    <SetupGuideModal v-if="setupGuideOpen" @done="setupGuideOpen = false" />
   </div>
 </template>
