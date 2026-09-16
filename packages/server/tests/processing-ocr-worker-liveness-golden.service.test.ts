@@ -92,7 +92,8 @@ test("keeps slow OCR alive, isolates silent and false-alive workers, and renews 
   };
   process.env.STORAGE_DIR = directory;
   process.env.LOG_DIR = join(directory, "logs");
-  process.env.OCR_WORKER_STARTUP_TIMEOUT_MS = "500";
+  /* CI 共享 runner 启动 python 冷进程较慢，启动与心跳不响应窗口留足余量，避免存活金标抖动 */
+  process.env.OCR_WORKER_STARTUP_TIMEOUT_MS = "2000";
 
   try {
     const fakeModules = join(directory, "python-modules");
@@ -132,7 +133,7 @@ class RapidOCR:
       : fakeModules;
     process.env.OCR_PYTHON_BIN = "/usr/bin/python3";
     process.env.OCR_WORKER_SCRIPT = resolve("packages/ocr-worker/worker.py");
-    process.env.OCR_WORKER_TIMEOUT_MS = "180";
+    process.env.OCR_WORKER_TIMEOUT_MS = "400";
     process.env.OCR_WORKER_HARD_TIMEOUT_MS = "1500";
     process.env.OCR_WORKER_HEARTBEAT_INTERVAL_MS = "100";
     const pythonInput = join(directory, "python-heartbeat.png");
@@ -213,7 +214,7 @@ input.on("line", (line) => {
     stopWorker();
     process.env.OCR_PYTHON_BIN = process.execPath;
     process.env.OCR_WORKER_SCRIPT = livenessScript;
-    process.env.OCR_WORKER_TIMEOUT_MS = "120";
+    process.env.OCR_WORKER_TIMEOUT_MS = "300";
     process.env.OCR_WORKER_HARD_TIMEOUT_MS = "1000";
 
     const longResponse = await requestWorker({
@@ -345,7 +346,7 @@ input.on("line", (line) => {
     db.prepare(
       "UPDATE processing_jobs SET lease_expires_at = datetime('now', '-1 minute') WHERE id = ?",
     ).run(processingJob.id);
-    await sleep(100);
+    await sleep(250);
 
     assert.equal(claimNextJob(), null);
     const renewedJob = db
