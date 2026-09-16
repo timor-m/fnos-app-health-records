@@ -1615,7 +1615,8 @@ function maybeStartJobsPolling() {
 let lastDetailSyncAt = 0;
 
 async function refreshJobs(silent = false) {
-  if (!props.reportId) return;
+  /* 核对指标弹窗不渲染任务进度区，跳过任务查询，避免挂载时级联二次拉详情与列表刷新 */
+  if (!props.reportId || props.reviewObservationId) return;
   const reportId = props.reportId;
   const seq = ++jobsSeq;
   const previousStatuses = new Map(selectedJobs.value.map((job) => [job.id, job.status]));

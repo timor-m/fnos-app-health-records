@@ -13,6 +13,16 @@ test('cleans edge decorations and separates marked codes without removing medica
     assert.equal(cleanIndicatorName(name).name, name);
   }
   assert.deepEqual(cleanIndicatorName('LDL-C★低密度脂蛋白胆固醇'), { name: '低密度脂蛋白胆固醇', code: 'LDL-C' });
+  for (const [raw, expected] of [
+    ['☆"酸碱度"', '酸碱度'],
+    ['“酸碱度”', '酸碱度'],
+    ['指标:DOB值', 'DOB值'],
+    ['指标：血红蛋白', '血红蛋白'],
+    ['项目:肌酐', '肌酐'],
+  ] as const) {
+    assert.equal(cleanIndicatorName(raw).name, expected);
+    assert.deepEqual(indicatorNameCandidates(raw), indicatorNameCandidates(expected));
+  }
   const source = normalizeAiExtraction({ observations: [{ itemName: 'SYN★合成指标', resultText: '42', numericValue: 42, unit: 'U/L', evidence: [{ pageNumber: 1, quote: 'SYN★合成指标 42 U/L' }] }] }).fields.observations;
   const cleaned = sanitizeReportObservations(source);
   assert.equal(cleaned[0].itemName, '合成指标');

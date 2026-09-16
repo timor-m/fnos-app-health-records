@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 20,
+  "revision": 21,
   "indicators": [
     {
       "canonicalKey": "lipid_ldl_hdl_ratio",
@@ -4448,6 +4448,139 @@
         "色觉"
       ],
       "explanation": "辨色力（色觉）检查结果，常见结论为正常、色弱或色盲，属于定性功能检查。"
+    },
+    {
+      "canonicalKey": "cardiac_aortic_sinus_diameter",
+      "displayName": "主动脉窦部内径",
+      "categoryKey": "functional_measurement",
+      "order": 53,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mm",
+      "unitDimension": "length",
+      "aliases": [
+        "主动脉窦部内径",
+        "主动脉窦内径"
+      ],
+      "allowedUnits": [
+        "mm",
+        "cm"
+      ],
+      "sectionHints": [
+        "心脏彩超",
+        "超声心动图",
+        "心脏超声"
+      ],
+      "explanation": "超声心动图测量的主动脉窦部内径，不与升主动脉内径或主动脉根部其他径线合并，应按原报告测量部位观察。"
+    },
+    {
+      "canonicalKey": "cardiac_ascending_aorta_diameter",
+      "displayName": "升主动脉内径",
+      "categoryKey": "functional_measurement",
+      "order": 54,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mm",
+      "unitDimension": "length",
+      "aliases": [
+        "升主动脉内径"
+      ],
+      "allowedUnits": [
+        "mm",
+        "cm"
+      ],
+      "sectionHints": [
+        "心脏彩超",
+        "超声心动图",
+        "心脏超声"
+      ],
+      "explanation": "超声心动图测量的升主动脉内径，不与主动脉窦部内径或主动脉弓径线合并，应按原报告测量部位观察。"
+    },
+    {
+      "canonicalKey": "cardiac_left_atrial_diameter",
+      "displayName": "左房前后径",
+      "categoryKey": "functional_measurement",
+      "order": 55,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mm",
+      "unitDimension": "length",
+      "aliases": [
+        "左房前后径",
+        "左心房前后径",
+        "左房内径",
+        "左心房内径",
+        "LAD"
+      ],
+      "allowedUnits": [
+        "mm",
+        "cm"
+      ],
+      "sectionHints": [
+        "心脏彩超",
+        "超声心动图",
+        "心脏超声"
+      ],
+      "explanation": "超声心动图测量的左房前后径，不与左房容积或体表面积校正后的指数合并，应按原报告测量方法观察。"
+    },
+    {
+      "canonicalKey": "cardiac_lvedv",
+      "displayName": "左室舒张末期容积",
+      "categoryKey": "functional_measurement",
+      "order": 56,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mL",
+      "unitDimension": "volume",
+      "aliases": [
+        "左室舒张末期容积",
+        "左心室舒张末期容积",
+        "舒张末期容积",
+        "EDV",
+        "LVEDV"
+      ],
+      "allowedUnits": [
+        "mL",
+        "ml"
+      ],
+      "sectionHints": [
+        "心脏彩超",
+        "超声心动图",
+        "心脏超声"
+      ],
+      "explanation": "超声心动图测量的左心室舒张末期容积，不与收缩末期容积或容积指数合并，应按原报告测量方法观察。"
+    },
+    {
+      "canonicalKey": "cardiac_lvesv",
+      "displayName": "左室收缩末期容积",
+      "categoryKey": "functional_measurement",
+      "order": 57,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mL",
+      "unitDimension": "volume",
+      "aliases": [
+        "左室收缩末期容积",
+        "左心室收缩末期容积",
+        "收缩末期容积",
+        "ESV",
+        "LVESV"
+      ],
+      "allowedUnits": [
+        "mL",
+        "ml"
+      ],
+      "sectionHints": [
+        "心脏彩超",
+        "超声心动图",
+        "心脏超声"
+      ],
+      "explanation": "超声心动图测量的左心室收缩末期容积，不与舒张末期容积或容积指数合并，应按原报告测量方法观察。"
     }
   ],
   "extensions": [
@@ -4584,7 +4717,8 @@
       "canonicalKey": "cbc_eosinophil_percentage",
       "aliases": [
         "嗜酸细胞百分比",
-        "嗜酸性粒细胞百分数"
+        "嗜酸性粒细胞百分数",
+        "嗜酸性细胞百分比"
       ],
       "sectionHints": [
         "血常规",
@@ -4596,7 +4730,8 @@
     {
       "canonicalKey": "cbc_eosinophil_count",
       "aliases": [
-        "嗜酸细胞绝对数"
+        "嗜酸细胞绝对数",
+        "嗜酸性细胞绝对值"
       ],
       "sectionHints": [
         "血常规",
@@ -4609,7 +4744,8 @@
       "canonicalKey": "cbc_basophil_percentage",
       "aliases": [
         "嗜碱细胞百分比",
-        "嗜碱性粒细胞百分数"
+        "嗜碱性粒细胞百分数",
+        "嗜碱性细胞百分比"
       ],
       "sectionHints": [
         "血常规",
@@ -4621,7 +4757,8 @@
     {
       "canonicalKey": "cbc_basophil_count",
       "aliases": [
-        "嗜碱细胞绝对数"
+        "嗜碱细胞绝对数",
+        "嗜碱性细胞绝对值"
       ],
       "sectionHints": [
         "血常规",
@@ -4918,7 +5055,8 @@
     {
       "canonicalKey": "cbc_pct",
       "aliases": [
-        "血小板容积比"
+        "血小板容积比",
+        "血小板比积"
       ],
       "sectionHints": [
         "血常规",
@@ -4934,6 +5072,40 @@
       "sectionHints": [
         "电解质",
         "生化"
+      ]
+    },
+    {
+      "canonicalKey": "cbc_hct",
+      "aliases": [
+        "红细胞比积"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ]
+    },
+    {
+      "canonicalKey": "vascular_bapwv_left",
+      "aliases": [
+        "左脉波传播速度",
+        "左侧脉波传播速度"
+      ],
+      "sectionHints": [
+        "动脉硬化",
+        "血管功能",
+        "baPWV"
+      ]
+    },
+    {
+      "canonicalKey": "vascular_bapwv_right",
+      "aliases": [
+        "右脉波传播速度",
+        "右侧脉波传播速度"
+      ],
+      "sectionHints": [
+        "动脉硬化",
+        "血管功能",
+        "baPWV"
       ]
     }
   ],

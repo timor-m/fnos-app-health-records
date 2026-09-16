@@ -73,7 +73,9 @@ html, body, #app { min-height: 100%; margin: 0; }
 /* 弹层锁定 body 滚动时滚动条消失会导致内容横向位移，预留滚动条槽避免抖动 */
 html { scrollbar-gutter: stable; }
 body { min-width: 320px; background: var(--background); -webkit-font-smoothing: antialiased; overscroll-behavior-y: contain; }
-button, input, select { font: inherit; letter-spacing: 0; }
+button { font: inherit; letter-spacing: 0; }
+/* 表单控件统一 14px，不再继承 body 的 16px；页面缩放已全局禁用，无需 16px 防缩放 */
+input, select, textarea { font: inherit; font-size: 14px; letter-spacing: 0; }
 button, a, select { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 button { cursor: pointer; color: inherit; }
 button:disabled { cursor: not-allowed; opacity: .55; }
@@ -1327,7 +1329,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .observation-editor-form .form-grid label { min-width: 0; gap: 6px; }
 .observation-editor-form .form-grid label > span { font-size: 12px; color: var(--muted); }
 .observation-edit-panel .observation-editor-form input,
-.observation-edit-panel .observation-editor-form .form-select-trigger { min-width: 0; width: 100%; min-height: 42px; padding: 10px 12px; border-radius: 10px; font-size: 16px; line-height: 1.4; }
+.observation-edit-panel .observation-editor-form .form-select-trigger { min-width: 0; width: 100%; min-height: 42px; padding: 10px 12px; border-radius: 10px; font-size: 14px; line-height: 1.4; }
 .observation-editor-section { border: 1px solid var(--line); border-radius: 12px; padding: 0 12px; }
 .observation-editor-section summary { padding: 13px 0; color: var(--ink); font-size: 13px; cursor: pointer; }
 .observation-editor-section summary span { margin-left: 8px; color: var(--muted); font-size: 12px; }
@@ -2193,7 +2195,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .form-select { position: relative; }
 .form-select-trigger {
   width: 100%; height: 44px; border: 1px solid var(--line-strong); border-radius: 10px;
-  background: var(--surface); padding: 0 12px; outline: 0; color: var(--ink);
+  background: var(--surface); padding: 0 12px; outline: 0; color: var(--ink); font-size: 14px;
   display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left;
   transition: border-color .15s, box-shadow .15s;
 }
@@ -2225,9 +2227,9 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 
 /* PC（宽屏+精确指针）下按桌面表单密度收紧，移动端保持 44px 触控目标 */
 @media (min-width: 761px) and (pointer: fine) {
-  .form-select-trigger { height: 36px; font-size: 13px; }
+  .form-select-trigger { height: 36px; font-size: 14px; }
   .form-select-panel { max-height: 240px; }
-  .form-select-option { min-height: 34px; font-size: 13px; }
+  .form-select-option { min-height: 34px; font-size: 14px; }
 }
 
 input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: pointer; }
@@ -4233,7 +4235,6 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
   .report-note-backdrop { padding: 0; align-items: end; }
   .modal-panel.report-note-editor { width: 100%; max-height: calc(var(--note-viewport-height, 100dvh) * .94); border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
   .report-note-editor-body { padding: 16px; }
-  .report-note-editor textarea { font-size: 16px; }
   .report-note-editor .report-note-editor-actions { padding: 12px 16px calc(12px + var(--safe-bottom)); }
   .report-note-selected-images { gap: 8px; }
   .report-note-images { grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: 360px; }

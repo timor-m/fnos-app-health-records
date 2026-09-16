@@ -453,7 +453,7 @@ onBeforeUnmount(() => {
 .datetime-picker-trigger {
   display: flex; align-items: center; width: 100%; min-height: 44px;
   padding: 0 12px; border: 1px solid var(--line); border-radius: 10px;
-  background: var(--surface); color: var(--ink); font-size: 15px;
+  background: var(--surface); color: var(--ink); font-size: 14px;
   text-align: left; cursor: pointer; transition: border-color .15s;
 }
 .datetime-picker-trigger-icon { flex: 0 0 auto; margin-right: 8px; color: var(--muted); }
