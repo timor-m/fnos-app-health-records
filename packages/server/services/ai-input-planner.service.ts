@@ -186,6 +186,10 @@ export type RebuiltOcrPage = {
   removedLineCount: number;
   repeatedRemovedLineCount: number;
   noiseRemovedLineCount: number;
+  /* 表格结构模型在该页的结论（来自 OCR worker 的 tableDiagnostics）：
+     无框线/拍照表格常返回 no_structure 或 failed，此时行列由文字坐标重建，
+     启发式丢行的风险更高——视觉复核会放宽这类页的候选来源。 */
+  tableStructureStatus: string | null;
   text: string;
   lines: PlannedOcrLine[];
   classification: ReportContentClassification;
@@ -907,9 +911,14 @@ function isUnsupportedComplexTable(
     tableHeader?.filter((cell) =>
       /(?:年龄|性别|风险|等级|分级|评分|区间|百分位|男|女)/.test(cell),
     ).length || 0;
+  /* 维度信号的 % 只统计整格都是百分值/百分区间的单元格（"-20%"、"21-34%"、"95%"）；
+     裸 "%" 是单位格、名称含（NEU%）是指标名，都不能当成百分位矩阵的维度证据。 */
   const dimensionCells = cells.filter((cell) =>
-    /(?:年龄|性别|风险|等级|分级|评分|区间|百分位|\d+\s*岁|%|％|^男$|^女$)/.test(
+    /(?:年龄|性别|风险|等级|分级|评分|区间|百分位|\d+\s*岁|^男$|^女$)/.test(
       cell,
+    ) ||
+    /^[-+]?\d+(?:\.\d+)?(?:\s*[-~～—–]\s*[-+]?\d+(?:\.\d+)?)?\s*[%％]$/.test(
+      cell.trim(),
     ),
   ).length;
   const rangeCells = countRangeCells(cells);
@@ -957,7 +966,10 @@ function looksLikeStandardMeasurementRow(cells: string[], unitPattern: RegExp) {
     return false;
   return measurementCells.slice(2).every((cell) => {
     const trimmed = cell.trim();
-    const pureUnit = !/\d/.test(trimmed) && unitPattern.test(trimmed);
+    /* 裸 %/％ 是百分比指标的合法单位格（血常规百分数行），不只是字典外兜底单位 */
+    const pureUnit =
+      !/\d/.test(trimmed) &&
+      (unitPattern.test(trimmed) || /^[%％]$/.test(trimmed));
     const reference =
       /(?:<|<=|≤|>|>=|≥)\s*[-+]?\d+(?:\.\d+)?/.test(trimmed) ||
       /[-+]?\d+(?:\.\d+)?\s*(?:[~～—–-]|至)\s*[-+]?\d+(?:\.\d+)?/.test(trimmed);
@@ -5535,13 +5547,27 @@ function isCandidateRow(text: string, unitPattern: RegExp) {
   return /(?:^|[|｜])[^|｜]{1,24}[:：]\s*[-+]?\d+(?:\.\d+)?/.test(text);
 }
 
+/* OCR worker 的表格增强诊断挂在首行（tableDiagnostics），只取状态，不读文本内容。 */
+function readTableStructureStatus(linesJson: string): string | null {
+  try {
+    const parsed = JSON.parse(linesJson) as unknown;
+    if (!Array.isArray(parsed) || !parsed.length) return null;
+    const diagnostics = (parsed[0] as { tableDiagnostics?: unknown })
+      ?.tableDiagnostics;
+    if (!diagnostics || typeof diagnostics !== "object") return null;
+    const status = (diagnostics as { status?: unknown }).status;
+    return typeof status === "string" && status ? status : null;
+  } catch {
+    return null;
+  }
+}
+
 function parseLines(
   value: string,
   pageNumber: number,
   aliases: PreparedDictionaryAliases,
   unitPattern: RegExp,
-) {
-  let parsed: RawOcrLine[] = [];
+) {  let parsed: RawOcrLine[] = [];
   try {
     const candidate = JSON.parse(value) as unknown;
     parsed = Array.isArray(candidate) ? recoverHeaderAlignedTable(candidate as RawOcrLine[]) : [];
@@ -5949,6 +5975,7 @@ export function rebuildOcrPages(
       removedLineCount: parsedLines.length - lines.length,
       repeatedRemovedLineCount: 0,
       noiseRemovedLineCount: 0,
+      tableStructureStatus: readTableStructureStatus(row.linesJson),
       text,
       lines,
       classification: classifyReportContent(text),

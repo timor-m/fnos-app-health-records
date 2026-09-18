@@ -29,6 +29,23 @@ test('shared admission requires verified raw numbers and never bypasses exclusio
   // 锚定变体从别名表反向生成：其他形近误读（mL→m1）同样可回指
   assert.equal(assessTrendAdmission({ ...raw, numericValue: 92, resultText: '92', unit: 'mL',
     evidenceJson: JSON.stringify([{ pageNumber: 1, quote: '合成测定项目甲 92 m1' }]) }).kind, 'institution');
+  // 视觉复核来源（source:"vision"）：数值与单位以图片为准，可不同于 OCR 误读文本
+  assert.equal(assessTrendAdmission({ ...raw, numericValue: 130, resultText: '130', unit: 'g/L',
+    evidenceJson: JSON.stringify([{ pageNumber: 1, quote: '合成测定项目甲 158 U/L', source: 'vision' }]) }).kind, 'institution');
+  // AI 规范化后的单位（10^9/L）可回指 OCR 原文丢上标的形态（109/L）
+  assert.equal(assessTrendAdmission({ ...raw, numericValue: 29.59, resultText: '29.59', unit: '10^9/L',
+    evidenceJson: JSON.stringify([{ pageNumber: 1, quote: '合成测定项目甲 29.59 109/L' }]) }).kind, 'institution');
+  assert.equal(assessTrendAdmission({ ...raw, numericValue: 5.21, resultText: '5.21', unit: '10^12/L',
+    evidenceJson: JSON.stringify([{ pageNumber: 1, quote: '合成测定项目甲 5.21 1012/L' }]) }).kind, 'institution');
+  // 大写 I 误读（μmoI/L）同样可矫正并回指
+  assert.equal(assessTrendAdmission({ ...raw, numericValue: 105, resultText: '105', unit: 'μmol/L',
+    evidenceJson: JSON.stringify([{ pageNumber: 1, quote: '合成测定项目甲 105 μmoI/L' }]) }).kind, 'institution');
+  // 混合来源（vision + 普通证据）不享受放行，数值仍需回指
+  assert.equal(assessTrendAdmission({ ...raw, numericValue: 130, resultText: '130',
+    evidenceJson: JSON.stringify([
+      { pageNumber: 1, quote: '合成测定项目甲 158 U/L', source: 'vision' },
+      { pageNumber: 1, quote: '备注 160' },
+    ]) }).eligible, false);
   for (const invalid of [
     { evidenceJson: '[]' }, { evidenceJson: '{}' }, { unit: '' }, { reportIssuedAt: '' },
     { resultText: '<2' }, { resultText: '2-3' }, { numericValue: 3 }, { normalizationQuality: 'excluded' },

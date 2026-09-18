@@ -1232,11 +1232,14 @@ export async function processNextJob(
             onEvent: (unitEvent) => {
               renewLease();
               const eventType =
-                unitEvent.type === "unit_completed"
+                unitEvent.type === "unit_completed" ||
+                unitEvent.type === "vision_review_completed"
                   ? "completed"
                   : ["unit_failed", "format_retry"].includes(unitEvent.type)
                     ? "retry_scheduled"
-                    : "started";
+                    : unitEvent.type === "vision_review_failed"
+                      ? "failed"
+                      : "started";
               appendJobEvent({
                 jobId: job.id,
                 reportId: job.reportId,
@@ -1280,6 +1283,7 @@ export async function processNextJob(
             processedPages: execution.plan.pageCount,
             warningUnits: execution.warningUnits,
             unmatchedCandidates: execution.unmatchedCandidates,
+            tableSerialGapPages: execution.tableSerialGapPages,
             promptTokens: extraction.promptTokens,
             completionTokens: extraction.completionTokens,
             elapsedMs: extraction.elapsedMs,

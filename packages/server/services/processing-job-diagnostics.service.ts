@@ -21,6 +21,7 @@ export type ProcessingDiagnosticReasonCode =
   | "AI_INVALID_OUTPUT"
   | "AI_TRUNCATED_OUTPUT"
   | "AI_PARTIAL_RESULT"
+  | "TABLE_STRUCTURE_UNRELIABLE"
   | "SUPPLEMENT_REQUIRED"
   | "SUPPLEMENT_UNRESOLVED"
   | "POSTPROCESS_REDUNDANT"
@@ -207,6 +208,50 @@ function persistedObservationCount(jobId: string) {
   } catch {
     return 0;
   }
+}
+
+/*
+ * 表格结构增强诊断（OCR worker 的 tableDiagnostics 挂在 lines_json 首行）。
+ * 只在失败/不完整时返回页码；未安装表格模块（无诊断字段）时不返回，不制造噪音。
+ */
+function queryUnreliableTablePages(reportId: string) {
+  const rows = getDatabase().prepare(`
+    SELECT p.page_number AS pageNumber, o.lines_json AS linesJson
+    FROM ocr_results o
+    JOIN processing_jobs j ON j.id = o.job_id
+    JOIN report_pages p ON p.id = o.page_id
+    WHERE p.report_id = ? AND j.status = 'completed'
+    ORDER BY p.page_number, COALESCE(j.finished_at, j.created_at) DESC,
+      j.created_at DESC, j.rowid DESC
+  `).all(reportId) as Array<{ pageNumber: number | null; linesJson: string }>;
+  const seenPages = new Set<number>();
+  const unreliable: number[] = [];
+  for (const row of rows) {
+    if (row.pageNumber == null || seenPages.has(row.pageNumber)) continue;
+    seenPages.add(row.pageNumber);
+    try {
+      const lines = JSON.parse(row.linesJson || "[]") as unknown;
+      if (!Array.isArray(lines) || !lines.length) continue;
+      const diagnostics = (lines[0] as { tableDiagnostics?: unknown })
+        ?.tableDiagnostics;
+      if (!diagnostics || typeof diagnostics !== "object") continue;
+      const { status, mapped, unsafe } = diagnostics as {
+        status?: unknown;
+        mapped?: unknown;
+        unsafe?: unknown;
+      };
+      const mappedCount = Number(mapped) || 0;
+      const unsafeCount = Number(unsafe) || 0;
+      const failed =
+        status === "failed" ||
+        status === "no_structure" ||
+        (status === "partial" && unsafeCount > mappedCount);
+      if (failed) unreliable.push(row.pageNumber);
+    } catch {
+      // 单页解析失败不影响其他页
+    }
+  }
+  return unreliable;
 }
 
 function trendOutputMetrics(reportId: string, enabled: boolean) {
@@ -444,6 +489,20 @@ export function buildProcessingJobDiagnostics(
     }
     if (postprocessRejectedCount > 0) {
       addReason(reasons, "AI_PARTIAL_RESULT", "warning", `后处理基于原文证据拒绝了 ${postprocessRejectedCount} 项不可靠结果`);
+    }
+    /* 表格结构模型失败的页本身不是错（启发式重建通常够用），只在页上确有指标候选时
+       提示"结构不可靠"，且仅出现在诊断抽屉，不进报告页提示，避免正常报告被打扰。 */
+    const unreliableTablePages = queryUnreliableTablePages(job.reportId).filter((page) =>
+      candidateRows.some((candidate) => candidate.pageNumber === page && candidate.kind === "scalar")
+    );
+    if (unreliableTablePages.length) {
+      addReason(
+        reasons,
+        "TABLE_STRUCTURE_UNRELIABLE",
+        "warning",
+        "表格结构模型未能完整识别这些页的行列，指标行由文字位置重建，可能存在错列或缺行",
+        unreliableTablePages
+      );
     }
     if (redundantCount > 0) {
       addReason(reasons, "POSTPROCESS_REDUNDANT", "info", `${redundantCount} 项重复证据已合并，不会重复生成趋势指标`, uniquePages(candidateRows

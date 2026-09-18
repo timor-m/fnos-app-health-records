@@ -414,6 +414,27 @@ export function listProcessingJobs(user: RequestUser, reportId: string) {
   for (const attempt of aiAttempts) {
     attemptsByJob.set(attempt.jobId, [...(attemptsByJob.get(attempt.jobId) || []), attempt]);
   }
+  /* AI 整理任务级完成事件（detail 带 planHash 的那条）携带序号断档等规划期信号 */
+  const aiCompletedEvents = db.prepare(`
+    SELECT e.job_id AS jobId, e.detail_json AS detailJson
+    FROM processing_job_events e
+    JOIN processing_jobs j ON j.id = e.job_id
+    WHERE e.report_id = ? AND e.event_type = 'completed' AND j.job_type = 'ai_extract'
+      AND e.detail_json LIKE '%"planHash"%'
+    ORDER BY e.created_at, e.rowid
+  `).all(reportId) as Array<{ jobId: string; detailJson: string }>;
+  const tableSerialGapPagesByJob = new Map<string, number[]>();
+  for (const event of aiCompletedEvents) {
+    try {
+      const detail = JSON.parse(event.detailJson) as { tableSerialGapPages?: unknown };
+      const pages = Array.isArray(detail.tableSerialGapPages)
+        ? detail.tableSerialGapPages.filter((page): page is number => typeof page === "number" && Number.isFinite(page))
+        : [];
+      tableSerialGapPagesByJob.set(event.jobId, pages);
+    } catch {
+      // 事件详情解析失败时按无断档处理
+    }
+  }
   return jobs.map((job) => {
     const batch = jobBatches.get(job.id)!;
     const { deduplicationKey: _deduplicationKey, jobSequence: _jobSequence, ...visibleJob } = job;
@@ -459,7 +480,8 @@ export function listProcessingJobs(user: RequestUser, reportId: string) {
       currentPages,
       unmatchedCandidates: jobUnits
         .filter((unit) => unit.unitType !== "supplement")
-        .reduce((sum, unit) => sum + Math.max(0, unit.candidateCount - unit.matchedCount), 0)
+        .reduce((sum, unit) => sum + Math.max(0, unit.candidateCount - unit.matchedCount), 0),
+      tableSerialGapPages: tableSerialGapPagesByJob.get(job.id) || []
     };
   });
 }

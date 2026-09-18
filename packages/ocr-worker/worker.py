@@ -970,12 +970,16 @@ def suspicious_table_rows(
         low, high = reference
         marker_high = any(marker in result_text for marker in ("↑", "▲", "⬆"))
         marker_low = any(marker in result_text for marker in ("↓", "▼", "⬇"))
+        # 损坏（缺位/分裂/箭头矛盾）与极端值（超上限 3 倍）分开标记：
+        # 极端值可能是真实的重症异常，重读只能用于核对，不能默认可替换。
+        extreme_result = (
+            result_value is not None and high > 0 and result_value > high * 3
+        )
         corrupted_result = (
             result_line is None
             or result_confidence < 0.90
             or bool(CORRUPTED_DECIMAL_PATTERN.match(result_text))
             or (result_text[:1] in "↑↓▲▼⬆⬇" and result_value is not None)
-            or (result_value is not None and high > 0 and result_value > high * 3)
             or (result_value is not None and marker_high and result_value <= high)
             or (result_value is not None and marker_low and result_value >= low)
         )
@@ -1002,7 +1006,7 @@ def suspicious_table_rows(
             if float(line.get("confidence", 0)) < 0.80
             or SUSPICIOUS_UNIT_PATTERN.match(normalized_ocr_text(line.get("text")))
         ]
-        if not corrupted_result and not suspicious_units:
+        if not corrupted_result and not extreme_result and not suspicious_units:
             continue
 
         row_top = min(name_rect[1], reference_rect[1])
@@ -1054,7 +1058,9 @@ def suspicious_table_rows(
                 "reference": reference,
                 "referenceRect": reference_rect,
                 "result": result_line,
-                "resultSuspicious": corrupted_result,
+                "resultSuspicious": corrupted_result or extreme_result,
+                "resultCorrupt": corrupted_result,
+                "resultExtreme": extreme_result,
                 "units": suspicious_units,
                 "crop": (
                     max(0, int(math.floor(crop_left))),
@@ -1114,6 +1120,18 @@ def retry_result_score(line: dict[str, Any], reference: tuple[float, float]) -> 
     if any(marker in text for marker in ("↓", "▼", "⬇")):
         score += 2 if value < low else -3
     return score
+
+
+def retry_replacement_allowed(row: dict[str, Any], best_value: float | None) -> bool:
+    """极端真实异常值（仅因超上限 3 倍触发重读、无损坏迹象）只在校对成功时才允许替换：
+    重读值必须回落到参考区间内。重读给出另一个区间外值（尤其反向越界，如 72.0→0）
+    时保留原始读数——损坏形态的行不受此限制，维持原有替换逻辑。"""
+    if row.get("resultExtreme") and not row.get("resultCorrupt"):
+        if best_value is None:
+            return False
+        low, high = row["reference"]
+        return low <= best_value <= high
+    return True
 
 
 def folded_unit_text(value: str) -> str:
@@ -1332,7 +1350,10 @@ def retry_suspicious_table_rows(
                         retry_results,
                         key=lambda line: retry_result_score(line, row["reference"]),
                     )
-                    if retry_result_score(best_result, row["reference"]) >= 1:
+                    if retry_result_score(best_result, row["reference"]) >= 1 and (
+                        # 极端真实异常值的替换守卫：重读值仍落在区间外时保留原始读数
+                        retry_replacement_allowed(row, table_result_value(normalized_ocr_text(best_result.get("text"))))
+                    ):
                         best_text = normalized_ocr_text(best_result.get("text"))
                         best_value = table_result_value(best_text)
                         low, high = row["reference"]

@@ -469,6 +469,9 @@ const unitAliases: Record<string, string> = {
     "umo1/l": "μmol/L",
     "μmo1/l": "μmol/L",
     "mmo1/l": "mmol/L",
+    /* μmoI/L（大写 I 代替字母 l） */
+    "μmoi/l": "μmol/L",
+    "umoi/l": "μmol/L",
     /* OCR 丢斜杠：mmolL→mmol/L 等（U/L、μL 折叠后歧义，不收） */
     "mmoll": "mmol/L",
     "umoll": "μmol/L",
@@ -809,10 +812,38 @@ export function assessPersistedObservationReference(row: {
   return reference;
 }
 
+/**
+ * 视觉复核来源的观测：数值与单位以页面图片为准，可能本就不存在于 OCR 文本
+ * （OCR 误读正是复核要修正的场景）。此类观测的验收门已在视觉复核阶段锚定
+ * 真实 OCR 候选行，这里识别"全部证据均为视觉来源"以跳过数值/单位回指。
+ */
+function visionOnlyEvidence(row: Pick<ObservationRow, "evidenceJson">) {
+  if (typeof row.evidenceJson !== "string") return false;
+  try {
+    const parsed = JSON.parse(row.evidenceJson) as unknown;
+    if (!Array.isArray(parsed) || !parsed.length) return false;
+    return parsed.every((entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      const item = entry as { source?: unknown; quote?: unknown; pageNumber?: unknown };
+      return (
+        item.source === "vision" &&
+        typeof item.quote === "string" &&
+        Boolean(item.quote.trim()) &&
+        Number(item.pageNumber) > 0
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
 function observationEvidenceQualityIssue(row: ObservationRow) {
   // 内存待落库项与未经过 AI 持久化链路的历史/手工数据不套用本闸门。
   if (row.evidenceJson === undefined || !row.hasAiExtraction) return null;
   const manuallyReviewed = Boolean(row.manualReviewed);
+  // 纯视觉来源与人工确认同等对待：跳过名称/数值/单位的 OCR 回指，
+  // 但仍要求存在可核验证据（验收门已保证 quote 是真实 OCR 候选行）。
+  const anchorBypassed = manuallyReviewed || visionOnlyEvidence(row);
   const quotes = observationEvidenceQuotes(row);
   if (!quotes.length && !manuallyReviewed) return "缺少可核验的 OCR 证据，禁止进入默认趋势";
   const nameSearchQuotes = quotes.flatMap((quote) => [
@@ -828,7 +859,7 @@ function observationEvidenceQualityIssue(row: ObservationRow) {
   const nameBackReferenced = !nameCandidates.length || nameSearchQuotes.some((quote) =>
     nameCandidates.some((name) => quote.includes(name) || name.includes(quote))
   );
-  if (!manuallyReviewed && !nameBackReferenced) {
+  if (!anchorBypassed && !nameBackReferenced) {
     // AI 常把原文口语化表述规范为标准名（如「左踝：1.08」→「左侧踝肱指数」），
     // 名称字面无法回指但数值锚点完整时，不否决整条证据链；
     // 仅当名称与数值都无法回指时才判定证据链断裂。
@@ -841,22 +872,28 @@ function observationEvidenceQualityIssue(row: ObservationRow) {
   if (numericValue !== null && resultValue !== null && !sameObservationEvidenceNumber(numericValue, resultValue)) {
     return "结构化数值与结果文本不一致，禁止进入默认趋势";
   }
-  if (!manuallyReviewed && numericValue !== null && !sourceNumbers.some((value) => sameObservationEvidenceNumber(value, numericValue))) {
+  if (!anchorBypassed && numericValue !== null && !sourceNumbers.some((value) => sameObservationEvidenceNumber(value, numericValue))) {
     return "结果数值无法回指 OCR 证据，禁止进入默认趋势";
   }
 
   const rawUnit = row.unit?.trim() || null;
-  if (!manuallyReviewed && rawUnit) {
+  if (!anchorBypassed && rawUnit) {
     // A printed multiplication sign before a power-of-ten unit is notation, not a unit prefix.
     const compactUnit = (text: string | null) => compactObservationEvidence(text)
       .replace(/(?<![a-z])x(?=10\^\d+\/)/gi, '');
     /* 矫正后的规范单位需容忍原文中的 OCR 变体（fL 被识别为 f1 等），
-       否则矫正越成功、单位越无法回指证据。变体从单位别名表反向生成，新增别名自动生效。 */
+       否则矫正越成功、单位越无法回指证据。变体从单位别名表反向生成，新增别名自动生效；
+       normalizeUnit 的正则形态（109/L→10^9/L）同样反推去上标变体，
+       否则 AI 规范化返回的单位无法锚定原文的丢上标写法。 */
     const normalizedRawUnit = normalizeUnit(rawUnit);
+    const caretless = normalizedRawUnit
+      ? normalizedRawUnit.replace(/^(×?)10\^([1-9]\d?)(?=\/)/i, "$110$2")
+      : null;
     const unitCandidates = [...new Set(
       [rawUnit, normalizedRawUnit]
         .filter(Boolean)
-        .concat(Object.keys(unitAliases).filter(variant => unitAliases[variant] === normalizedRawUnit)),
+        .concat(Object.keys(unitAliases).filter(variant => unitAliases[variant] === normalizedRawUnit))
+        .concat(caretless && caretless !== normalizedRawUnit ? [caretless] : []),
     )].map(compactUnit);
     const containsUnit = (quote: string) => unitCandidates.some(unit => {
       const escaped = unit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

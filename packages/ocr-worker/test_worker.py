@@ -175,6 +175,33 @@ class TableRetryTest(unittest.TestCase):
 
         self.assertEqual(restored, "1.90↑")
 
+    def test_extreme_value_row_is_marked_check_only_not_corrupt(self):
+        # 真实的重症异常（72.0，参考 0.4~8）：超上限 3 倍触发核对，但不是损坏行
+        lines = [
+            ocr_line("嗜酸性细胞百分数(EOS%)", 0.98, 96, 638, 388, 664),
+            ocr_line("72.0", 1.00, 609, 636, 666, 660),
+            ocr_line("%", 0.99, 775, 636, 790, 660),
+            ocr_line("0.4~8", 0.99, 991, 635, 1040, 660),
+        ]
+
+        rows = worker.suspicious_table_rows(lines, 1352, 1920)
+
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["resultSuspicious"])
+        self.assertTrue(rows[0]["resultExtreme"])
+        self.assertFalse(rows[0]["resultCorrupt"])
+
+    def test_extreme_value_retry_replacement_requires_in_range_value(self):
+        row = {"reference": (0.4, 8.0), "resultExtreme": True, "resultCorrupt": False}
+        # 重读给出反向越界值（72.0→0）：拒绝替换，保留原始读数
+        self.assertFalse(worker.retry_replacement_allowed(row, 0.0))
+        self.assertFalse(worker.retry_replacement_allowed(row, None))
+        # 重读回落区间内（如 7259→72.59 这类真误读被修正）：允许替换
+        self.assertTrue(worker.retry_replacement_allowed(row, 5.2))
+        # 损坏形态的行不受限制，维持原替换逻辑
+        corrupt = {"reference": (0.4, 8.0), "resultExtreme": True, "resultCorrupt": True}
+        self.assertTrue(worker.retry_replacement_allowed(corrupt, 0.0))
+
 
 if __name__ == "__main__":
     unittest.main()

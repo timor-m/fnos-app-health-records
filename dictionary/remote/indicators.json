@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 21,
+  "revision": 22,
   "indicators": [
     {
       "canonicalKey": "lipid_ldl_hdl_ratio",
@@ -2264,7 +2264,10 @@
         "超敏C反应蛋白",
         "高敏C反应蛋白",
         "hs-CRP",
-        "hsCRP"
+        "hsCRP",
+        "超敏C-反应蛋白",
+        "高敏C-反应蛋白",
+        "FR-CRP"
       ],
       "allowedUnits": [
         "mg/L"
@@ -4581,6 +4584,34 @@
         "心脏超声"
       ],
       "explanation": "超声心动图测量的左心室收缩末期容积，不与舒张末期容积或容积指数合并，应按原报告测量方法观察。"
+    },
+    {
+      "canonicalKey": "cbc_plcc",
+      "displayName": "大血小板计数",
+      "categoryKey": "blood_count",
+      "order": 30,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "10^9/L",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "P-LCC",
+        "大血小板计数",
+        "大血小板数目",
+        "大血小板数"
+      ],
+      "allowedUnits": [
+        "10^9/L",
+        "×10^9/L",
+        "10*9/L",
+        "10^3/μL"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ],
+      "explanation": "表示血液中体积较大的血小板数量，需结合检测方法和原报告参考范围观察。"
     }
   ],
   "extensions": [
@@ -4731,7 +4762,8 @@
       "canonicalKey": "cbc_eosinophil_count",
       "aliases": [
         "嗜酸细胞绝对数",
-        "嗜酸性细胞绝对值"
+        "嗜酸性细胞绝对值",
+        "嗜酸性细胞总数"
       ],
       "sectionHints": [
         "血常规",
@@ -4758,7 +4790,8 @@
       "canonicalKey": "cbc_basophil_count",
       "aliases": [
         "嗜碱细胞绝对数",
-        "嗜碱性细胞绝对值"
+        "嗜碱性细胞绝对值",
+        "嗜碱性细胞总数"
       ],
       "sectionHints": [
         "血常规",
@@ -5106,6 +5139,39 @@
         "动脉硬化",
         "血管功能",
         "baPWV"
+      ]
+    },
+    {
+      "canonicalKey": "cbc_neutrophil_count",
+      "aliases": [
+        "中性粒细胞总数"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类"
+      ]
+    },
+    {
+      "canonicalKey": "cbc_lymphocyte_count",
+      "aliases": [
+        "淋巴细胞总数"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类"
+      ]
+    },
+    {
+      "canonicalKey": "cbc_monocyte_count",
+      "aliases": [
+        "单核细胞总数"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞",
+        "五分类"
       ]
     }
   ],

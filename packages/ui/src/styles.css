@@ -1000,6 +1000,18 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
   white-space: nowrap;
 }
 .preview-hint { width: 100%; padding: 10px 12px; border-radius: 10px; background: var(--brand-softer); color: var(--muted); font-size: 12px; line-height: 1.6; }
+.extraction-unmatched-hint {
+  width: 100%; margin: 0; padding: 10px 12px; border-radius: 10px;
+  background: var(--amber-soft); color: var(--muted);
+  font-size: 12px; line-height: 1.6; display: flex; align-items: center; gap: 8px;
+}
+.extraction-unmatched-hint > svg { color: var(--amber); flex: 0 0 auto; }
+.extraction-unmatched-hint > span { flex: 1 1 auto; min-width: 0; }
+.extraction-unmatched-hint > button {
+  flex: 0 0 auto; padding: 2px 12px; border: 1px solid currentColor; border-radius: 999px;
+  background: transparent; color: var(--brand); font-size: 12px; cursor: pointer;
+}
+.extraction-unmatched-hint > button:active { transform: scale(.96); }
 
 .report-detail-modal { width: min(680px, 100%); height: 88dvh; max-height: 88dvh; display: flex; flex-direction: column; }
 .report-detail-floating-header { position: sticky; top: 0; z-index: 2; background: var(--surface); border-bottom: 1px solid var(--line); }

@@ -331,6 +331,8 @@ export type ProcessingJob = {
   currentUnitType?: "complete_pages" | "page_chunk" | "supplement" | null;
   currentPages?: number[];
   unmatchedCandidates?: number | null;
+  /* AI 整理完成事件携带的规划期信号：表格序号断档页（可能有整行未参与解析） */
+  tableSerialGapPages?: number[];
 };
 
 export type ProcessingJobEvent = {

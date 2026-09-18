@@ -15,6 +15,10 @@ import {
 } from "./ai-input-planner.service";
 import { getAiTaskSettings } from "./ai-settings.service";
 import {
+  runVisionReview,
+  type AiVisionReviewExecutor,
+} from "./ai-vision-review.service";
+import {
   morphologySizeFromText,
   normalizeAiExtraction,
   type AiEvidence,
@@ -55,7 +59,10 @@ export type AiExtractionUnitEvent = {
     | "format_retry"
     | "output_retry"
     | "unit_split"
-    | "unit_failed";
+    | "unit_failed"
+    | "vision_review_started"
+    | "vision_review_completed"
+    | "vision_review_failed";
   message: string;
   detail: Record<string, unknown>;
 };
@@ -63,6 +70,8 @@ export type AiExtractionUnitEvent = {
 type ExecuteOptions = {
   onEvent?: (event: AiExtractionUnitEvent) => void;
   shouldContinue?: () => boolean;
+  /* 视觉复核执行器，默认 runVisionReview；测试可注入桩。 */
+  visionReview?: AiVisionReviewExecutor;
 };
 
 function configuredConcurrency() {
@@ -2121,6 +2130,111 @@ function unitCandidateLines(plan: AiExtractionPlan, unit: AiExtractionUnit) {
   });
 }
 
+/*
+ * 视觉复核的触发候选：文本解析与遗漏补提取结束后仍未闭环的指标候选行。
+ * 与候选闭环共用同一套覆盖判定（resultMatchesCandidateLine），只保留定量/定性
+ * 指标候选（scalar），形态发现候选不进入视觉复核。
+ *
+ * 放宽通道：表格结构模型失败（no_structure/failed/partial）的页，行列是靠文字
+ * 坐标启发式重建的，规则分类可能把真实指标行误杀成 noise（百分数行误判矩阵等）。
+ * 这类页里"疑似测量但被判噪声"的行一并列入复核候选；验收门不变（仍须逐字锚定）。
+ */
+function measurementShapedNoiseLine(
+  line: AiExtractionPlan["pages"][number]["lines"][number],
+) {
+  if (line.candidate || line.boundary) return false;
+  if (localObservationsForLine(line).length) return false;
+  const cells = line.text
+    .split(/[|｜]/)
+    .map((cell) => cell.trim())
+    .filter(Boolean);
+  if (cells.length < 3) return false;
+  const body = /^\d{1,3}$/.test(cells[0]) ? cells.slice(1) : cells;
+  if (!body.length || !/[\p{L}][\p{L}\p{N}]/u.test(body[0])) return false;
+  /* 必须有一个"整格都是数值（可带单位/箭头）"的结果格——
+     只是某格里混着数字（人员签名里的设备型号等）不算测量行。 */
+  return body.slice(1).some((cell) =>
+    /^(?:<|<=|≤|>|>=|≥)?\s*[-+]?\d+(?:\.\d+)?(?:\s*[A-Za-zμµ%‰/·^0-9()*×+\-]*)?\s*[↑↓▲▼⬆⬇]?$/.test(
+      cell,
+    ),
+  );
+}
+
+export function visionReviewCandidates(
+  plan: AiExtractionPlan,
+  result: AiExtractionResult,
+) {
+  const seen = new Set<string>();
+  const candidates: Array<{
+    pageId: string;
+    pageNumber: number;
+    line: AiExtractionPlan["pages"][number]["lines"][number];
+  }> = [];
+  for (const unit of plan.units.filter(
+    (item) => item.unitType !== "supplement",
+  )) {
+    for (const candidate of unitCandidateLines(plan, unit)) {
+      if (candidate.line.candidateKind !== "scalar") continue;
+      if (resultMatchesCandidateLine(result, candidate.line)) continue;
+      if (seen.has(candidate.line.id)) continue;
+      seen.add(candidate.line.id);
+      candidates.push({
+        pageId: candidate.page.pageId,
+        pageNumber: candidate.page.pageNumber,
+        line: candidate.line,
+      });
+    }
+  }
+  const tableUnreliable = new Set(
+    ["no_structure", "failed", "partial"],
+  );
+  for (const page of plan.pages) {
+    if (!tableUnreliable.has(page.tableStructureStatus || "")) continue;
+    for (const line of page.lines) {
+      if (seen.has(line.id)) continue;
+      if (!measurementShapedNoiseLine(line)) continue;
+      if (resultMatchesCandidateLine(result, line)) continue;
+      seen.add(line.id);
+      candidates.push({
+        pageId: page.pageId,
+        pageNumber: page.pageNumber,
+        line,
+      });
+    }
+  }
+  return candidates;
+}
+
+/*
+ * 序号断档自检：带连续序号的表格，进入提取通道（候选或本地已解析）的行数
+ * 少于最大序号，说明有整行在规划阶段就被丢弃——候选闭环统计看不到这种丢失。
+ * 只统计带表头上下文的行；序号被 OCR 误读（5→LC）不影响行计数。
+ */
+export function detectTableSerialGapPages(plan: AiExtractionPlan): number[] {
+  const gapPages: number[] = [];
+  for (const page of plan.pages) {
+    const groups = new Map<string, { serials: number[]; counted: number }>();
+    for (const line of page.lines) {
+      const header = line.tableHeaderText || "";
+      if (!header) continue;
+      const group = groups.get(header) || { serials: [], counted: 0 };
+      const serial = line.text.trim().match(/^(\d{1,3})\s*[|｜]/);
+      if (serial) group.serials.push(Number(serial[1]));
+      if (line.candidate || localObservationsForLine(line).length > 0) {
+        group.counted += 1;
+      }
+      groups.set(header, group);
+    }
+    const hasGap = [...groups.values()].some((group) => {
+      if (group.serials.length < 3) return false;
+      const maxSerial = Math.max(...group.serials);
+      return group.counted < maxSerial;
+    });
+    if (hasGap) gapPages.push(page.pageNumber);
+  }
+  return gapPages;
+}
+
 function supplementUnits(plan: AiExtractionPlan, result: AiExtractionResult) {
   type Candidate = {
     page: AiExtractionPlan["pages"][number];
@@ -3564,6 +3678,40 @@ export async function executeAiExtractionPlan(
       ),
     );
   }
+  /*
+   * 视觉复核：文本链路（含遗漏补提取）结束后仍存在未确认指标候选时，
+   * 把对应页面原图发给视觉模型逐行核对补漏。与遗漏复核同属"详细"模式的
+   * 补充机制：概览模式跳过（颗粒无收的异常兜底除外）。
+   * 复核结果在候选闭环之前合并，让视觉补充的指标正常闭环候选、
+   * 走后续持久化与归一化。
+   */
+  const visionAllowed = plan.extractionDepth !== "overview" || supplements.length > 0;
+  const visionCandidates = visionAllowed
+    ? visionReviewCandidates(plan, merged)
+    : [];
+  if (visionCandidates.length) {
+    const visionReview = options.visionReview ?? runVisionReview;
+    const visionResult = await visionReview(
+      { reportId, result: merged, candidates: visionCandidates },
+      options,
+    );
+    if (visionResult) {
+      results.push(visionResult);
+      merged = withDeterministicMorphologyMeasurements(
+        plan,
+        withDeterministicDocumentFields(
+          plan,
+          withLocalDocumentClassification(
+            plan,
+            withDeterministicFallback(
+              plan,
+              withSourceDeduplication(plan, mergeAiExtractionResults(results)),
+            ),
+          ),
+        ),
+      );
+    }
+  }
   const unmatchedCandidates = updateCandidateQuality(jobId, plan, merged);
   let warningUnits = results.filter((result) =>
     Boolean(
@@ -3598,6 +3746,7 @@ export async function executeAiExtractionPlan(
       0,
     ),
     unmatchedCandidates,
+    tableSerialGapPages: detectTableSerialGapPages(plan),
     warningUnits,
   };
 }

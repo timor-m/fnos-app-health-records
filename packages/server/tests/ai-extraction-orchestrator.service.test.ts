@@ -6,10 +6,13 @@ import test from "node:test";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
 import {
   aiExtractionExecutionPolicy,
+  detectTableSerialGapPages,
   executeAiExtractionPlan,
-  mergeAiExtractionResults
+  mergeAiExtractionResults,
+  visionReviewCandidates
 } from "../services/ai-extraction-orchestrator.service.ts";
-import { buildAiExtractionPlan } from "../services/ai-input-planner.service.ts";
+import { buildAiExtractionPlan, type AiExtractionPlan, type PlannedOcrLine } from "../services/ai-input-planner.service.ts";
+import { listProcessingJobs } from "../services/upload.service.ts";
 import { buildProcessingJobDiagnostics } from "../services/processing-job-diagnostics.service.ts";
 import {
   deduplicateReportMorphologyFindings,
@@ -2913,5 +2916,383 @@ test("persists locally verified table evidence for pulmonary actual values and r
     "肺功能",
     "项目 | 实测 | 预测 | %预测",
     "FVC | 3.21 | 3.80 | 84.5"
+  ]);
+});
+
+
+test('vision review supplements unresolved scalar candidates and closes them before persistence', async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const events: string[] = [];
+    let visionCandidateTexts: string[] = [];
+    const executor: AiExecutor = async (input) => ({
+      provider: 'test', model: 'test', promptVersion: 'test',
+      ...normalizeAiExtraction(input.text.includes('遗漏候选补提取') ? {} : {
+        observations: [{
+          itemName: '合成指标一', resultText: '1.2', numericValue: 1.2, unit: 'mmol/L',
+          evidence: [{ pageNumber: 1, quote: '合成指标一 1.2 mmol/L 参考范围 1.0-20.0' }],
+        }],
+      }),
+      rawResponseJson: '{}', promptTokens: 1, completionTokens: 1, elapsedMs: 1,
+    });
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor, {
+      onEvent: (event) => events.push(event.type),
+      visionReview: async (input, options) => {
+        visionCandidateTexts = input.candidates.map((candidate) => candidate.line.text);
+        options?.onEvent?.({
+          type: 'vision_review_completed',
+          message: '视觉复核完成：复核 1 页，补充 1 项指标',
+          detail: { accepted: 1 },
+        });
+        return {
+          provider: 'test-vision', model: 'vision-model', promptVersion: 'vision-review-v1',
+          ...normalizeAiExtraction({
+            observations: [{
+              itemName: '血小板计数', resultText: '205', numericValue: 205, unit: '10^9/L',
+              evidence: [{
+                pageNumber: 1,
+                quote: '血小板计数 205 10^9/L 参考范围 125-350',
+                source: 'vision' as const,
+              }],
+            }],
+          }),
+          rawResponseJson: '{}', promptTokens: 100, completionTokens: 20, elapsedMs: 50,
+        };
+      },
+    });
+
+    // 文本链路未覆盖的候选行进入视觉复核
+    assert.deepEqual(visionCandidateTexts, ['血小板计数 205 10^9/L 参考范围 125-350']);
+    // 视觉补充的指标合入最终结果，来源标记穿透合并重归一
+    const supplemented = execution.result.fields.observations.find(
+      (item) => item.itemName === '血小板计数',
+    );
+    assert.ok(supplemented);
+    assert.equal(supplemented.evidence[0]?.source, 'vision');
+    assert.equal(supplemented.evidence[0]?.quote, '血小板计数 205 10^9/L 参考范围 125-350');
+    assert.ok(execution.result.fields.observations.some((item) => item.itemName === '合成指标一'));
+    // 视觉 token 计入任务总量
+    assert.equal(execution.result.promptTokens, 102);
+    assert.equal(execution.result.completionTokens, 22);
+    assert.ok(events.includes('vision_review_completed'));
+    // 复核合并在候选闭环之前：视觉补充的指标正常闭环候选
+    const unresolvedRows = getDatabase().prepare(
+      "SELECT COUNT(*) AS count FROM ai_extraction_candidates WHERE job_id = ? AND status = 'unresolved'",
+    ).get(jobId) as { count: number };
+    assert.equal(unresolvedRows.count, 0);
+    assert.equal(execution.unmatchedCandidates, 0);
+
+    // 落库链路（sanitize/证据校验/插入）保留视觉来源标记
+    persistAiExtraction(reportId, jobId, execution.result, execution.inputCharacters);
+    const persisted = getDatabase().prepare(
+      "SELECT evidence_json AS evidenceJson FROM observations WHERE report_id = ? AND item_name = '血小板计数'",
+    ).get(reportId) as { evidenceJson: string } | undefined;
+    assert.ok(persisted);
+    const evidence = JSON.parse(persisted.evidenceJson) as Array<{ source?: string }>;
+    assert.equal(evidence[0]?.source, 'vision');
+  }, () => [
+    '检验报告',
+    '合成指标一 1.2 mmol/L 参考范围 1.0-20.0',
+    '血小板计数 205 10^9/L 参考范围 125-350',
+  ]);
+});
+
+test('vision review is skipped in overview depth even with unresolved candidates', async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    getDatabase().prepare("UPDATE app_settings SET value_json = '{\"extractionDepth\":\"overview\"}' WHERE setting_key = 'ai.provider'").run();
+    let visionCalled = false;
+    const executor: AiExecutor = async () => ({
+      provider: 'test', model: 'test', promptVersion: 'test',
+      ...normalizeAiExtraction({
+        observations: [{
+          itemName: '合成指标一', resultText: '1.2', numericValue: 1.2, unit: 'mmol/L',
+          evidence: [{ pageNumber: 1, quote: '合成指标一 1.2 mmol/L 参考范围 1.0-20.0' }],
+        }],
+      }),
+      rawResponseJson: '{}', promptTokens: 1, completionTokens: 1, elapsedMs: 1,
+    });
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor, {
+      visionReview: async () => {
+        visionCalled = true;
+        return null;
+      },
+    });
+    assert.equal(visionCalled, false);
+    assert.ok(execution.unmatchedCandidates > 0);
+  }, () => [
+    '检验报告',
+    '合成指标一 1.2 mmol/L 参考范围 1.0-20.0',
+    '血小板计数 205 10^9/L 参考范围 125-350',
+  ]);
+});
+
+
+/* ---------- 表格序号断档检测与视觉复核候选放宽 ---------- */
+
+function syntheticLine(
+  id: string,
+  text: string,
+  overrides: Partial<PlannedOcrLine> = {},
+): PlannedOcrLine {
+  return {
+    id,
+    text,
+    sourceLineIds: [id],
+    index: 0,
+    candidate: false,
+    candidateKind: null,
+    boundary: null,
+    localObservation: null,
+    localObservations: [],
+    dictionaryFacts: [],
+    ...overrides,
+  } as PlannedOcrLine;
+}
+
+function syntheticPlan(
+  pages: Array<{ pageNumber: number; tableStructureStatus?: string | null; lines: PlannedOcrLine[] }>,
+): AiExtractionPlan {
+  return {
+    reportId: "synthetic",
+    extractionDepth: "detailed",
+    units: [],
+    pages: pages.map((page) => ({ pageId: `page-${page.pageNumber}`, ...page })),
+  } as unknown as AiExtractionPlan;
+}
+
+function emptyExtractionResult(): AiExtractionResult {
+  return {
+    provider: "test", model: "test", promptVersion: "test",
+    ...normalizeAiExtraction({}),
+    rawResponseJson: "{}", promptTokens: 0, completionTokens: 0, elapsedMs: 0,
+  };
+}
+
+test('detectTableSerialGapPages flags lost numbered rows and stays quiet on complete tables', () => {
+  const header = "项目 | 结果 | 单位 | 参考范围";
+  const gapPlan = syntheticPlan([{
+    pageNumber: 1,
+    lines: [
+      syntheticLine("h", header, { boundary: "table_header" }),
+      syntheticLine("r1", "1 | 指标甲 | 1.1 | U/L | 0-5", { candidate: true, candidateKind: "scalar", tableHeaderText: header }),
+      syntheticLine("r2", "2 | 指标乙 | 2.2 | U/L | 0-5", { candidate: true, candidateKind: "scalar", tableHeaderText: header }),
+      syntheticLine("r3", "3 | 指标丙 | 3.3 | U/L | 0-5", { candidate: true, candidateKind: "scalar", tableHeaderText: header }),
+      // 序号 4 的行被规则误杀成噪声：在页面里但没进提取通道
+      syntheticLine("r4", "4 | 指标丁 | 4.4 | U/L | 0-5", { candidate: false, tableHeaderText: header }),
+      syntheticLine("r5", "5 | 指标戊 | 5.5 | U/L | 0-9", { candidate: true, candidateKind: "scalar", tableHeaderText: header }),
+      syntheticLine("r6", "6 | 指标己 | 6.6 | U/L | 0-9", { candidate: true, candidateKind: "scalar", tableHeaderText: header }),
+    ],
+  }]);
+  assert.deepEqual(detectTableSerialGapPages(gapPlan), [1]);
+
+  // 全部进入提取通道 → 无断档（序号被 OCR 误读成字母的行仍计入行数）
+  const completePlan = syntheticPlan([{
+    pageNumber: 1,
+    lines: [
+      syntheticLine("h", header, { boundary: "table_header" }),
+      syntheticLine("r1", "1 | 指标甲 | 1.1 | U/L | 0-5", { candidate: true, candidateKind: "scalar", tableHeaderText: header }),
+      syntheticLine("r2", "2 | 指标乙 | 2.2 | U/L | 0-5", { candidate: true, candidateKind: "scalar", tableHeaderText: header }),
+      syntheticLine("r3", "LC | 指标丙 | 3.3 | U/L | 0-5", { candidate: true, candidateKind: "scalar", tableHeaderText: header }),
+    ],
+  }]);
+  assert.deepEqual(detectTableSerialGapPages(completePlan), []);
+
+  // 序号行太少（<3）不启用断档判定，避免零散数字误报
+  const fewSerials = syntheticPlan([{
+    pageNumber: 1,
+    lines: [
+      syntheticLine("r1", "1 | 指标甲 | 1.1 | U/L | 0-5", { candidate: true, candidateKind: "scalar", tableHeaderText: header }),
+      syntheticLine("r9", "9 | 指标壬 | 9.9 | U/L | 0-15", { candidate: true, candidateKind: "scalar", tableHeaderText: header }),
+    ],
+  }]);
+  assert.deepEqual(detectTableSerialGapPages(fewSerials), []);
+});
+
+test('vision candidates widen to measurement-shaped noise lines only on table-unreliable pages', () => {
+  const noiseRow = syntheticLine(
+    "n1",
+    "8 | 中性粒细胞百分数（NEU%） | 14.7 | % | 40~75",
+    { tableHeaderText: "项 | 结果 | 单位 | 参考区间 | 方法" },
+  );
+  const chartJunk = syntheticLine("n2", "BASO | RBC | PLT | DIFF");
+  const shortJunk = syntheticLine("n3", "备注 | 无");
+  // 人员签名行：格子里混着设备型号数字，但没有"整格数值"的结果格，不应入选
+  const personnelJunk = syntheticLine("n4", "采样者：某某 | 检验者：某某 | 审核者：某某CAL8000血球仪");
+  const unreliablePlan = syntheticPlan([{
+    pageNumber: 1,
+    tableStructureStatus: "no_structure",
+    lines: [noiseRow, chartJunk, shortJunk, personnelJunk],
+  }]);
+  assert.deepEqual(
+    visionReviewCandidates(unreliablePlan, emptyExtractionResult()).map((item) => item.line.id),
+    ["n1"],
+  );
+
+  // 表格模型正常完成的页不做噪声放宽
+  const reliablePlan = syntheticPlan([{
+    pageNumber: 1,
+    tableStructureStatus: "applied",
+    lines: [noiseRow],
+  }]);
+  assert.deepEqual(visionReviewCandidates(reliablePlan, emptyExtractionResult()), []);
+});
+
+test('serial gap surfaces through the ai_extract completion event into the jobs API', async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const executor: AiExecutor = async () => ({
+      provider: 'test', model: 'test', promptVersion: 'test',
+      ...normalizeAiExtraction({
+        observations: ['指标甲', '指标乙', '指标丙', '指标戊', '指标己'].map((name, index) => ({
+          itemName: name,
+          resultText: `${index + 1}.1`,
+          numericValue: index + 1.1,
+          unit: 'U/L',
+          evidence: [{ pageNumber: 1, quote: `${index + 1} | ${name} | ${index + 1}.1 | U/L | 0-5` }],
+        })),
+      }),
+      rawResponseJson: '{}', promptTokens: 1, completionTokens: 1, elapsedMs: 1,
+    });
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    // 序号 1,2,3,5,6 全部进入提取通道，最大序号 6 → 序号 4 的整行丢失被标记
+    assert.deepEqual(execution.tableSerialGapPages, [1]);
+
+    // 模拟 job-runner 的最终完成事件，验证 jobs 接口透出断档页
+    getDatabase().prepare(`
+      INSERT INTO processing_job_events (id, job_id, report_id, event_type, status, attempt, detail_json)
+      VALUES ('evt-final', ?, ?, 'completed', 'completed', 1, ?)
+    `).run(jobId, reportId, JSON.stringify({
+      jobType: 'ai_extract',
+      planHash: execution.plan.planHash,
+      tableSerialGapPages: execution.tableSerialGapPages,
+    }));
+    const manager = { id: 'owner', displayName: '管理员', authenticated: true, provider: 'development', isGatewayAdmin: true } as const;
+    getDatabase().prepare(
+      "INSERT INTO member_permissions (member_id, user_id, permission, granted_by) VALUES ('member', 'owner', 'manager', 'owner')",
+    ).run();
+    const jobs = listProcessingJobs(manager, reportId) as Array<{ jobType: string; tableSerialGapPages?: number[] }>;
+    assert.deepEqual(
+      jobs.find((job) => job.jobType === 'ai_extract')?.tableSerialGapPages,
+      [1],
+    );
+  }, () => [
+    '检验报告',
+    '项目 | 结果 | 单位 | 参考范围',
+    '1 | 指标甲 | 1.1 | U/L | 0-5',
+    '2 | 指标乙 | 2.2 | U/L | 0-5',
+    '3 | 指标丙 | 3.3 | U/L | 0-5',
+    '5 | 指标戊 | 5.5 | U/L | 0-9',
+    '6 | 指标己 | 6.6 | U/L | 0-9',
+  ]);
+});
+
+test('diagnostics warn about unreliable table structure only when the page carries scalar candidates', async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const executor: AiExecutor = async () => ({
+      provider: 'test', model: 'test', promptVersion: 'test',
+      ...normalizeAiExtraction({
+        observations: [{
+          itemName: '指标1', resultText: '1.2', numericValue: 1.2, unit: 'mmol/L',
+          evidence: [{ pageNumber: 1, quote: '指标1 1.2 mmol/L 参考范围 1.0-20.0' }],
+        }],
+      }),
+      rawResponseJson: '{}', promptTokens: 1, completionTokens: 1, elapsedMs: 1,
+    });
+    await executeAiExtractionPlan(jobId, reportId, executor);
+    getDatabase().prepare(
+      "UPDATE processing_jobs SET status = 'completed', finished_at = CURRENT_TIMESTAMP WHERE id = ?",
+    ).run(jobId);
+    const units = (getDatabase().prepare(`
+      SELECT unit_type AS unitType, page_numbers_json AS pageNumbersJson, status,
+        character_count AS characterCount, candidate_count AS candidateCount,
+        matched_count AS matchedCount
+      FROM ai_extraction_units WHERE job_id = ? AND status <> 'superseded'
+      ORDER BY unit_index, id
+    `).all(jobId) as Array<Record<string, unknown>>).map((unit) => ({
+      ...unit,
+      pageNumbers: JSON.parse(String(unit.pageNumbersJson)) as number[],
+    }));
+    const job = {
+      id: jobId, reportId, jobType: "ai_extract" as const,
+      status: "completed", errorCode: null, errorMessage: null,
+    };
+
+    // 无表格诊断字段（未安装模块）时不提示
+    let diagnostics = buildProcessingJobDiagnostics(job, [], units as never);
+    assert.equal(
+      diagnostics.reasons.some((reason) => reason.code === "TABLE_STRUCTURE_UNRELIABLE"),
+      false,
+    );
+
+    // 表格模型失败且页上有指标候选 → 诊断抽屉提示
+    const ocrRow = getDatabase().prepare(
+      "SELECT id, lines_json AS linesJson FROM ocr_results WHERE page_id = 'page-1'",
+    ).get() as { id: string; linesJson: string };
+    const lines = JSON.parse(ocrRow.linesJson) as Array<Record<string, unknown>>;
+    lines[0].tableDiagnostics = { status: "no_structure", mapped: 0, unsafe: 12 };
+    getDatabase().prepare("UPDATE ocr_results SET lines_json = ? WHERE id = ?")
+      .run(JSON.stringify(lines), ocrRow.id);
+    diagnostics = buildProcessingJobDiagnostics(job, [], units as never);
+    const reason = diagnostics.reasons.find((item) => item.code === "TABLE_STRUCTURE_UNRELIABLE");
+    assert.ok(reason);
+    assert.equal(reason.severity, "warning");
+    assert.deepEqual(reason.pages, [1]);
+  }, () => [
+    '检验报告',
+    '指标1 1.2 mmol/L 参考范围 1.0-20.0',
+  ]);
+});
+
+
+test('drops findings that merely enumerate extracted observations', async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const executor: AiExecutor = async () => ({
+      provider: 'test', model: 'test', promptVersion: 'test',
+      ...normalizeAiExtraction({
+        findings: '指标甲 1.1 U/L（参考0-5）；指标乙 2.2 U/L（参考0-5）；指标丙 3.3 U/L（参考0-5）',
+        observations: [
+          { itemName: '指标甲', resultText: '1.1', numericValue: 1.1, unit: 'U/L', evidence: [{ pageNumber: 1, quote: '指标甲 1.1 U/L 参考范围 0-5' }] },
+          { itemName: '指标乙', resultText: '2.2', numericValue: 2.2, unit: 'U/L', evidence: [{ pageNumber: 1, quote: '指标乙 2.2 U/L 参考范围 0-5' }] },
+          { itemName: '指标丙', resultText: '3.3', numericValue: 3.3, unit: 'U/L', evidence: [{ pageNumber: 1, quote: '指标丙 3.3 U/L 参考范围 0-5' }] },
+        ],
+      }),
+      rawResponseJson: '{}', promptTokens: 1, completionTokens: 1, elapsedMs: 1,
+    });
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    persistAiExtraction(reportId, jobId, execution.result, execution.inputCharacters);
+    const row = getDatabase().prepare("SELECT findings FROM reports WHERE id = ?").get(reportId) as { findings: string | null };
+    assert.equal(row.findings, null);
+    // 指标本身正常落库，过滤只影响叙事字段
+    const stored = getDatabase().prepare("SELECT COUNT(*) AS c FROM observations WHERE report_id = ?").get(reportId) as { c: number };
+    assert.equal(stored.c, 3);
+  }, () => [
+    '检验报告',
+    '指标甲 1.1 U/L 参考范围 0-5',
+    '指标乙 2.2 U/L 参考范围 0-5',
+    '指标丙 3.3 U/L 参考范围 0-5',
+  ]);
+});
+
+test('keeps narrative findings and interpretive text that only names indicators', async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const executor: AiExecutor = async () => ({
+      provider: 'test', model: 'test', promptVersion: 'test',
+      ...normalizeAiExtraction({
+        findings: '白细胞总数及中性粒细胞总数升高，提示炎症可能，建议结合临床复查。',
+        observations: [
+          { itemName: '白细胞总数', resultText: '29.59', numericValue: 29.59, unit: '109/L', evidence: [{ pageNumber: 1, quote: '白细胞总数 29.59 109/L 参考范围 3.5-9.5' }] },
+          { itemName: '中性粒细胞总数', resultText: '4.36', numericValue: 4.36, unit: '109/L', evidence: [{ pageNumber: 1, quote: '中性粒细胞总数 4.36 109/L 参考范围 1.8-6.3' }] },
+          { itemName: '血红蛋白', resultText: '153', numericValue: 153, unit: 'g/L', evidence: [{ pageNumber: 1, quote: '血红蛋白 153 g/L 参考范围 130-175' }] },
+        ],
+      }),
+      rawResponseJson: '{}', promptTokens: 1, completionTokens: 1, elapsedMs: 1,
+    });
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    persistAiExtraction(reportId, jobId, execution.result, execution.inputCharacters);
+    const row = getDatabase().prepare("SELECT findings FROM reports WHERE id = ?").get(reportId) as { findings: string | null };
+    assert.equal(row.findings, '白细胞总数及中性粒细胞总数升高，提示炎症可能，建议结合临床复查。');
+  }, () => [
+    '检验报告',
+    '白细胞总数 29.59 109/L 参考范围 3.5-9.5',
+    '中性粒细胞总数 4.36 109/L 参考范围 1.8-6.3',
+    '血红蛋白 153 g/L 参考范围 130-175',
   ]);
 });

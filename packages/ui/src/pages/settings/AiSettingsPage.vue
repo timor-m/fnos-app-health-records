@@ -624,9 +624,13 @@ onUnmounted(() => {
               <small class="field-hint vision-hint-grid" :class="{ 'field-warning': !visionModelHint.includes('可能支持') }">{{ visionModelHint }}</small>
             </div>
             <label class="toggle-row">
-              <div><strong>视觉增强</strong><span>{{ supportsVision ? "复杂表格可发送处理后的页面副本" : "MiniMax M2 系列当前仅支持文本整理" }}</span></div>
+              <div><strong>视觉增强</strong><span>{{ supportsVision ? "文本整理后仍有疑似遗漏指标时，发送对应页面原图给视觉模型复核补漏" : "MiniMax M2 系列当前仅支持文本整理" }}</span></div>
               <input v-model="editor.visionEnabled" class="switch" type="checkbox" :disabled="!supportsVision" />
             </label>
+            <template v-if="supportsVision && editor.visionEnabled">
+              <small class="field-hint field-warning">隐私提示：复核会把疑似遗漏页面的原图直接发送给该配置的服务商。图片无法像文本一样自动脱敏，可能包含姓名、证件号等身份信息，请先确认服务商的隐私政策可接受。</small>
+              <small class="field-hint">费用说明：视觉模型按图片计费，单价高于纯文本。仅在"详细"解析程度下、文本整理后仍有疑似遗漏时触发，单份报告最多复核 3 页。</small>
+            </template>
           </div>
 
           <div v-if="testSteps.length" class="test-results ai-editor-tests">

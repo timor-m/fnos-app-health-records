@@ -46,7 +46,7 @@ import {
 } from "./observation-interpretation.service";
 import { assessObservationReference } from "./observation-reference.service";
 
-export const aiExtractionPromptVersion = "health-record-routed-v8";
+export const aiExtractionPromptVersion = "health-record-routed-v9";
 const maxInputCharacters = 80_000;
 const reportTypeAliases: Record<string, string> = {
   physical_exam: "checkup",
@@ -146,6 +146,12 @@ export type AiEvidence = {
   pageNumber: number;
   quote: string;
   table?: AiTableEvidence;
+  /*
+   * 视觉复核来源标记。视觉补充的指标数值/单位以图片为准、可能本就不存在于 OCR 文本，
+   * 该标记穿透 normalize/merge/persist 落入 evidence_json，
+   * 归一化证据闸门对纯视觉来源跳过数值/单位回指（验收门已锚定真实 OCR 候选行）。
+   */
+  source?: "vision";
 };
 export type AiObservation = {
   sectionName: string | null;
@@ -505,7 +511,12 @@ function evidenceValue(value: unknown): AiEvidence[] {
       ),
     );
     const quote = textValue((item as Record<string, unknown>).quote, 500);
-    return quote ? [{ pageNumber, quote }] : [];
+    if (!quote) return [];
+    const source =
+      (item as Record<string, unknown>).source === "vision"
+        ? ({ source: "vision" } as const)
+        : null;
+    return [{ pageNumber, quote, ...(source || {}) }];
   });
 }
 
@@ -1432,7 +1443,7 @@ function documentContract(input: AiExtractionInput) {
 reportType 只能是 physical_exam、laboratory、imaging、functional、pathology、outpatient、inpatient、prescription、receipt、vaccine、other。
 title 必须概括整份报告；泛标题应按主要项目、检查方式、部位或报告范围生成短标题，但不得生成疾病判断标题。综合体检中的专项页不能覆盖整份报告标题。
 reportSubtype 只能填写报告上明确出现的具体检查方式或子类，不得重复 reportType 的枚举值。bodyParts 只能填写报告明确涉及的实际检查部位，不得填写 physical_exam、checkup、laboratory、imaging 等内部类型词；每项使用 raw、name、parent、laterality，laterality 只能是 left、right、bilateral、unspecified。identifiers 只允许 reportNo、outpatientNo、inpatientNo、physicalExamNo、examNo、specimenNo、barcodeNo。clinicians 只允许 ordering、examining、reporting、reviewing、chief。
-summary 只能提取原报告明确存在的总结，不得为当前输入另写摘要。公共字段证据写入顶层 evidence，置信度写入 confidence。${checkupFields}${includeObservations ? `\n当前输入覆盖整份报告，同时逐项输出 observations，规则如下：\n${observationContract()}\n同时输出 morphologyFindings，规则如下：\n${morphologyContract().replace(/^当前任务只输出 morphologyFindings。/, "")}` : ""}`;
+summary 只能提取原报告明确存在的总结，不得为当前输入另写摘要。findings 只用于原报告明确存在的叙事性检查所见（如影像、功能检查的描述性文字）；检验报告不得把指标值罗列成 findings，没有叙事所见时省略。公共字段证据写入顶层 evidence，置信度写入 confidence。${checkupFields}${includeObservations ? `\n当前输入覆盖整份报告，同时逐项输出 observations，规则如下：\n${observationContract()}\n同时输出 morphologyFindings，规则如下：\n${morphologyContract().replace(/^当前任务只输出 morphologyFindings。/, "")}` : ""}`;
 }
 
 function observationContract() {
@@ -2565,6 +2576,7 @@ const observationMetadataNames = new Set(
     "体检编号",
     "报告编号",
     "样本编号",
+    "小结",
   ].map(compactObservationIdentity),
 );
 
@@ -2611,6 +2623,16 @@ export function sanitizeReportObservations(observations: AiObservation[]) {
   const sanitized = observations.flatMap((observation) => {
     const cleanedName = cleanIndicatorName(observation.itemName);
     const normalizedItemName = cleanedName.name;
+    /* 小结枚举回声（"3、血清总胆固醇测定增高:5.48…"）：名称带序号前缀、
+       结果却是建议类长文（真实测量值埋在名称里）。明细页的同名指标已存在，
+       这种回声行直接丢弃。 */
+    if (
+      /^\d+\s*[、.．]/.test(observation.itemName.normalize("NFKC").trim()) &&
+      observation.resultText.trim().length > 16 &&
+      /[，。；;]/.test(observation.resultText)
+    ) {
+      return [];
+    }
     const embeddedValue = normalizedItemName.match(
       /^(.+?)[：:]\s*(?:<=|>=|<|>|≤|≥)?\s*([-+]?\d+(?:\.\d+)?)(?:\s*[^\s]+)?$/,
     );
@@ -2797,11 +2819,50 @@ function validatePersistedObservationEvidence(
             left.line.localeCompare(right.line, "zh-CN"),
         );
         return candidates[0]
-          ? [{ pageNumber: evidence.pageNumber, quote: candidates[0].line }]
+          ? [
+              {
+                pageNumber: evidence.pageNumber,
+                quote: candidates[0].line,
+                /* 视觉复核来源标记随证据改写一并保留，
+                   归一化闸门据此区分"以图为准"的数值/单位 */
+                ...(evidence.source ? { source: evidence.source } : {}),
+              },
+            ]
           : [];
       }),
     ),
   }));
+}
+
+/**
+ * 检验报告的 findings 只应是原报告的叙事性检查所见。部分模型会把全部指标值
+ * 罗列成「名称 数值 单位（参考…）；…」充当所见，与指标总览完全重复。
+ * 分句中大部分都在复述已提取指标（名称与结果同时出现）时丢弃该字段；
+ * 只提及指标名但没有复述结果值的解读性文字（“白细胞总数升高…”）保留。
+ */
+function findingsIsObservationEnumeration(
+  findings: string | null,
+  observations: AiObservation[],
+) {
+  if (!findings) return false;
+  const segments = findings
+    .split(/[；;。\n]+/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  if (segments.length < 3) return false;
+  const pairs = observations.flatMap((observation) => {
+    const name = compactPersistedEvidence(observation.itemName);
+    const result = compactPersistedEvidence(observation.resultText);
+    return name.length >= 2 && result ? [{ name, result }] : [];
+  });
+  if (pairs.length < 3) return false;
+  const enumerated = segments.filter((segment) => {
+    const compact = compactPersistedEvidence(segment);
+    return pairs.some(
+      (pair) => compact.includes(pair.name) && compact.includes(pair.result),
+    );
+  }).length;
+  return enumerated >= 3 && enumerated / segments.length >= 0.6;
 }
 
 /**
@@ -3463,7 +3524,13 @@ export function persistAiExtraction(
   set("clinicalDiagnosis", "clinical_diagnosis", fields.clinicalDiagnosis);
   set("purpose", "purpose", fields.purpose);
   set("chiefComplaint", "chief_complaint", fields.chiefComplaint);
-  set("findings", "findings", fields.findings);
+  const filteredFindings = findingsIsObservationEnumeration(
+    fields.findings,
+    fields.observations,
+  )
+    ? null
+    : fields.findings;
+  set("findings", "findings", filteredFindings);
   set("impression", "impression", fields.impression);
   set("summary", "summary", fields.summary);
   set("recommendation", "recommendation", fields.recommendation);

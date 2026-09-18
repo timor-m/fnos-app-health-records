@@ -9,6 +9,7 @@ const processingCodeLabels: Record<string, string> = {
   AI_INVALID_OUTPUT: "AI 输出格式异常",
   AI_TRUNCATED_OUTPUT: "AI 输出被截断",
   AI_PARTIAL_RESULT: "部分结果被证据校验拒绝",
+  TABLE_STRUCTURE_UNRELIABLE: "表格结构识别不完整",
   SUPPLEMENT_REQUIRED: "已追加遗漏补提取",
   SUPPLEMENT_UNRESOLVED: "补提取后仍有未核对项",
   POSTPROCESS_REDUNDANT: "重复结果已剔除",

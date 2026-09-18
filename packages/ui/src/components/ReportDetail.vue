@@ -234,6 +234,12 @@ const eventLogHasContent = computed(() => isAiEventLog.value
   ? Boolean(jobEventDetail.value)
   : jobEvents.value.length > 0
 );
+/* 视觉复核是补充指标的关键阶段：任务记录默认折叠，含复核事件时自动展开 */
+const generalEventsHaveVisionReview = computed(() =>
+  Boolean(jobEventDetail.value?.generalEvents.some((event) =>
+    String(event.detail?.stage || "").startsWith("vision_review_")
+  ))
+);
 const processingJobGroups = computed(() => groupProcessingJobBatches(selectedJobs.value));
 const currentBatch = computed(() => processingJobGroups.value.currentBatch);
 const currentJobs = computed(() => processingJobGroups.value.currentJobs);
@@ -320,6 +326,31 @@ const aiJobs = computed(() => currentJobs.value.filter((job) => job.jobType === 
 const runningAiJobs = computed(() => aiJobs.value.filter((job) => ["queued", "processing"].includes(job.status)));
 const failedAiJobs = computed(() => aiJobs.value.filter((job) => job.status === "failed"));
 const completedAiJobs = computed(() => aiJobs.value.filter((job) => job.status === "completed"));
+/* 失败可见性：最近一次 AI 整理结束后的弱信号合并为一行提示（克制，不逐条弹）。
+   - 未闭环候选：AI 看到了疑似指标但证据核验没过；
+   - 序号断档：表格有序号但进入提取的行数少于最大序号，说明规划阶段就丢了整行。 */
+const latestCompletedAiJob = computed(() =>
+  [...completedAiJobs.value].sort((left, right) =>
+    String(right.createdAt).localeCompare(String(left.createdAt))
+  )[0] || null
+);
+const extractionNoticeText = computed(() => {
+  const job = latestCompletedAiJob.value;
+  if (!job) return "";
+  const parts: string[] = [];
+  const unmatched = job.unmatchedCandidates || 0;
+  if (unmatched > 0) {
+    parts.push(`${unmatched} 个疑似指标未能通过原文核验，未入库`);
+  }
+  const gapPages = job.tableSerialGapPages || [];
+  if (gapPages.length) {
+    parts.push(`第 ${gapPages.join("、")} 页表格序号不连续，可能有整行未参与解析`);
+  }
+  return parts.join("；");
+});
+function openUnmatchedCandidatesLog() {
+  if (latestCompletedAiJob.value) openJobEvents(latestCompletedAiJob.value);
+}
 const aiTriggerState = computed(() => resolveAiTriggerState({
   triggeringAi: triggeringAi.value,
   pageMutationPending: savingPages.value || pageRefreshAwaitingJobs.value,
@@ -455,6 +486,9 @@ function jobDetail(job: ProcessingJob) {
 
 function eventTitle(event: ProcessingJobEvent) {
   if (event.detail?.stage === "duplicate_precheck") return "发现重复报告";
+  if (event.detail?.stage === "vision_review_started") return "视觉复核";
+  if (event.detail?.stage === "vision_review_completed") return "视觉复核完成";
+  if (event.detail?.stage === "vision_review_failed") return "视觉复核未完成";
   const prefix = eventTypeLabels[event.eventType] || event.eventType;
   return event.attempt > 0 ? `${prefix} · 第 ${event.attempt} 次尝试` : prefix;
 }
@@ -2193,6 +2227,11 @@ onActivated(() => {
         </section>
       </div>
       <div v-else class="preview-hint">{{ aiEmptyHint }}</div>
+      <p v-if="extractionNoticeText" class="extraction-unmatched-hint">
+        <CircleAlert :size="15" />
+        <span>{{ extractionNoticeText }}；可在整理日志中核对，或开启视觉增强后重新整理。</span>
+        <button type="button" @click="openUnmatchedCandidatesLog">查看整理日志</button>
+      </p>
     </article>
 
     <MorphologyFindingEditor
@@ -2991,7 +3030,7 @@ onActivated(() => {
               任务启动后会按规划顺序显示解析单元。
             </p>
 
-            <details v-if="jobEventDetail.generalEvents.length" class="ai-job-general-history">
+            <details v-if="jobEventDetail.generalEvents.length" class="ai-job-general-history" :open="generalEventsHaveVisionReview || undefined">
               <summary>任务记录 {{ jobEventDetail.generalEvents.length }} 条</summary>
               <div class="job-event-timeline job-event-timeline--compact">
                 <article v-for="event in jobEventDetail.generalEvents" :key="event.id" class="job-event-item" :class="`job-event-item--${event.eventType}`">

@@ -2327,6 +2327,44 @@ test("does not mistake a named percentage measurement for an age-band reference 
   assert.notEqual(line.candidateResolutionReason, "unsupported_complex_table");
 });
 
+test("blood-count percentage rows with % in name and bare % unit are measurement candidates", () => {
+  /* 回归：中性粒细胞百分数（NEU%）这类行的名称格与单位格都含 %，
+     曾被打成百分位矩阵（unsupported_complex_table）而在进入 AI 前被丢弃。 */
+  const rebuilt = rebuildOcrPages([
+    page(1, [
+      "项 | 结果 | 单位 | 参考区间 | 方法",
+      "8 | 中性粒细胞百分数（NEU%） | 14.7 | % | 40~75",
+      "12 | 嗜碱性细胞百分数（BASO%） | 0.3 | % | 0~1",
+    ]),
+  ]);
+  const rows = rebuilt[0].lines.filter((line) => line.text.includes("百分数"));
+  assert.equal(rows.length, 2);
+  for (const line of rows) {
+    assert.equal(line.contentRole, "measurement", line.text);
+    assert.equal(line.candidate, true, line.text);
+    assert.equal(line.candidateKind, "scalar", line.text);
+    assert.notEqual(
+      line.candidateResolutionReason,
+      "unsupported_complex_table",
+      line.text,
+    );
+  }
+});
+
+test("propagates table structure diagnostics from OCR lines to the rebuilt page", () => {
+  const plain = page(1, ["项目 | 结果 | 单位", "指标甲 1.1 U/L"]);
+  assert.equal(rebuildOcrPages([plain])[0].tableStructureStatus, null);
+
+  const withDiagnostics = page(1, ["项目 | 结果 | 单位", "指标甲 1.1 U/L"]);
+  const parsed = JSON.parse(withDiagnostics.linesJson) as Array<Record<string, unknown>>;
+  parsed[0].tableDiagnostics = { status: "no_structure", mapped: 0, unsafe: 12 };
+  withDiagnostics.linesJson = JSON.stringify(parsed);
+  assert.equal(
+    rebuildOcrPages([withDiagnostics])[0].tableStructureStatus,
+    "no_structure",
+  );
+});
+
 test("keeps multi-value OCR joins auditable but prevents automatic supplement extraction", () => {
   const rebuilt = rebuildOcrPages([
     page(1, [
