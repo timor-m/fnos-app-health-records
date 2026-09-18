@@ -1427,7 +1427,7 @@ function documentContract(input: AiExtractionInput) {
     input.documentContentType === "checkup"
       ? `\n综合体检通常跨多个科室和部位：没有报告原文明示的单一就诊科室时省略科室字段；reportSubtype 默认省略，只有报告标题明确写出职业体检等具体子类时才填原文；bodyParts 默认省略，不能把“体检”或各专项章节汇总成一个人体部位。`
       : "";
-  return `当前任务只建立整份报告的文档概况。
+  return `当前任务${includeObservations ? "建立整份报告的文档概况，并逐项提取其中的指标与形态发现" : "只建立整份报告的文档概况"}。
 允许字段：reportType、reportSubtype、title、hospitalNameRaw、hospitalBranch、city、visitType、visitDepartment、orderingDepartment、performingDepartment、reportingDepartment、inpatientWard、bodyParts、identifiers、reportIssuedAt、examinedAt、orderedAt、sampledAt、receivedAt、reviewedAt、admittedAt、dischargedAt、clinicians、clinicalDiagnosis、purpose、chiefComplaint、findings、impression、summary、recommendation、evidence、confidence${includeObservations ? "、observations、morphologyFindings" : ""}。
 reportType 只能是 physical_exam、laboratory、imaging、functional、pathology、outpatient、inpatient、prescription、receipt、vaccine、other。
 title 必须概括整份报告；泛标题应按主要项目、检查方式、部位或报告范围生成短标题，但不得生成疾病判断标题。综合体检中的专项页不能覆盖整份报告标题。

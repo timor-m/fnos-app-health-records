@@ -90,9 +90,18 @@ test("observation abnormal display standardizes reported, computed, conflict, no
     abnormalConflict: false,
     abnormalReason: "数值高于报告参考上限",
   });
-  assert.equal(computed.label, "高于参考范围");
+  assert.equal(computed.label, "偏高");
   assert.equal(computed.isComputed, true);
-  assert.equal(computed.explanation, "数值高于报告参考上限");
+  assert.equal(computed.explanation, "数值高于报告参考上限（系统推算）");
+
+  const computedWithoutReason = describeObservationAbnormal({
+    displayAbnormalFlag: "low",
+    abnormalStatus: "computed",
+    abnormalConflict: false,
+    abnormalReason: null,
+  });
+  assert.equal(computedWithoutReason.label, "偏低");
+  assert.equal(computedWithoutReason.explanation, "数值超出参考范围（系统推算）");
 
   const conflict = describeObservationAbnormal({
     displayAbnormalFlag: null,
@@ -128,10 +137,14 @@ test("report and trend UIs share effective abnormal display semantics", () => {
   assert.match(reportDetailSource, /describeObservationAbnormal/);
   assert.match(reportDetailSource, /observationAbnormalDisplay/);
   assert.match(reportDetailSource, /observationFlagLabel/);
+  assert.match(reportDetailSource, /observationComputedFlagHint/);
+  assert.match(reportDetailSource, /#trigger="\{ toggle, open, panelId \}"/);
   assert.doesNotMatch(reportDetailSource, /abnormalLabel\(item\.abnormalFlag\)/);
 
   assert.match(trendsSource, /describeObservationAbnormal/);
   assert.match(trendsSource, /pointAbnormalDisplay/);
+  assert.match(trendsSource, /pointComputedFlagHint/);
+  assert.match(trendsSource, /#trigger="\{ toggle, open, panelId \}"/);
   assert.match(trendsSource, /pointFlagClass\(chartPoint\.point\)/);
   assert.doesNotMatch(trendsSource, /flagClass\(point\.abnormalFlag\)/);
 });

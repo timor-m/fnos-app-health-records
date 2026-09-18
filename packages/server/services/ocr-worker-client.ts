@@ -87,6 +87,15 @@ function workerError(message: string, code = "OCR_WORKER_UNAVAILABLE") {
   return Object.assign(new Error(message), { code });
 }
 
+// onnxruntime prints this once per process when the sandboxed HOME is not
+// writable and falls back to an in-memory telemetry identifier; OCR output is
+// unaffected, so the line must not surface as a worker runtime warning.
+const benignWorkerStderrPatterns = [/failed to persist telemetry device id/i];
+
+function isBenignWorkerStderr(message: string) {
+  return benignWorkerStderrPatterns.some((pattern) => pattern.test(message));
+}
+
 function rejectPending(
   error: Error,
   targetProcess?: ChildProcessWithoutNullStreams,
@@ -996,6 +1005,7 @@ async function startWorker() {
         .map((message) => message.trim())
         .filter(Boolean);
       for (const message of messages) {
+        if (isBenignWorkerStderr(message)) continue;
         writeLimitedWorkerLog("stderr", { message: message.slice(0, 1_000) });
       }
     });

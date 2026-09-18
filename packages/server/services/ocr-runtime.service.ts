@@ -7,18 +7,32 @@ import { getAppConfig } from "../utils/runtime-config";
 import { getJobRunnerStatus } from "./job-runner.service";
 
 let installing = false;
-function tableEnhancementAvailable(storageDir: string) {
+const tableEnhancementRevision = "rapid-table-3.0.2-layout-1.2.1-v1";
+function tableEnhancementStatus(storageDir: string) {
   try {
     const root = join(storageDir, "ocr-table");
     const active = JSON.parse(readFileSync(join(root, "active.json"), "utf8"));
-    return active.revision === "rapid-table-3.0.2-layout-1.2.1-v1"
+    const baseReady = active.revision === tableEnhancementRevision
       && /^runtime-[\w-]+$/.test(active.directory)
-      && existsSync(join(root, active.directory, "bin/python"))
-      && Object.keys(active.modelHashes || {}).length >= 2
-      && Object.entries(active.modelHashes).every(([name, digest]) =>
-        /^lib\/python[\d.]+\/site-packages\/rapid_(table|layout)\/models\/[\w.-]+\.onnx$/.test(name)
-        && createHash("sha256").update(readFileSync(join(root, active.directory, name))).digest("hex") === digest);
-  } catch { return false; }
+      && existsSync(join(root, active.directory, "bin/python"));
+    const entries = Object.entries(active.modelHashes || {}) as Array<[string, string]>;
+    const hashValid = (name: string, digest: string) =>
+      /^lib\/python[\d.]+\/site-packages\/rapid_(table|layout)\/models\/[\w.-]+\.onnx$/.test(name)
+      && createHash("sha256").update(readFileSync(join(root, active.directory, name))).digest("hex") === digest;
+    const moduleReady = (module: "table" | "layout") =>
+      baseReady && entries.some(([name, digest]) => name.includes(`rapid_${module}/`) && hashValid(name, digest));
+    const tableModel = moduleReady("table");
+    const layoutModel = moduleReady("layout");
+    const available = tableModel && layoutModel
+      && entries.length >= 2
+      && entries.every(([name, digest]) => hashValid(name, digest));
+    return { available, tableModel, layoutModel };
+  } catch {
+    return { available: false, tableModel: false, layoutModel: false };
+  }
+}
+function tableEnhancementAvailable(storageDir: string) {
+  return tableEnhancementStatus(storageDir).available;
 }
 let installLastOutputAt: string | null = null;
 let installHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -281,6 +295,7 @@ export function getOcrStatus() {
   return {
     available,
     tableEnhancementAvailable: tableEnhancementAvailable(config.runtimeDir),
+    tableEnhancement: tableEnhancementStatus(config.runtimeDir),
     installing,
     workerScript: config.ocrWorkerScript,
     pythonBin: config.ocrPythonBin,

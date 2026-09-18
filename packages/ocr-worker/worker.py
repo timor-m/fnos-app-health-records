@@ -213,6 +213,35 @@ def worker_heartbeat_interval_seconds() -> float:
     return milliseconds / 1000
 
 
+def is_arm_machine() -> bool:
+    return platform.machine().strip().lower() in {"aarch64", "arm64", "armv7l", "armv6l"}
+
+
+def onnx_intra_op_num_threads() -> int:
+    # 0 keeps the onnxruntime default of using every core. Small ARM NAS boards
+    # share a few little cores with the whole system, so leave one core for the
+    # OS unless the operator overrides the limit explicitly.
+    fallback = 0
+    if is_arm_machine():
+        fallback = max(1, min(4, (os.cpu_count() or 2) - 1))
+    return bounded_resource_limit("OCR_WORKER_ONNX_INTRA_OP_THREADS", fallback, 0, 64)
+
+
+def onnx_inter_op_num_threads() -> int:
+    fallback = 1 if is_arm_machine() else 0
+    return bounded_resource_limit("OCR_WORKER_ONNX_INTER_OP_THREADS", fallback, 0, 64)
+
+
+def onnx_engine_kwargs() -> dict[str, int]:
+    intra = onnx_intra_op_num_threads()
+    if intra <= 0:
+        return {}
+    return {
+        "intra_op_num_threads": intra,
+        "inter_op_num_threads": max(1, onnx_inter_op_num_threads()),
+    }
+
+
 class RequestHeartbeat:
     def __init__(self, request_id: Any, action: str, started: float):
         self.request_id = request_id
@@ -389,7 +418,7 @@ def load_engine():
                 return {
                     "name": "rapidocr-onnxruntime",
                     "version": getattr(rapidocr_onnxruntime, "__version__", "unknown"),
-                    "engine": RapidOCR(),
+                    "engine": RapidOCR(**onnx_engine_kwargs()),
                 }
             errors.append(f"Unsupported OCR backend: {candidate}")
         except Exception as error:
@@ -811,10 +840,10 @@ def normalized_ocr_text(value: Any) -> str:
 
 
 TABLE_REFERENCE_PATTERN = re.compile(
-    r"^\s*([-+]?\d+(?:\.\d+)?)\s*(?:-|–|—|~|～|至)\s*([-+]?\d+(?:\.\d+)?)\s*$"
+    r"^\s*\(?\s*([-+]?\d+(?:\.\d+)?)\s*(?:-|–|—|~|～|至)\s*([-+]?\d+(?:\.\d+)?)\s*\)?\s*$"
 )
 TABLE_RESULT_PATTERN = re.compile(
-    r"^\s*[↑↓▲▼⬆⬇]?(?:<=|>=|<|>|≤|≥)?\s*[-+]?\d+(?:\.\d+)?\s*(?:[%‰↑↓▲▼⬆⬇]|偏高|偏低|高|低)?\s*$",
+    r"^\s*[↑↓▲▼⬆⬇]?(?:<=|>=|<|>|≤|≥)?\s*[-+]?\d+(?:\.\d+)?\s*(?:\(\s*[A-Za-zμµ%‰/^²³·.*×+\-\d]+\s*\)\s*)?(?:[%‰↑↓▲▼⬆⬇]|偏高|偏低|高|低)?\s*$",
     re.IGNORECASE,
 )
 CORRUPTED_DECIMAL_PATTERN = re.compile(r"^\s*\d+[`'’]\d+\s*[↑↓▲▼⬆⬇]?\s*$")
@@ -923,7 +952,9 @@ def suspicious_table_rows(
             center_y = (rect[1] + rect[3]) / 2
             if (
                 rect[0] < reference_rect[0]
-                and reference_rect[0] - rect[0] <= image_width * 0.5
+                # 宽版式检验单名称列与参考值列可分列页面两端；双栏防护由
+                # 下方 max(rect[0]) 选取最右名称承担，不在这里限制距离。
+                and reference_rect[0] - rect[0] <= image_width * 0.95
                 and abs(center_y - reference_center_y) <= reference_height * 0.75
             ):
                 names.append((line, rect))
@@ -1083,6 +1114,37 @@ def retry_result_score(line: dict[str, Any], reference: tuple[float, float]) -> 
     if any(marker in text for marker in ("↓", "▼", "⬇")):
         score += 2 if value < low else -3
     return score
+
+
+def folded_unit_text(value: str) -> str:
+    """折叠单位用于变体比对：去空白和斜杠、小写、μ 统一为 u。"""
+    return re.sub(r"[\s/]+", "", value).lower().replace("μ", "u").replace("µ", "u")
+
+
+def restore_inline_unit(
+    original_text: str, retried_text: str, retry_row_lines: list[dict[str, Any]]
+) -> str:
+    """重读结果常丢掉原结果格里的括号单位（如「1.89(mmolL)↑」重读为「1.89」）。
+    替换前把单位段补回：重试行中存在 fold 一致的独立单位行时采用重读文本
+    （可顺带把 mmolL 矫正为 mmol/L），否则保留原单位段，避免单位丢失。"""
+    original_unit = re.search(r"\(\s*([A-Za-zμµ%‰/^²³·.*×+\-]+)\s*\)", original_text)
+    if not original_unit:
+        return retried_text
+    if re.search(r"\(\s*[A-Za-zμµ%‰/^²³·.*×+\-]+\s*\)", retried_text):
+        return retried_text
+    replacement_unit: str | None = None
+    for line in retry_row_lines:
+        text = normalized_ocr_text(line.get("text"))
+        if re.search(r"\d", text):
+            continue
+        unit_match = re.fullmatch(r"\(?\s*([A-Za-zμµ%‰/^²³·.*×+\-]+)\s*\)?", text)
+        if unit_match and folded_unit_text(unit_match.group(1)) == folded_unit_text(original_unit.group(1)):
+            replacement_unit = unit_match.group(1)
+            break
+    unit_text = replacement_unit or original_unit.group(1)
+    marker = retried_text[-1] if retried_text[-1:] in "↑↓▲▼⬆⬇" else ""
+    value_part = retried_text[: len(retried_text) - len(marker)] if marker else retried_text
+    return f"{value_part}({unit_text}){marker}"
 
 
 def combine_retry_result_markers(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1281,6 +1343,18 @@ def retry_suspicious_table_rows(
                                 best_result = {**best_result, "text": f"{best_text}↓"}
                             elif best_value > high:
                                 best_result = {**best_result, "text": f"{best_text}↑"}
+                        original_result_text = (
+                            normalized_ocr_text(row["result"].get("text"))
+                            if row["result"]
+                            else ""
+                        )
+                        restored_text = restore_inline_unit(
+                            original_result_text,
+                            normalized_ocr_text(best_result.get("text")),
+                            retry_row_lines,
+                        )
+                        if restored_text != normalized_ocr_text(best_result.get("text")):
+                            best_result = {**best_result, "text": restored_text}
                         if row["result"] in merged:
                             merged[merged.index(row["result"])] = best_result
                         else:

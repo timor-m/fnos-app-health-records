@@ -85,6 +85,38 @@ test('recovers explicit result columns without borrowing reference values or alt
   }
 });
 
+test('recovers rows touching the header and results with abnormal arrows', () => {
+  const storage = mkdtempSync(join(tmpdir(), 'ocr-header-touching-'));
+  const previous = process.env.STORAGE_DIR;
+  process.env.STORAGE_DIR = storage;
+  try {
+    // 真实布局：首个数据行与表头相贴（top = 表头 bottom - 1），结果带 ↑↓ 异常箭头
+    const rows = [
+      [{ text: '项目名称', x: 19 }, { text: '缩写', x: 326 }, { text: '结果', x: 473 }, { text: '单位', x: 600 }, { text: '参考区间', x: 775 }],
+      [{ text: '★合成项目甲', x: 21 }, { text: 'FTA', x: 326 }, { text: '33.37', x: 473 }, { text: 'pmol/L', x: 620 }, { text: '3.5~7', x: 775 }],
+      [{ text: '★合成项目乙', x: 23 }, { text: 'FTB', x: 326 }, { text: '↑79.55', x: 473 }, { text: 'pmol/L', x: 620 }, { text: '10~22', x: 775 }],
+    ];
+    const raw = rows.flatMap((cells, row) => cells.map(({ text, x }, column) => ({
+      id: `${row}-${column}`, text, confidence: .99, tableUnsafe: true,
+      box: [x, 85 + row * 24 + (row === 1 ? -1 : 0), x + 90, 105 + row * 24],
+    })));
+    const [page] = rebuildOcrPages([{ pageId: 'synthetic', pageNumber: 1, linesJson: JSON.stringify(raw) }]);
+    const first = page.lines.find(line => line.sourceLineIds.includes('1-0'))!;
+    const second = page.lines.find(line => line.sourceLineIds.includes('2-0'))!;
+    assert.equal(first.tableStructureUnsafe, false);
+    assert.equal(second.tableStructureUnsafe, false);
+    assert.equal(first.candidateKind, 'scalar');
+    assert.equal(second.candidateKind, 'scalar');
+    assert.match(mappedOcrMeasurement(first.text, first.tableHeaderText)?.name ?? '', /合成项目甲/);
+    assert.match(mappedOcrMeasurement(second.text, second.tableHeaderText)?.result ?? '', /79\.55/);
+  } finally {
+    closeDatabaseForTests();
+    if (previous === undefined) delete process.env.STORAGE_DIR;
+    else process.env.STORAGE_DIR = previous;
+    rmSync(storage, { recursive: true, force: true });
+  }
+});
+
 test('ambiguous result, crossed columns and repeated headers do not get promoted', () => {
   const raw = fixture();
   const duplicate = [...raw, { ...raw.find(line => line.id === '1-2')!, id: 'duplicate', text: '99' }];

@@ -106,6 +106,73 @@ test("keeps fnOS gateway identity and administrator permissions in fnOS mode", (
   }
 });
 
+test("decodes mojibake gateway account names and heals stored display names", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-fnos-mojibake-"));
+  process.env.STORAGE_DIR = storageDir;
+  process.env.AUTH_MODE = "fnos";
+  try {
+    // Node.js decodes header values as latin1, so the raw UTF-8 bytes written
+    // by the gateway arrive as mojibake; older builds stored it directly.
+    const mangled = Buffer.from("测试用户", "utf8").toString("latin1");
+    const db = getDatabase();
+    db.prepare(`
+      INSERT INTO users (id, display_name, is_gateway_admin) VALUES ('fnos-user-1000', ?, 1)
+    `).run(mangled);
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('member-self', ?, 'self', 'fnos-user-1000')
+    `).run(mangled);
+    db.prepare(`
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
+      VALUES ('member-self', 'fnos-user-1000', 'manager', 'fnos-user-1000')
+    `).run();
+    db.prepare(`
+      INSERT INTO health_members (id, display_name, relationship, created_by)
+      VALUES ('member-family', '自定义成员', 'family', 'fnos-user-1000')
+    `).run();
+
+    const event = {
+      node: {
+        req: {
+          healthAccessMode: "gateway",
+          headers: {
+            "x-trim-userid": "fnos-user-1000",
+            "x-trim-username": mangled,
+            "x-trim-isadmin": "true"
+          }
+        }
+      }
+    } as unknown as H3Event;
+    assert.equal(getRequestUser(event).displayName, "测试用户");
+
+    const storedUser = db.prepare(`
+      SELECT display_name AS displayName FROM users WHERE id = 'fnos-user-1000'
+    `).get() as { displayName: string };
+    assert.equal(storedUser.displayName, "测试用户");
+    const members = db.prepare(`
+      SELECT id, display_name AS displayName FROM health_members ORDER BY id
+    `).all() as Array<{ id: string; displayName: string }>;
+    assert.deepEqual(members.map((member) => ({ ...member })), [
+      { id: "member-family", displayName: "自定义成员" },
+      { id: "member-self", displayName: "测试用户" }
+    ]);
+
+    // A self member renamed away from the account name is left untouched.
+    db.prepare(`UPDATE health_members SET display_name = '本人档案' WHERE id = 'member-self'`).run();
+    db.prepare(`UPDATE users SET display_name = ? WHERE id = 'fnos-user-1000'`).run(mangled);
+    assert.equal(getRequestUser(event).displayName, "测试用户");
+    const renamed = db.prepare(`
+      SELECT display_name AS displayName FROM health_members WHERE id = 'member-self'
+    `).get() as { displayName: string };
+    assert.equal(renamed.displayName, "本人档案");
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    delete process.env.AUTH_MODE;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
 test("bootstraps a Docker local administrator and resolves only its persisted session", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-local-auth-"));
   process.env.STORAGE_DIR = storageDir;

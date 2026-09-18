@@ -4,10 +4,14 @@ import { nextTick, onBeforeUnmount, ref, useId, watch } from "vue";
 const props = withDefaults(defineProps<{ text: string; label?: string }>(), { label: "查看指标提示" });
 const id = useId();
 const open = ref(false);
-const trigger = ref<HTMLButtonElement>();
+const trigger = ref<HTMLElement>();
 const panel = ref<HTMLElement>();
 const position = ref({ left: "0px", top: "0px" });
 function close() { open.value = false; }
+function focusTrigger() {
+  const target = trigger.value?.querySelector("button");
+  (target ?? trigger.value)?.focus();
+}
 function outside(event: PointerEvent) {
   const target = event.target as Node;
   if (!trigger.value?.contains(target) && !panel.value?.contains(target)) close();
@@ -50,12 +54,16 @@ onBeforeUnmount(cleanup);
 
 <template>
   <span v-if="text.trim()" class="indicator-hint" @click.stop @keydown.stop>
-    <button ref="trigger" type="button" class="indicator-hint-toggle" :aria-label="label"
-      :aria-expanded="open" :aria-controls="open ? id : undefined"
-      @click="toggle" @focusout="blur" @keydown.esc="close">!</button>
+    <span ref="trigger" class="indicator-hint-anchor" @focusout="blur" @keydown.esc="close">
+      <slot name="trigger" :toggle="toggle" :open="open" :panel-id="id">
+        <button type="button" class="indicator-hint-toggle" :aria-label="label"
+          :aria-expanded="open" :aria-controls="open ? id : undefined"
+          @click="toggle">!</button>
+      </slot>
+    </span>
     <Teleport to="body">
       <div v-if="open" :id="id" ref="panel" class="indicator-hint-panel" :style="position"
-        role="note" tabindex="0" @focusout="blur" @keydown.esc="trigger?.focus(); close()" @click.stop>
+        role="note" tabindex="0" @focusout="blur" @keydown.esc="focusTrigger(); close()" @click.stop>
         {{ text }}
       </div>
     </Teleport>
@@ -64,6 +72,7 @@ onBeforeUnmount(cleanup);
 
 <style scoped>
 .indicator-hint { display: inline-flex; vertical-align: middle; }
+.indicator-hint .indicator-hint-anchor { display: inline-flex; }
 .indicator-hint .indicator-hint-toggle {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; min-width: 28px; padding: 0; border: 1px solid var(--line);

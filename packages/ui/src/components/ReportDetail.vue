@@ -785,6 +785,13 @@ function observationFlagLabel(item: ReportDetail["observations"][number]) {
   return observationAbnormalDisplay(item).label;
 }
 
+function observationComputedFlagHint(item: ReportDetail["observations"][number]) {
+  const display = observationAbnormalDisplay(item);
+  return display.visible && display.isComputed
+    ? display.explanation || "数值超出参考范围（系统推算）"
+    : "";
+}
+
 function observationFlagClass(item: ReportDetail["observations"][number]) {
   const display = observationAbnormalDisplay(item);
   return {
@@ -2169,7 +2176,7 @@ onActivated(() => {
           <div class="observation-list">
             <article v-for="item in visibleObservations" :key="item.id">
               <div class="observation-title"><strong>{{ item.itemName }}</strong><IndicatorHint v-if="observationAttentionHint(item)" :text="observationAttentionHint(item)" label="查看指标待核对提示" /></div>
-              <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
+              <p>{{ observationValueLine(item) }}<IndicatorHint v-if="observationComputedFlagHint(item)" :text="observationComputedFlagHint(item)" :label="`${item.itemName}的异常标记说明`"><template #trigger="{ toggle, open, panelId }"><button type="button" class="observation-flag" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined" :aria-expanded="open" :aria-controls="open ? panelId : undefined" @click="toggle">{{ observationFlagLabel(item) }}</button></template></IndicatorHint><em v-else-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
               <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
             </article>
           </div>
@@ -2423,7 +2430,7 @@ onActivated(() => {
                 @keydown.space.prevent="openObservationEditor(item)"
               >
               <div class="observation-title"><strong>{{ item.itemName }}</strong><IndicatorHint v-if="observationAttentionHint(item)" :text="observationAttentionHint(item)" label="查看指标待核对提示" /></div>
-                <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
+                <p>{{ observationValueLine(item) }}<IndicatorHint v-if="observationComputedFlagHint(item)" :text="observationComputedFlagHint(item)" :label="`${item.itemName}的异常标记说明`"><template #trigger="{ toggle, open, panelId }"><button type="button" class="observation-flag" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined" :aria-expanded="open" :aria-controls="open ? panelId : undefined" @click="toggle">{{ observationFlagLabel(item) }}</button></template></IndicatorHint><em v-else-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
                 <button class="observation-edit-button" type="button" title="编辑指标" @click.stop="openObservationEditor(item)"><Pencil :size="15" /></button>
                 <button class="observation-edit-button observation-delete-button" type="button" title="删除指标" aria-label="删除指标" @click.stop="removeObservation(item)"><Trash2 :size="15" /></button>
                 <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}<em v-if="item.manualReviewed" class="observation-manual-chip">人工校对</em></span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
@@ -2443,7 +2450,7 @@ onActivated(() => {
                 @keydown.space.prevent="openObservationEditor(item)"
               >
               <div class="observation-title"><strong>{{ item.itemName }}</strong><IndicatorHint v-if="observationAttentionHint(item)" :text="observationAttentionHint(item)" label="查看指标待核对提示" /></div>
-                <p>{{ observationValueLine(item) }}<em v-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
+                <p>{{ observationValueLine(item) }}<IndicatorHint v-if="observationComputedFlagHint(item)" :text="observationComputedFlagHint(item)" :label="`${item.itemName}的异常标记说明`"><template #trigger="{ toggle, open, panelId }"><button type="button" class="observation-flag" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined" :aria-expanded="open" :aria-controls="open ? panelId : undefined" @click="toggle">{{ observationFlagLabel(item) }}</button></template></IndicatorHint><em v-else-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
                 <button class="observation-edit-button" type="button" title="编辑指标" @click.stop="openObservationEditor(item)"><Pencil :size="15" /></button>
                 <button class="observation-edit-button observation-delete-button" type="button" title="删除指标" aria-label="删除指标" @click.stop="removeObservation(item)"><Trash2 :size="15" /></button>
                 <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}<em v-if="item.manualReviewed" class="observation-manual-chip">人工校对</em></span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>

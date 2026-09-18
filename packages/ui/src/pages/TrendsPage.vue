@@ -465,6 +465,13 @@ function pointFlagLabel(point: TrendPoint) {
   return pointAbnormalDisplay(point).label;
 }
 
+function pointComputedFlagHint(point: TrendPoint) {
+  const display = pointAbnormalDisplay(point);
+  return display.visible && display.isComputed
+    ? display.explanation || "数值超出参考范围（系统推算）"
+    : "";
+}
+
 function pointFlagVisible(point: TrendPoint) {
   return pointAbnormalDisplay(point).visible;
 }
@@ -1076,7 +1083,7 @@ onDeactivated(() => {
           <div class="trend-points">
             <article v-for="point in recentPoints(item)" :key="`${item.name}-${point.reportId}-${point.observationId}`">
               <div>
-                <strong>{{ pointValue(item, point) }}<em v-if="pointFlagVisible(point)" class="trend-flag" :class="pointFlagClass(point)" :title="point.abnormalReason || undefined">{{ pointFlagLabel(point) }}</em></strong>
+                <strong>{{ pointValue(item, point) }}<IndicatorHint v-if="pointComputedFlagHint(point)" :text="pointComputedFlagHint(point)" :label="`${item.name}的异常标记说明`"><template #trigger="{ toggle, open, panelId }"><button type="button" class="trend-flag" :class="pointFlagClass(point)" :title="point.abnormalReason || undefined" :aria-expanded="open" :aria-controls="open ? panelId : undefined" @click="toggle">{{ pointFlagLabel(point) }}</button></template></IndicatorHint><em v-else-if="pointFlagVisible(point)" class="trend-flag" :class="pointFlagClass(point)" :title="point.abnormalReason || undefined">{{ pointFlagLabel(point) }}</em></strong>
                 <span>{{ formatDate(point.reportIssuedAt) }} · {{ point.hospitalName || "医院待整理" }}</span>
                 <small v-if="hasReferenceInfo(point)">{{ referenceSummary(point, item.unit) }}</small>
                 <small v-if="pointInterpretationLine(point)" class="trend-point-interpretation">{{ pointInterpretationLine(point) }}</small>

@@ -17,9 +17,21 @@ const raw = {
 
 test('shared admission requires verified raw numbers and never bypasses exclusions or identity conflicts', () => {
   assert.equal(assessTrendAdmission(raw).kind, 'institution');
+  // 纯指标型报告缺机构不阻断趋势（进入“机构未确认”分组）；数值+内联单位/箭头视为明确单值
+  assert.equal(assessTrendAdmission({ ...raw, hospitalName: '' }).kind, 'institution');
+  assert.equal(assessTrendAdmission({ ...raw, resultText: '2 (U/L)' }).kind, 'institution');
+  assert.equal(assessTrendAdmission({ ...raw, resultText: '2（U/L）↑' }).kind, 'institution');
+  // 矫正后的规范单位（fL）可回指原文中的 OCR 形近误读（f1），但无单位证据仍拒绝
+  assert.equal(assessTrendAdmission({ ...raw, numericValue: 82, resultText: '82', unit: 'fL',
+    evidenceJson: JSON.stringify([{ pageNumber: 1, quote: '合成测定项目甲 82 f1' }]) }).kind, 'institution');
+  assert.equal(assessTrendAdmission({ ...raw, numericValue: 82, resultText: '82', unit: 'fL',
+    evidenceJson: JSON.stringify([{ pageNumber: 1, quote: '合成测定项目甲 82' }]) }).eligible, false);
+  // 锚定变体从别名表反向生成：其他形近误读（mL→m1）同样可回指
+  assert.equal(assessTrendAdmission({ ...raw, numericValue: 92, resultText: '92', unit: 'mL',
+    evidenceJson: JSON.stringify([{ pageNumber: 1, quote: '合成测定项目甲 92 m1' }]) }).kind, 'institution');
   for (const invalid of [
-    { evidenceJson: '[]' }, { evidenceJson: '{}' }, { unit: '' }, { hospitalName: '' }, { reportIssuedAt: '' },
-    { resultText: '<2' }, { numericValue: 3 }, { normalizationQuality: 'excluded' },
+    { evidenceJson: '[]' }, { evidenceJson: '{}' }, { unit: '' }, { reportIssuedAt: '' },
+    { resultText: '<2' }, { resultText: '2-3' }, { numericValue: 3 }, { normalizationQuality: 'excluded' },
     { evidenceJson: JSON.stringify([{ pageNumber: 1, quote: '合成测定项目甲 <2 U/L' }]) },
     { canonicalKey: 'conflicted' }, { normalizationMatchedBy: 'ambiguous' },
     { evidenceJson: JSON.stringify([{ quote: '其他项目 2 U/L' }]) },
@@ -68,6 +80,13 @@ test('raw trend channel shares detail admission, isolates contexts, and responds
     const unknown = series().find(s => s.points.some(p => p.reportId === 'unknown'))!;
     assert.equal(unknown.comparable, false);
     assert.equal(unknown.changeAssessmentAllowed, false);
+    // 纯指标型报告（无机构）进入独立的“机构未确认”分组，不再被挡在趋势外
+    insert('nohosp', '');
+    assert.equal(series().length, 7, JSON.stringify(series().map(s => ({ unit: s.unit, points: s.points.map(p => p.reportId) }))));
+    const nohosp = series().find(s => s.points.some(p => p.reportId === 'nohosp'))!;
+    assert.equal(nohosp.kind, 'institution');
+    assert.equal(nohosp.pointCount, 1);
+    assert.equal(nohosp.indicatorKey === series().find(s => s.points.some(p => p.reportId === 'a'))!.indicatorKey, false, '机构未确认与已知机构分组隔离');
     insert('manual', '合成机构', 'U/L', '合成方法', '血清', '{}');
     const pendingIssue = listIndicatorNormalizationIssues(user).find(item => item.unit === 'U/L')!;
     assert.equal(pendingIssue.trendEligible, false, 'a mixed group remains pending until every record is usable');

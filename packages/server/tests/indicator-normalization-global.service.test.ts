@@ -747,7 +747,13 @@ test("tolerates OCR noise in scientific-notation and lookalike units", () => {
       ('unit-obs-neut', 'unit-report', '血常规', '中性粒细胞计数', '中性粒细胞计数', '7.19',
         7.19, '×10°9/L', '[{"pageNumber":1,"quote":"中性粒细胞计数 7.19 ×10°9/L"}]'),
       ('unit-obs-cr', 'unit-report', '肾功能', '肌酐', '肌酐', '78.5',
-        78.5, 'umo1/L', '[{"pageNumber":1,"quote":"肌酐 78.5 umo1/L"}]');
+        78.5, 'umo1/L', '[{"pageNumber":1,"quote":"肌酐 78.5 umo1/L"}]'),
+      ('unit-obs-tg', 'unit-report', '血脂', '甘油三酯', '甘油三酯', '1.89',
+        1.89, 'mmolL', '[{"pageNumber":1,"quote":"甘油三酯 1.89 mmolL"}]'),
+      ('unit-obs-mcv', 'unit-report', '血常规', '平均红细胞体积', '平均红细胞体积', '82',
+        82, 'f1', '[{"pageNumber":1,"quote":"平均红细胞体积 82 f1"}]'),
+      ('unit-obs-mch', 'unit-report', '血常规', '平均红细胞血红蛋白量', '平均红细胞血红蛋白量', '29.5',
+        29.5, 'p9', '[{"pageNumber":1,"quote":"平均红细胞血红蛋白量 29.5 p9"}]');
     `);
 
     normalizeReportObservations("unit-report");
@@ -769,6 +775,18 @@ test("tolerates OCR noise in scientific-notation and lookalike units", () => {
     assert.equal(byId.get("unit-obs-cr")?.canonicalKey, "renal_creatinine");
     assert.equal(byId.get("unit-obs-cr")?.quality, "high");
     assert.equal(byId.get("unit-obs-cr")?.canonicalUnit, "μmol/L");
+    /* mmolL 是 mmol/L 丢斜杠的 OCR 噪声形态 */
+    assert.equal(byId.get("unit-obs-tg")?.canonicalKey, "lipid_tg");
+    assert.equal(byId.get("unit-obs-tg")?.quality, "high");
+    assert.equal(byId.get("unit-obs-tg")?.canonicalUnit, "mmol/L");
+    /* f1 是 fL 的形近误读（数字 1 代替字母 l） */
+    assert.equal(byId.get("unit-obs-mcv")?.canonicalKey, "cbc_mcv");
+    assert.equal(byId.get("unit-obs-mcv")?.quality, "high");
+    assert.equal(byId.get("unit-obs-mcv")?.canonicalUnit, "fL");
+    /* p9 是 pg 的形近误读（数字 9 代替字母 g） */
+    assert.equal(byId.get("unit-obs-mch")?.canonicalKey, "cbc_mch");
+    assert.equal(byId.get("unit-obs-mch")?.quality, "high");
+    assert.equal(byId.get("unit-obs-mch")?.canonicalUnit, "pg");
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;

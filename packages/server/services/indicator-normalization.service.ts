@@ -454,7 +454,14 @@ function normalizeUnit(value: string | null | undefined) {
     .replace(/^(×)10([1-9]\d?)(?=\/)/, "$110^$2")
     .replace(/^10([1-9]\d?)(?=\/[lμ])/i, "10^$1");
   const lower = unit.toLocaleLowerCase();
-  const aliases: Record<string, string> = {
+  return unitAliases[lower] || unit || null;
+}
+
+/*
+ * 单位别名表（模块级）：normalizeUnit 归一化与证据锚定的反向查找共用。
+ * 键为预处理（去空白、全角转半角、μ 归一）并小写后的形态，值为规范写法。
+ */
+const unitAliases: Record<string, string> = {
     "mmol/l": "mmol/L",
     "μmol/l": "μmol/L",
     "umol/l": "μmol/L",
@@ -462,6 +469,17 @@ function normalizeUnit(value: string | null | undefined) {
     "umo1/l": "μmol/L",
     "μmo1/l": "μmol/L",
     "mmo1/l": "mmol/L",
+    /* OCR 丢斜杠：mmolL→mmol/L 等（U/L、μL 折叠后歧义，不收） */
+    "mmoll": "mmol/L",
+    "umoll": "μmol/L",
+    "μmoll": "μmol/L",
+    "nmoll": "nmol/L",
+    "pmoll": "pmol/L",
+    "mgdl": "mg/dL",
+    "mgl": "mg/L",
+    "ngml": "ng/mL",
+    "μgl": "μg/L",
+    "ugl": "μg/L",
     "mg/dl": "mg/dL",
     "mg/l": "mg/L",
     "g/l": "g/L",
@@ -496,6 +514,8 @@ function normalizeUnit(value: string | null | undefined) {
     "次/分钟": "次/分",
     "次/分": "次/分",
     "fl": "fL",
+    /* OCR 形近误读：f1（数字 1 代替字母 l） */
+    "f1": "fL",
     "pg": "pg",
     "l": "L",
     "ml": "mL",
@@ -545,10 +565,47 @@ function normalizeUnit(value: string | null | undefined) {
     "×10^12/l": "10^12/L",
     "10^3/μl": "10^3/μL",
     "10^6/μl": "10^6/μL",
+    /* OCR 形近误读：数字 1 代替字母 l/I（f1→fL、m1→mL、mg/d1→mg/dL、1U/L→IU/L 等）。
+       独立 "u1" 不收——U/L 丢斜杠与 μL 误读无法区分。 */
+    "m1": "mL",
+    "g/1": "g/L",
+    "mg/1": "mg/L",
+    "ug/1": "μg/L",
+    "μg/1": "μg/L",
+    "g/d1": "g/dL",
+    "mg/d1": "mg/dL",
+    "ng/d1": "ng/dL",
+    "μg/d1": "μg/dL",
+    "ng/m1": "ng/mL",
+    "pg/m1": "pg/mL",
+    "mmol/1": "mmol/L",
+    "umol/1": "μmol/L",
+    "μmol/1": "μmol/L",
+    "nmol/1": "nmol/L",
+    "pmol/1": "pmol/L",
+    "meq/1": "mEq/L",
+    "u/1": "U/L",
+    "l/1": "L/L",
+    "1u/l": "IU/L",
+    "lu/l": "IU/L",
+    "m1u/l": "mIU/L",
+    "uiu/m1": "μIU/mL",
+    "μiu/m1": "μIU/mL",
+    "10^9/1": "10^9/L",
+    "10^12/1": "10^12/L",
+    "×10^9/1": "×10^9/L",
+    "×10^12/1": "×10^12/L",
+    "10^3/u1": "10^3/μL",
+    "10^6/u1": "10^6/μL",
+    "/u1": "/μL",
+    "个/u1": "个/μL",
+    "cells/u1": "cells/μL",
+    /* OCR 形近误读：数字 9 代替字母 g（p9→pg、mmH9→mmHg） */
+    "p9": "pg",
+    "p9/ml": "pg/mL",
+    "mmh9": "mmHg",
     "%": "%"
   };
-  return aliases[lower] || unit || null;
-}
 
 function parseNumericResultText(value: string | null | undefined) {
   if (!value) return null;
@@ -793,8 +850,14 @@ function observationEvidenceQualityIssue(row: ObservationRow) {
     // A printed multiplication sign before a power-of-ten unit is notation, not a unit prefix.
     const compactUnit = (text: string | null) => compactObservationEvidence(text)
       .replace(/(?<![a-z])x(?=10\^\d+\/)/gi, '');
-    const unitCandidates = [...new Set([rawUnit, normalizeUnit(rawUnit)].filter(Boolean))]
-      .map(compactUnit);
+    /* 矫正后的规范单位需容忍原文中的 OCR 变体（fL 被识别为 f1 等），
+       否则矫正越成功、单位越无法回指证据。变体从单位别名表反向生成，新增别名自动生效。 */
+    const normalizedRawUnit = normalizeUnit(rawUnit);
+    const unitCandidates = [...new Set(
+      [rawUnit, normalizedRawUnit]
+        .filter(Boolean)
+        .concat(Object.keys(unitAliases).filter(variant => unitAliases[variant] === normalizedRawUnit)),
+    )].map(compactUnit);
     const containsUnit = (quote: string) => unitCandidates.some(unit => {
       const escaped = unit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       // A smaller unit token must not match inside another prefix or compound unit (g/L in mg/L).
@@ -847,10 +910,15 @@ export function assessTrendAdmission(input: {
   if (standard) return { eligible: true, kind: 'standard', reason: null } as const;
   const noise = functionalDeviceObservationExclusionReason(row) || observationNoiseExclusionReason(row);
   if (noise) return deny(noise);
-  if (!input.hospitalName?.trim()) return deny('未标准化结果需先确认报告机构');
+  // 纯指标型报告可能整单没有机构名称：缺失时不阻断趋势，进入“机构未确认”隔离分组；
+  // 后续补充机构后趋势键变化，该报告的点自动归入对应机构分组。
   if (!Number.isFinite(Date.parse(input.reportIssuedAt || ''))) return deny('请先确认报告日期');
   if (!input.unit?.trim()) return deny('未标准化结果需先确认单位');
-  if (!/^[-+]?\d+(?:\.\d+)?$/.test(input.resultText.trim()) || Number(input.resultText) !== value) return deny('结果不是明确数值或与结果文本不一致');
+  // 机构内数值必须是明确的单值结果：允许“5.30 (mmol/L)↑”这类数值+内联单位/箭头写法
+  //（提取管线的常见输出），拒绝“<2”“5.3-6.1”等限值或区间表达；数值与文本一致性已在上方校验。
+  if (textValue === null || !/^[+-]?\d+(?:\.\d+)?\s*(?:[(（][^)）]*[)）]\s*)?[↑↓▲▼⬆⬇]?$/.test(input.resultText.trim())) {
+    return deny('结果不是明确数值或与结果文本不一致');
+  }
   // Unknown names cannot borrow the standard-name evidence fallback (which tolerates AI synonyms).
   if (!input.manualReviewed && !observationEvidenceQuotes(row).some(quote => compactObservationEvidence(quote).includes(compactObservationEvidence(input.itemName)))) {
     return deny('未标准化项目名称无法回指 OCR 证据');

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { mappedOcrMeasurement, mappedOcrUnit, mappedOcrResultCells, splitOcrTableCells } from "./ocr-table-columns";
+import { unitFromResultCell } from "./measurement-units.service";
 import { cleanOcrResult } from "../utils/ocr-result";
 import { getDatabase } from "../database/client";
 import { createId } from "../utils/identifier";
@@ -890,7 +891,7 @@ function exactEvidenceForObservation(
       return page.lines
         .filter(
           (line) =>
-            !line.tableStructureUnsafe && line.candidateKind === "scalar" && unit.text.includes(line.text),
+            line.candidateKind === "scalar" && unit.text.includes(line.text),
         )
         .flatMap((line) => {
           const name = observationNameMatches(line, item);
@@ -902,6 +903,12 @@ function exactEvidenceForObservation(
           const quoteMatched =
             normalizedEvidenceText(evidence.quote).length >= 4 &&
             fuzzyEvidenceContains(line.text, evidence.quote);
+          /*
+           * 表格结构不可信的行按更严格口径放行：名称、结果命中之外，AI 引文还必须
+           * 逐字锚定到该行文本本身。名称+结果+引文行内自洽时，列错位风险已被文本
+           * 校验覆盖；引文锚不上时保持拒绝。可信行的引文仍只作加分项。
+           */
+          if (line.tableStructureUnsafe && !quoteMatched) return [];
           const unitMatched = observationUnitMatches(line.text, item.unit);
           const score = 2 + (quoteMatched ? 2 : 0) + (unitMatched ? 0.5 : 0);
           return [{ pageNumber: page.pageNumber, quote: line.text, score }];
@@ -1003,10 +1010,9 @@ function correctedTableResult(
   if (!numeric) return item;
   const parsed = Number(numeric[0]);
   if (!Number.isFinite(parsed)) return item;
-  const explicitUnit =
-    resultCell.match(
-      /(?:10\^?\d+\/L|mmol\/L|μmol\/L|nmol\/L|pmol\/L|mg\/dL|mg\/L|ng\/mL|μg\/L|g\/L|L\/L|U\/L|IU\/L|Cell\/HP|Cast\/LP|\/HPF|\/LPF|cm\/s|mmHg|bpm|次\s*\/\s*分|kg\s*\/\s*m(?:2|²|㎡)|kg|cm|mm|mV|ms|Angle|pg|fL|%)/i,
-    )?.[0] || null;
+  /* 单位识别统一走共享的字典感知模式（长单位优先），避免本地硬编码清单
+     滞后导致 umol/L 被部分匹配成 l/L。 */
+  const explicitUnit = unitFromResultCell(resultCell);
   return {
     ...item,
     resultText: resultCell,
@@ -3480,10 +3486,16 @@ export async function executeAiExtractionPlan(
   /*
    * 概览模式：主单元与确定性兜底保持现状，但不做补充复核（supplement），
    * 未覆盖的候选行按现有 warning 逻辑留在单元审计中。
+   * 例外：主解析颗粒无收（存在候选但零指标零形态产出）属于异常状态，
+   * 可能是模型偶发空响应或证据校验误伤，仍触发一次候选补提取兜底。
    */
-  const supplements = plan.extractionDepth === "overview"
-    ? []
-    : supplementUnits(plan, merged);
+  const overviewTotalWipe =
+    merged.fields.observations.length === 0 &&
+    merged.fields.morphologyFindings.length === 0;
+  const supplements =
+    plan.extractionDepth === "overview" && !overviewTotalWipe
+      ? []
+      : supplementUnits(plan, merged);
   let effectivePlan = plan;
   if (supplements.length) {
     const units = [...plan.units, ...supplements];

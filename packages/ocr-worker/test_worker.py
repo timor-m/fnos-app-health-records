@@ -64,6 +64,37 @@ class TableRetryTest(unittest.TestCase):
             ["openvino"],
         )
 
+    def test_onnx_threads_keep_onnxruntime_default_off_arm(self):
+        from unittest.mock import patch
+
+        with patch("platform.machine", return_value="x86_64"):
+            self.assertEqual(worker.onnx_engine_kwargs(), {})
+
+    def test_onnx_threads_leave_one_core_for_the_system_on_arm(self):
+        from unittest.mock import patch
+
+        with patch("platform.machine", return_value="aarch64"), patch("os.cpu_count", return_value=4):
+            self.assertEqual(
+                worker.onnx_engine_kwargs(),
+                {"intra_op_num_threads": 3, "inter_op_num_threads": 1},
+            )
+        with patch("platform.machine", return_value="aarch64"), patch("os.cpu_count", return_value=1):
+            self.assertEqual(worker.onnx_engine_kwargs()["intra_op_num_threads"], 1)
+        with patch("platform.machine", return_value="aarch64"), patch("os.cpu_count", return_value=16):
+            self.assertEqual(worker.onnx_engine_kwargs()["intra_op_num_threads"], 4)
+
+    def test_onnx_threads_environment_override_wins_everywhere(self):
+        import os
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {"OCR_WORKER_ONNX_INTRA_OP_THREADS": "2", "OCR_WORKER_ONNX_INTER_OP_THREADS": "2"}):
+            self.assertEqual(
+                worker.onnx_engine_kwargs(),
+                {"intra_op_num_threads": 2, "inter_op_num_threads": 2},
+            )
+        with patch.dict(os.environ, {"OCR_WORKER_ONNX_INTRA_OP_THREADS": "0"}):
+            self.assertEqual(worker.onnx_engine_kwargs(), {})
+
     def test_detects_missing_and_corrupted_double_column_results(self):
         lines = [
             ocr_line("白细胞数(WBC)", 0.97, 80, 60, 260, 90),
@@ -109,6 +140,40 @@ class TableRetryTest(unittest.TestCase):
             worker.retry_result_score(complete, reference),
             worker.retry_result_score(truncated, reference),
         )
+
+    def test_detects_suspicious_rows_in_parenthesized_wide_layout(self):
+        # 括号包裹参考值 + 名称列与参考值列分处两端的宽版式检验单
+        lines = [
+            ocr_line("★甘油三酯", 0.95, 12, 859, 77, 879),
+            ocr_line("1.89(mmolL)↑", 0.83, 352, 859, 454, 879),
+            ocr_line("(0.3-1.71)", 0.99, 1099, 860, 1160, 880),
+            ocr_line("★白蛋白", 0.97, 12, 900, 77, 920),
+            ocr_line("48.3 (g/L)", 0.96, 352, 900, 460, 920),
+            ocr_line("(35-50)", 0.99, 1099, 900, 1160, 920),
+        ]
+
+        rows = worker.suspicious_table_rows(lines, 1170, 1120)
+
+        self.assertEqual([row["name"]["text"] for row in rows], ["★甘油三酯"])
+        self.assertTrue(rows[0]["resultSuspicious"])
+        self.assertEqual(rows[0]["result"]["text"], "1.89(mmolL)↑")
+
+    def test_restores_inline_unit_from_retry_lines(self):
+        retry_lines = [ocr_line("mmol/L", 0.84, 360, 859, 450, 879, "table_upscale")]
+
+        restored = worker.restore_inline_unit("1.89(mmolL)↑", "1.89↑", retry_lines)
+
+        self.assertEqual(restored, "1.89(mmol/L)↑")
+
+    def test_restores_inline_unit_falls_back_to_original_unit(self):
+        restored = worker.restore_inline_unit("1.89(mmolL)↑", "1.89↑", [])
+
+        self.assertEqual(restored, "1.89(mmolL)↑")
+
+    def test_restore_inline_unit_keeps_text_without_unit(self):
+        restored = worker.restore_inline_unit("1.89↑", "1.90↑", [])
+
+        self.assertEqual(restored, "1.90↑")
 
 
 if __name__ == "__main__":

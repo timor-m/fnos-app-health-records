@@ -159,6 +159,50 @@ test('paired project groups accept their own AI results and reject cross-group s
   });
 });
 
+test('overview mode backfills candidates when the main pass returns nothing', async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    getDatabase().prepare("UPDATE app_settings SET value_json = '{\"extractionDepth\":\"overview\"}' WHERE setting_key = 'ai.provider'").run();
+    let calls = 0;
+    const executor: AiExecutor = async (input) => {
+      calls += 1;
+      const supplement = input.text.includes("遗漏候选补提取");
+      return {
+        provider: 'test', model: 'test', promptVersion: 'test',
+        ...normalizeAiExtraction(supplement ? {
+          observations: [{ itemName: '神经元特异性烯醇化酶', resultText: '12.5', numericValue: 12.5, unit: 'ng/mL', evidence: [{ pageNumber: 1, quote: '神经元特异性烯醇化酶 12.5 ng/mL 参考范围 0-16.3' }] }],
+        } : {}),
+        rawResponseJson: '{}', promptTokens: 1, completionTokens: 1, elapsedMs: 1,
+      };
+    };
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    assert.equal(calls, 2);
+    assert.equal(execution.plan.units.some((unit) => unit.unitType === 'supplement'), true);
+    assert.equal(execution.result.fields.observations.length, 1);
+    assert.equal(execution.result.fields.observations[0]?.itemName, '神经元特异性烯醇化酶');
+  }, () => ['肿瘤标志物检测', '神经元特异性烯醇化酶 12.5 ng/mL 参考范围 0-16.3', `备注 ${'内容'.repeat(200)}`]);
+});
+
+test('overview mode skips supplements when the main pass extracted observations', async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    getDatabase().prepare("UPDATE app_settings SET value_json = '{\"extractionDepth\":\"overview\"}' WHERE setting_key = 'ai.provider'").run();
+    let calls = 0;
+    const executor: AiExecutor = async (input) => {
+      calls += 1;
+      return {
+        provider: 'test', model: 'test', promptVersion: 'test',
+        ...normalizeAiExtraction({
+          observations: [{ itemName: '神经元特异性烯醇化酶', resultText: '12.5', numericValue: 12.5, unit: 'ng/mL', evidence: [{ pageNumber: 1, quote: '神经元特异性烯醇化酶 12.5 ng/mL 参考范围 0-16.3' }] }],
+        }),
+        rawResponseJson: '{}', promptTokens: 1, completionTokens: 1, elapsedMs: 1,
+      };
+    };
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    assert.equal(calls, 1);
+    assert.equal(execution.plan.units.some((unit) => unit.unitType === 'supplement'), false);
+    assert.equal(execution.result.fields.observations.length, 1);
+  }, () => ['肿瘤标志物检测', '神经元特异性烯醇化酶 12.5 ng/mL 参考范围 0-16.3', `备注 ${'内容'.repeat(200)}`]);
+});
+
 test('recovered header rows pass evidence validation but reference substitutions do not', async () => {
   await withReport(1, async ({ reportId, jobId }) => {
     const raw = [
@@ -182,6 +226,73 @@ test('recovered header rows pass evidence validation but reference substitutions
     assert.equal(execution.result.fields.observations.length, 20);
     assert.ok((execution.result.evidenceValidation?.rejectedObservations || 0) >= 1);
     assert.equal(execution.result.fields.observations.some(item => item.numericValue === 99), false);
+  });
+});
+
+test('unsafe table rows accept AI evidence only when the quote anchors to the line', async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    // 表格结构识别 partial 且无坐标可恢复：行保持 tableUnsafe。
+    // 引文逐字锚定到该行的放行；名称结果命中但引文锚不上的仍拒绝。
+    const rows = [
+      '检测指标 | 结果 | 参考值',
+      '★谷丙转氨酶 | 98(U/L)↑ | (0-40)',
+      '总胆红素 | 13.3 (umol/L) | (3.4-20.5)',
+      '★谷草转氨酶 | 53.3(U/L）↑ | (0-40)',
+    ];
+    const raw = rows.map((text, index) => ({
+      id: `line-${index + 1}`, text, confidence: .99, tableUnsafe: true,
+    }));
+    getDatabase().prepare('UPDATE ocr_results SET lines_json = ?').run(JSON.stringify(raw));
+    const executor: AiExecutor = async (input) => ({
+      provider: 'test', model: 'test', promptVersion: 'test',
+      ...normalizeAiExtraction(input.promptMode === 'supplement' ? {} : { observations: [
+        { itemName: '谷丙转氨酶', resultText: '98', numericValue: 98, unit: 'U/L',
+          evidence: [{ pageNumber: 1, quote: '★谷丙转氨酶 | 98(U/L)↑ | (0-40)' }] },
+        { itemName: '总胆红素', resultText: '13.3', numericValue: 13.3, unit: 'umol/L',
+          evidence: [{ pageNumber: 1, quote: '总胆红素 | 13.3 (umol/L) | (3.4-20.5)' }] },
+        { itemName: '谷草转氨酶', resultText: '53.3', numericValue: 53.3, unit: 'U/L',
+          evidence: [{ pageNumber: 1, quote: '★总蛋白 | 76.4(g/L) | (60-83)' }] },
+      ] }),
+      rawResponseJson: '{}', promptTokens: 1, completionTokens: 1, elapsedMs: 1,
+    });
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    const names = execution.result.fields.observations.map((item) => item.itemName);
+    assert.ok(names.some((name) => name.includes('谷丙转氨酶')));
+    assert.ok(names.some((name) => name.includes('总胆红素')));
+    assert.ok(!names.some((name) => name.includes('谷草转氨酶')));
+    assert.equal(execution.result.evidenceValidation?.rejectedObservations, 1);
+  });
+});
+
+test('result cell units keep the full text instead of partial hardcoded matches', async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    // 回归：硬编码单位清单缺少 umol/L，L/L 在 (umol/L) 内提前匹配导致落库为 l/L；
+    // mmolL 是 OCR 丢斜杠形态，应矫正为 mmol/L。
+    const rows = [
+      '检测指标 | 结果 | 参考值',
+      '★肌酐 | 82(umol/L) | (30-97)',
+      '★尿酸 | 443(umol/L)↑ | (200-420)',
+      '★甘油三酯 | 1.89(mmolL)↑ | (0.3-1.71)',
+    ];
+    const raw = rows.map((text, index) => ({
+      id: `line-${index + 1}`, text, confidence: .99, tableUnsafe: true,
+    }));
+    getDatabase().prepare('UPDATE ocr_results SET lines_json = ?').run(JSON.stringify(raw));
+    const executor: AiExecutor = async (input) => ({
+      provider: 'test', model: 'test', promptVersion: 'test',
+      ...normalizeAiExtraction(input.promptMode === 'supplement' ? {} : { observations: [
+        { itemName: '肌酐', resultText: '82', numericValue: 82, unit: 'umol/L',
+          evidence: [{ pageNumber: 1, quote: '★肌酐 | 82(umol/L) | (30-97)' }] },
+        { itemName: '尿酸', resultText: '443', numericValue: 443, unit: 'umol/L',
+          evidence: [{ pageNumber: 1, quote: '★尿酸 | 443(umol/L)↑ | (200-420)' }] },
+        { itemName: '甘油三酯', resultText: '1.89', numericValue: 1.89, unit: 'mm',
+          evidence: [{ pageNumber: 1, quote: '★甘油三酯 | 1.89(mmolL)↑ | (0.3-1.71)' }] },
+      ] }),
+      rawResponseJson: '{}', promptTokens: 1, completionTokens: 1, elapsedMs: 1,
+    });
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    const units = execution.result.fields.observations.map((item) => item.unit);
+    assert.deepEqual(units, ['umol/L', 'umol/L', 'mmol/L']);
   });
 });
 

@@ -5338,12 +5338,12 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       trendUnit: usesCanonical ? row.canonicalUnit : row.unit?.trim() || null,
       trendKey: usesCanonical
         ? row.canonicalKey!
-        : `institution:${createHash('sha256').update(JSON.stringify([row.memberId, row.hospitalName?.trim(), row.itemName.normalize('NFKC').trim(), row.sectionName?.trim() || '', row.unit?.trim(), rawMethod, rawSpecimen])).digest('hex')}`,
+        : `institution:${createHash('sha256').update(JSON.stringify([row.memberId, row.hospitalName?.trim() || '', row.itemName.normalize('NFKC').trim(), row.sectionName?.trim() || '', row.unit?.trim(), rawMethod, rawSpecimen])).digest('hex')}`,
       trendQuality: usesCanonical ? row.normalizationQuality! : "raw",
       trendConfidence: usesCanonical ? row.normalizationConfidence : null,
       trendReason: usesCanonical
         ? row.normalizationReason
-        : `机构内原始数值，未匹配标准字典；${row.hospitalName || ''} · ${rawMethod || '方法未注明'} · ${rawSpecimen || '标本未注明'}`,
+        : `机构内原始数值，未匹配标准字典；${row.hospitalName || '机构未确认'} · ${rawMethod || '方法未注明'} · ${rawSpecimen || '标本未注明'}`,
       trendCategory: usesCanonical
         ? row.normalizationCategory || row.catalogCategory
         : null,

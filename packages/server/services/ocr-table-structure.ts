@@ -32,7 +32,7 @@ export function recoverHeaderAlignedTable<T extends { id?: unknown; text?: unkno
   const edges = [-Infinity, ...headers.slice(1).map(h => h.box.left - h.box.height), Infinity];
   if (edges.some((edge, i) => i > 0 && edge <= edges[i - 1])) return lines;
   const column = (item: typeof anchor) => edges.findIndex((edge, i) => item.box.x >= edge && item.box.x < edges[i + 1]);
-  const body = items.filter(item => item.box.top > anchor.box.bottom
+  const body = items.filter(item => item.box.bottom > anchor.box.bottom && item.box.top > anchor.box.top
     && (item.line.tableUnsafe || validOcrTableCell(item.line.tableCell)));
   const rowNames = body.filter(item => column(item) === nameCol && /[\p{L}]/u.test(item.text)
     && !/[：:；;。]/.test(item.text)).sort((a, b) => a.box.y - b.box.y);
@@ -44,9 +44,10 @@ export function recoverHeaderAlignedTable<T extends { id?: unknown; text?: unkno
     const results = sameRow.filter(item => column(item) === resultCols[0] && !/^[↑↓↗↘*★☆]+$/.test(item.text));
     const units = sameRow.filter(item => column(item) === unitCols[0]);
     // A missing or conflicting result remains unsafe; reference numbers never substitute.
+    // 结果单元格常带异常箭头前缀（如“↑79.55”），属于有效数值结果。
     if (sameRow.filter(item => column(item) === nameCol && /[\p{L}]/u.test(item.text)).length !== 1
       || results.length !== 1 || units.length > 1
-      || !/^(?:[<>≤≥]?\s*[-+]?\d+(?:\s*\.\s*\d+)?|[-+]{1,3}|阴性|阳性)$/.test(results[0].text)) return;
+      || !/^(?:[↑↓▲▼⬆⬇↗↘]?\s*[<>≤≥]?\s*[-+]?\d+(?:\s*\.\s*\d+)?|[-+]{1,3}|阴性|阳性)$/.test(results[0].text)) return;
     // Name/result must not extend into the neighbouring core column. A wide unit
     // may include reference text; retain it verbatim for downstream unit checking.
     if ([name, ...results].some(item => {

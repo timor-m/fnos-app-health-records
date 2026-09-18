@@ -9,6 +9,7 @@ import { useAppContext } from "../../composables/useAppContext";
 type OcrStatus = {
   available: boolean;
   tableEnhancementAvailable?: boolean;
+  tableEnhancement?: { available: boolean; tableModel: boolean; layoutModel: boolean };
   installing: boolean;
   runtime?: {
     createdAt?: string;
@@ -97,14 +98,14 @@ const databaseSummaryRows = computed(() => [
 ]);
 const ocrRuntimeRows = computed(() => {
   const runtime = ocr.value?.runtime;
+  const enhancement = ocr.value?.tableEnhancement;
+  const moduleText = (ready?: boolean) => ready ? "已安装" : "未安装";
   const rows = [
-    { label: "Python", value: runtime?.pythonVersion || "—" },
-    { label: "识别后端", value: runtime?.engine || runtime?.backend || (ocr.value?.available ? "已安装" : "—") },
+    { label: "识别引擎", value: runtime?.engine || runtime?.backend || (ocr.value?.available ? "已安装" : "—") },
     { label: "识别模型", value: runtime?.modelVersion || "—" },
-    { label: "RapidOCR", value: runtime?.rapidocrVersion && runtime.rapidocrVersion !== "unknown" ? runtime.rapidocrVersion : "已安装" },
-    { label: "PyMuPDF", value: runtime?.pymupdfVersion || "—" },
-    { label: "Pillow", value: runtime?.pillowVersion || "—" },
-    { label: "HEIF", value: runtime?.pillowHeifVersion || "—" },
+    { label: "表格识别（RapidTable）", value: enhancement ? moduleText(enhancement.tableModel) : "—" },
+    { label: "版面分析（RapidLayout）", value: enhancement ? moduleText(enhancement.layoutModel) : "—" },
+    { label: "Python", value: runtime?.pythonVersion || "—" },
     { label: "平台", value: runtime?.machine ? `${runtime.platform || "—"} · ${runtime.machine}` : runtime?.platform || "—" }
   ];
   return rows.filter((row) => row.value !== "—" || !ocr.value?.available);
@@ -293,7 +294,7 @@ onActivated(syncStatusPolling);
       <section v-if="!ocr?.available || ocr?.lastInstall?.state" class="runtime-detail">
         <header>
           <h4>OCR 安装诊断</h4>
-          <p>安装完成后会执行一次真实 OCR 测试，通过后记录当前可用的运行环境版本。</p>
+          <p>安装完成后会执行一次真实识别测试。表格识别与版面分析模块能明显提升检验单等表格报告的指标提取完整性，未安装时可点上方“升级 OCR · 表格增强”补齐。</p>
         </header>
         <div class="usage-grid usage-grid--compact">
           <div v-for="row in ocrRuntimeRows" :key="row.label"><span>{{ row.label }}</span><strong>{{ row.value }}</strong></div>

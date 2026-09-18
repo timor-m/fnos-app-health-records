@@ -19,6 +19,8 @@ import SubPageHeader from "../../components/SubPageHeader.vue";
 import FormSelect from "../../components/FormSelect.vue";
 import { isMiniMaxM2Model } from "../../../../server/services/ai-provider";
 import { aiVisionModelHint } from "../../utils/ai-vision-model-hint";
+import { useConfirm } from "../../composables/useConfirm";
+import { useToast } from "../../composables/useToast";
 import { request } from "../../utils/api";
 
 type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "minimax" | "ollama" | "custom";
@@ -77,6 +79,8 @@ const ai = ref<AiSettings>({
   taskBindings: {}
 });
 const message = ref("");
+const toast = useToast();
+const confirmDialog = useConfirm();
 const loading = ref(true);
 const loadError = ref("");
 const saving = ref(false);
@@ -238,21 +242,29 @@ function applyEditor() {
 
 function removeProfile(profile: AiProfile) {
   if (profile.id === ai.value.defaultProfileId) {
-    message.value = "请先把默认连接切换到其他配置，再删除这一项";
+    toast.show("请先把默认连接切换到其他配置，再删除这一项", 2600);
     return;
   }
-  ai.value.profiles = ai.value.profiles.filter((item) => item.id !== profile.id);
-  for (const binding of Object.values(ai.value.taskBindings)) {
-    if (binding.profileId === profile.id) {
-      binding.profileId = "";
-      binding.model = "";
-      binding.inherited = true;
+  confirmDialog.ask({
+    title: "删除连接配置",
+    message: `确认删除「${profile.name}」？保存配置后该连接的地址、Key 和模型绑定将一并移除。`,
+    confirmText: "删除",
+    danger: true,
+    run: () => {
+      ai.value.profiles = ai.value.profiles.filter((item) => item.id !== profile.id);
+      for (const binding of Object.values(ai.value.taskBindings)) {
+        if (binding.profileId === profile.id) {
+          binding.profileId = "";
+          binding.model = "";
+          binding.inherited = true;
+        }
+      }
+      delete apiKeyDrafts.value[profile.id];
+      delete clearKeyFlags.value[profile.id];
+      persistedIds.value.delete(profile.id);
+      message.value = "连接配置已移除，点击“保存配置”后生效";
     }
-  }
-  delete apiKeyDrafts.value[profile.id];
-  delete clearKeyFlags.value[profile.id];
-  persistedIds.value.delete(profile.id);
-  message.value = "连接配置已移除，点击“保存配置”后生效";
+  });
 }
 
 /* ---------- 编辑器内的连接测试 ---------- */

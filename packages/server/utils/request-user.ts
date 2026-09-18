@@ -2,6 +2,7 @@ import type { H3Event } from "h3";
 import { getDatabase } from "../database/client";
 import { isAdministrator, type RequestUser } from "../domain/request-user";
 import { createId } from "./identifier";
+import { decodeGatewayHeaderValue } from "./gateway-user";
 import { getAppConfig } from "./runtime-config";
 import { getLocalSessionUser } from "../services/auth.service";
 
@@ -12,6 +13,9 @@ function requestAccessMode(event: H3Event) {
 
 function ensureUser(user: RequestUser) {
   const db = getDatabase();
+  const previous = db.prepare(`
+    SELECT display_name AS displayName FROM users WHERE id = ?
+  `).get(user.id) as { displayName: string } | undefined;
   db.prepare(`
     INSERT INTO users (id, display_name, is_gateway_admin)
     VALUES (?, ?, ?)
@@ -25,6 +29,15 @@ function ensureUser(user: RequestUser) {
     VALUES (?, ?, ?, ?)
     ON CONFLICT(provider, subject) DO UPDATE SET user_id = excluded.user_id
   `).run(createId("identity"), user.id, user.provider, user.id);
+
+  if (previous && previous.displayName !== user.displayName) {
+    // Earlier builds stored the gateway account name as latin1 mojibake; rename
+    // the auto-created self member only while it still carries that old name.
+    db.prepare(`
+      UPDATE health_members SET display_name = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE relationship = 'self' AND created_by = ? AND display_name = ? AND deleted_at IS NULL
+    `).run(user.displayName, user.id, previous.displayName);
+  }
 
   const existing = db.prepare(`
     SELECT 1 FROM health_members hm
@@ -51,9 +64,10 @@ export function gatewayUser(event: H3Event): RequestUser | null {
   if (typeof uid !== "string" || !uid.trim()) return null;
   const username = request.headers["x-trim-username"];
   const isAdmin = String(request.headers["x-trim-isadmin"] || "").toLowerCase() === "true";
+  const displayName = typeof username === "string" ? decodeGatewayHeaderValue(username).trim() : "";
   return {
     id: uid.trim(),
-    displayName: typeof username === "string" && username.trim() ? username.trim() : uid.trim(),
+    displayName: displayName || uid.trim(),
     provider: "fnos_gateway",
     authenticated: true,
     isAdmin,

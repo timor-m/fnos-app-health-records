@@ -51,17 +51,13 @@ export function describeObservationAbnormal(
 
   const flag = input.displayAbnormalFlag;
   const isComputed = input.abnormalStatus === "computed";
-  const label = isComputed && flag === "high"
-    ? "高于参考范围"
-    : isComputed && flag === "low"
-      ? "低于参考范围"
-      : flag === "high"
-        ? "偏高"
-        : flag === "low"
-          ? "偏低"
-          : flag === "abnormal"
-            ? "异常"
-            : flag === "normal" ? "正常" : "";
+  const label = flag === "high"
+    ? "偏高"
+    : flag === "low"
+      ? "偏低"
+      : flag === "abnormal"
+        ? "异常"
+        : flag === "normal" ? "正常" : "";
   const tone = flag === "high"
     ? "high"
     : flag === "low"
@@ -69,10 +65,15 @@ export function describeObservationAbnormal(
       : flag === "abnormal"
         ? "abnormal"
         : flag === "normal" ? "normal" : "plain";
+  /* 主标签与报告标注保持一致措辞；推算来源通过 explanation（点按虚线标记）说明，
+     避免“偏高/高于参考范围”两种写法并存被误读为不一致。 */
+  const explanation = isComputed
+    ? `${input.abnormalReason || "数值超出参考范围"}（系统推算）`
+    : null;
   return {
     visible: Boolean(flag),
     label,
-    explanation: isComputed ? input.abnormalReason || null : null,
+    explanation,
     tone,
     isAbnormal: flag === "high" || flag === "low" || flag === "abnormal",
     isConflict: false,

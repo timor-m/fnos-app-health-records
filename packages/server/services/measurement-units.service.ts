@@ -6,23 +6,26 @@ import { ensureCoreDictionaryMaterialized } from "./indicator-dictionary.service
  * 与 indicator_catalog 中的 default_unit / allowed_units_json 合并后生成最终匹配模式。
  */
 const fallbackUnits = [
-  "10\\^?\\d+\\/L",
-  "mmol\\/L",
-  "μmol\\/L",
-  "umol\\/L",
-  "nmol\\/L",
-  "pmol\\/L",
-  "mg\\/dL",
-  "mg\\/L",
-  "ng\\/mL",
-  "μg\\/L",
-  "g\\/L",
-  "L\\/L",
-  "mIU\\/L",
-  "μIU\\/mL",
-  "IU\\/L",
-  "U\\/mL",
-  "U\\/L",
+  "10\\^?\\d+\\/[L1]",
+  /* OCR 常丢斜杠（mmolL、mgdL）：mol 族和质量/体积族放行斜杠可选。
+     g/L、U/L 保持严格——gl、ul 会误伤 globulin、result 等英文单词。
+     单位尾的字母 l/I 常被误读为数字 1（fL→f1、mg/dL→mg/d1、IU/L→1U/L），统一放行 [L1]/[I1l]。 */
+  "mmol\\/?[L1]",
+  "μmol\\/?[L1]",
+  "umol\\/?[L1]",
+  "nmol\\/?[L1]",
+  "pmol\\/?[L1]",
+  "mg\\/?d[L1]",
+  "mg\\/?[L1]",
+  "ng\\/?m[L1]",
+  "μg\\/?[L1]",
+  "g\\/[L1]",
+  "L\\/[L1]",
+  "m[I1l]U\\/[L1]",
+  "μIU\\/m[L1]",
+  "[I1l]U\\/[L1]",
+  "U\\/m[L1]",
+  "U\\/[L1]",
   "Cell\\/HP",
   "Cast\\/LP",
   "cells?\\/HPF",
@@ -32,18 +35,19 @@ const fallbackUnits = [
   "cm\\/s",
   "mm\\/hr",
   "m\\/s",
-  "mmHg",
+  "mmH[g9]",
   "bpm",
   "kg\\s*\\/\\s*m(?:2|²|㎡)",
   "kg",
   "cm",
   "mm",
-  "mL",
+  "m[L1]",
   "mV",
   "ms",
   "Angle",
-  "pg",
-  "fL",
+  "p[g9]",
+  /* OCR 形近误读：fL 常识别为 f1（数字 1 代替字母 l） */
+  "f[L1]",
   "%",
   "℃"
 ];
@@ -98,9 +102,55 @@ export function measurementUnitStripPattern() {
   return new RegExp(measurementUnitPattern().source, "gi");
 }
 
+/*
+ * OCR 变体单位：折叠形态（去斜杠、小写、μ→u）→ 规范写法。
+ * 只收无歧义单位；U/L 与 μL 折叠后无法区分，不在此列。
+ * f1 是 fL 的形近误读（数字 1 代替字母 l），不存在真实单位 f1。
+ */
+const foldedSlashlessUnits: Record<string, string> = {
+  mmoll: "mmol/L",
+  umoll: "umol/L",
+  nmoll: "nmol/L",
+  pmoll: "pmol/L",
+  mgdl: "mg/dL",
+  mgl: "mg/L",
+  ngml: "ng/mL",
+  ugl: "μg/L",
+  /* 数字 1/9 形近误读（f1→fL、m1→mL、p9→pg、mmol1→mmol/L 等） */
+  f1: "fL",
+  m1: "mL",
+  p9: "pg",
+  mmh9: "mmHg",
+  mmol1: "mmol/L",
+  umol1: "umol/L",
+  nmol1: "nmol/L",
+  pmol1: "pmol/L",
+  mgd1: "mg/dL",
+  mg1: "mg/L",
+  ngm1: "ng/mL",
+  ug1: "μg/L",
+  g1: "g/L"
+};
+
+/** 折叠单位用于比对：去空白和斜杠、小写、μ 统一为 u。 */
+function foldUnit(value: string) {
+  return value
+    .normalize("NFKC")
+    .replace(/[μµ]/g, "u")
+    .replace(/[\s/]+/g, "")
+    .toLocaleLowerCase("zh-CN");
+}
+
+/** 把 OCR 变体单位（如丢斜杠的 mmolL）矫正为规范写法；无法识别时返回 null。 */
+export function canonicalMeasurementUnit(value: string) {
+  return foldedSlashlessUnits[foldUnit(value)] || null;
+}
+
 export function unitFromResultCell(value: string) {
   const matched = value.match(measurementUnitPattern())?.[0];
-  return matched ? matched.replace(/\s+/g, "") : null;
+  if (!matched) return null;
+  const compact = matched.replace(/\s+/g, "");
+  return canonicalMeasurementUnit(compact) || compact;
 }
 
 /*
