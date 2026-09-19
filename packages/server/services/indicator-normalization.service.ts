@@ -2967,9 +2967,10 @@ function aliasContextKey(alias: Pick<AliasRow, "normalizedAlias" | "scope" | "ho
   ].join("\u0000");
 }
 
-export function listIndicatorGovernanceHistory(user: RequestUser, limit = 100): IndicatorGovernanceHistoryItem[] {
+export function listIndicatorGovernanceHistory(user: RequestUser, limit = 100, offset = 0): IndicatorGovernanceHistoryItem[] {
   if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可查看治理历史" });
-  const safeLimit = Math.max(1, Math.min(300, Math.trunc(limit || 100)));
+  const safeLimit = Math.max(1, Math.min(500, Math.trunc(limit || 100)));
+  const safeOffset = Math.max(0, Math.trunc(offset || 0));
   const rows = getDatabase().prepare(`
     SELECT history.id, history.event_type AS eventType, history.fingerprint,
       history.decision_action AS decisionAction, pool.raw_name AS rawName,
@@ -2998,9 +2999,15 @@ export function listIndicatorGovernanceHistory(user: RequestUser, limit = 100): 
     LEFT JOIN indicator_catalog catalog ON catalog.id = history.indicator_id
     LEFT JOIN users ON users.id = history.created_by
     ORDER BY history.rowid DESC
-    LIMIT ?
-  `).all(safeLimit) as Array<Omit<IndicatorGovernanceHistoryItem, "canUndo"> & { canUndo: number }>;
+    LIMIT ? OFFSET ?
+  `).all(safeLimit, safeOffset) as Array<Omit<IndicatorGovernanceHistoryItem, "canUndo"> & { canUndo: number }>;
   return rows.map((row) => ({ ...row, canUndo: row.canUndo === 1 }));
+}
+
+export function countIndicatorGovernanceHistory(user: RequestUser): number {
+  if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可查看治理历史" });
+  const row = getDatabase().prepare(`SELECT COUNT(*) AS total FROM indicator_governance_history`).get() as { total: number };
+  return row.total;
 }
 
 export function undoIndicatorGovernanceDecision(

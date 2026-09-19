@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
@@ -426,6 +426,50 @@ test("lists reports with cursors and returns detail pages with original files", 
     const file = getReportPageFile(manager, newer.reportId, detail.pages[0].id, "original");
     assert.equal(file.mimeType, "image/png");
     assert.equal(existsSync(file.path), true);
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(storageDir, { recursive: true, force: true });
+  }
+});
+
+test("creates backups with on-storage staging and reports detailed failure reasons", () => {
+  const storageDir = mkdtempSync(join(tmpdir(), "health-records-backup-staging-"));
+  process.env.STORAGE_DIR = storageDir;
+  try {
+    const db = getDatabase();
+    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)")
+      .run(manager.id, manager.displayName);
+
+    // 上次异常中断遗留的暂存目录会在新备份前清理
+    mkdirSync(join(storageDir, "backups", ".staging-stale"), { recursive: true });
+    const backup = createBackup(manager);
+    assert.equal(existsSync(backup.path), true);
+    const stagingLeftovers = readdirSync(join(storageDir, "backups"))
+      .filter((name) => name.startsWith(".staging-"));
+    assert.deepEqual(stagingLeftovers, []);
+
+    // 存储目录不可写时返回可定位的中文错误明细（root 下 chmod 不生效，跳过）
+    if (typeof process.getuid === "function" && process.getuid() !== 0) {
+      chmodSync(join(storageDir, "backups"), 0o500);
+      try {
+        assert.throws(
+          () => createBackup(manager),
+          (error) => {
+            assert.ok(error instanceof Error);
+            assert.match(error.message, /创建备份失败：创建备份暂存目录/);
+            assert.match(error.message, /EACCES|EPERM/);
+            return true;
+          }
+        );
+      } finally {
+        chmodSync(join(storageDir, "backups"), 0o700);
+      }
+      // 失败的备份不应留下残缺压缩包
+      const archives = readdirSync(join(storageDir, "backups", "full"))
+        .filter((name) => name.endsWith(".tar.gz"));
+      assert.deepEqual(archives, [backup.filename]);
+    }
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;

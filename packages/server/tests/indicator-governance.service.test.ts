@@ -6,6 +6,7 @@ import test from "node:test";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
 import type { RequestUser } from "../domain/request-user.ts";
 import {
+  countIndicatorGovernanceHistory,
   getIndicatorNormalizationMetrics,
   listIndicatorAliasGovernance,
   listIndicatorGovernanceHistory,
@@ -255,6 +256,9 @@ test("persists indicator confirmations, exclusions and report-type aliases acros
     const finalHistory = listIndicatorGovernanceHistory(admin);
     assert.equal(finalHistory.filter((item) => item.eventType === "undo").length, 2);
     assert.equal(finalHistory.some((item) => item.canUndo), false);
+    assert.equal(countIndicatorGovernanceHistory(admin), finalHistory.length);
+    const pagedHistory = listIndicatorGovernanceHistory(admin, 2, 2);
+    assert.deepEqual(pagedHistory.map((item) => item.id), finalHistory.slice(2).map((item) => item.id));
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;

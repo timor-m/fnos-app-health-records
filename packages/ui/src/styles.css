@@ -3938,6 +3938,11 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
   margin: 1px 0 0; padding: 6px 8px; border-radius: 7px; background: var(--fill-2);
   color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere;
 }
+.indicator-history-footer {
+  padding: 10px 16px; border-top: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+}
+.indicator-history-footer span { color: var(--muted); font-size: 11px; }
 
 @media (max-width: 720px) {
   .indicator-alias-governance > header { flex-wrap: wrap; }

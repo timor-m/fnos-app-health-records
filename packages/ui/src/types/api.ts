@@ -922,6 +922,11 @@ export type IndicatorGovernanceHistoryItem = {
   canUndo: boolean;
 };
 
+export type IndicatorGovernanceHistoryPage = {
+  items: IndicatorGovernanceHistoryItem[];
+  total: number;
+};
+
 export type IndicatorGovernanceUndoResult = {
   fingerprint: string;
   action: "confirm" | "exclude";

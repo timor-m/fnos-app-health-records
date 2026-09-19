@@ -37,6 +37,7 @@ import type {
   IndicatorAliasUpdateResult,
   IndicatorCatalogOption,
   IndicatorGovernanceHistoryItem,
+  IndicatorGovernanceHistoryPage,
   IndicatorGovernanceResult,
   IndicatorGovernanceUndoResult,
   IndicatorNormalizationIssue,
@@ -49,6 +50,9 @@ const reviewingIssue = ref<IndicatorNormalizationIssue | null>(null);
 const showEligible = ref(false);
 const metrics = ref<IndicatorNormalizationMetrics | null>(null);
 const history = ref<IndicatorGovernanceHistoryItem[]>([]);
+const historyTotal = ref(0);
+const historyLoadingMore = ref(false);
+const historyPageSize = 100;
 const aliasOverview = ref<IndicatorAliasGovernanceOverview>({ aliases: [], conflicts: [] });
 const historyBusyId = ref("");
 const aliasBusyId = ref("");
@@ -341,12 +345,13 @@ async function loadIssues() {
     const [issueRows, metricSnapshot, historyRows, aliases] = await Promise.all([
       request<IndicatorNormalizationIssue[]>("maintenance/indicator-normalization/issues"),
       request<IndicatorNormalizationMetrics>("maintenance/indicator-normalization/metrics"),
-      request<IndicatorGovernanceHistoryItem[]>("maintenance/indicator-normalization/history?limit=100"),
+      request<IndicatorGovernanceHistoryPage>(`maintenance/indicator-normalization/history?limit=${historyPageSize}`),
       request<IndicatorAliasGovernanceOverview>("maintenance/indicator-normalization/aliases")
     ]);
     issues.value = issueRows;
     metrics.value = metricSnapshot;
-    history.value = historyRows;
+    history.value = historyRows.items;
+    historyTotal.value = historyRows.total;
     aliasOverview.value = aliases;
     const validKeys = new Set(issues.value
       .filter((issue) => issue.status === "unknown")
@@ -357,6 +362,24 @@ async function loadIssues() {
     error.value = cause instanceof Error ? cause.message : "指标问题池读取失败";
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadMoreHistory() {
+  if (historyLoadingMore.value || history.value.length >= historyTotal.value) return;
+  historyLoadingMore.value = true;
+  error.value = "";
+  try {
+    const page = await request<IndicatorGovernanceHistoryPage>(
+      `maintenance/indicator-normalization/history?limit=${historyPageSize}&offset=${history.value.length}`
+    );
+    const knownIds = new Set(history.value.map((item) => item.id));
+    history.value = history.value.concat(page.items.filter((item) => !knownIds.has(item.id)));
+    historyTotal.value = page.total;
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : "治理历史读取失败";
+  } finally {
+    historyLoadingMore.value = false;
   }
 }
 
@@ -699,6 +722,18 @@ onMounted(() => {
             <RotateCcw :size="14" />{{ historyBusyId === item.id ? "撤销中" : "撤销" }}
           </button>
         </article>
+        <footer class="indicator-history-footer">
+          <span>已显示 {{ history.length }} / {{ historyTotal }} 条</span>
+          <button
+            v-if="history.length < historyTotal"
+            class="soft-action-button compact-soft"
+            type="button"
+            :disabled="historyLoadingMore"
+            @click="loadMoreHistory"
+          >
+            <RefreshCw :size="14" :class="{ 'spin-icon': historyLoadingMore }" />{{ historyLoadingMore ? "加载中" : "加载更多" }}
+          </button>
+        </footer>
       </div>
       <p v-else class="indicator-feedback-note">尚无人工治理历史。</p>
     </section>
