@@ -1,5 +1,5 @@
 import { createError } from "h3";
-import { getDatabase } from "../database/client";
+import { rollbackAfterError, getDatabase } from "../database/client";
 import { isAdministrator, type RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 
@@ -208,7 +208,7 @@ export function createMember(user: RequestUser, input: MemberInput) {
     audit(user, "member.create", member.id, { relationship: member.relationship });
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return { ...member, avatarPath: null, permission: "manager" as const };

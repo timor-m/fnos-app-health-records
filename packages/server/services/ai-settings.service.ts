@@ -217,7 +217,7 @@ function emptySettings(): ParsedAiSettings {
 }
 
 function parseStoredProfile(raw: StoredAiProfile, taken: Set<string>): AiProfile | null {
-  const provider = typeof raw.provider === "string" && raw.provider in aiProviderCatalog
+  const provider = typeof raw.provider === "string" && Object.hasOwn(aiProviderCatalog, raw.provider)
     ? raw.provider as AiProviderKey
     : null;
   if (!provider) return null;
@@ -290,7 +290,7 @@ function migrateLegacySettings(stored: StoredAiSettings): ParsedAiSettings {
     for (const task of listAiTasks()) {
       const raw = stored.taskBindings[task.key];
       if (!isRecord(raw)) continue;
-      const provider = typeof raw.provider === "string" && raw.provider in aiProviderCatalog
+      const provider = typeof raw.provider === "string" && Object.hasOwn(aiProviderCatalog, raw.provider)
         ? raw.provider as AiProviderKey
         : undefined;
       const model = typeof raw.model === "string" ? raw.model.trim() : "";
@@ -556,7 +556,7 @@ function applyProfileInput(
   existing: AiProfile | undefined,
   taken: Set<string>
 ): AiProfile {
-  const provider = typeof raw.provider === "string" && raw.provider in aiProviderCatalog
+  const provider = typeof raw.provider === "string" && Object.hasOwn(aiProviderCatalog, raw.provider)
     ? raw.provider as AiProviderKey
     : existing?.provider;
   if (!provider) {
@@ -605,7 +605,7 @@ function applyTaskBindings(
     }
     let profileId = typeof value.profileId === "string" ? value.profileId.trim() : "";
     // 兼容旧版按服务商绑定：映射到该服务商的连接配置，缺省时按默认配置补建
-    if (!profileId && typeof value.provider === "string" && value.provider in aiProviderCatalog) {
+    if (!profileId && typeof value.provider === "string" && Object.hasOwn(aiProviderCatalog, value.provider)) {
       const provider = value.provider as AiProviderKey;
       let profile = next.profiles.find((item) => item.provider === provider);
       if (!profile) {
@@ -643,7 +643,13 @@ function validateAndPersist(next: ParsedAiSettings) {
   return publicSettings(next);
 }
 
-export function saveAiSettings(input: AiSettingsInput) {
+export function saveAiSettings(input: AiSettingsInput | undefined) {
+  if (!input || !isRecord(input)
+    || (input.profiles !== undefined && (!Array.isArray(input.profiles) || !input.profiles.every(isRecord)))
+    || (input.taskBindings != null && (!isRecord(input.taskBindings)
+      || !Object.values(input.taskBindings).every(value => value == null || isRecord(value))))) {
+    throw createError({ statusCode: 400, data: { code: "AI_CONFIG_INVALID" }, statusMessage: "AI 配置格式无效，请检查连接配置和场景绑定" });
+  }
   const parsed = parseStoredSettings();
   const taken = new Set(parsed.profiles.map((profile) => profile.id));
   const next: ParsedAiSettings = {

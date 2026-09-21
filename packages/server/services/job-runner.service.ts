@@ -7,10 +7,11 @@ import {
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { createError } from "h3";
-import { getDatabase } from "../database/client";
+import { rollbackAfterError, getDatabase } from "../database/client";
 import type { RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 import { writeLog } from "../utils/logger";
+import { classifySystemError } from "../utils/api-error";
 import { getAppConfig } from "../utils/runtime-config";
 import { storageMigrationPaused } from '../utils/storage-migration-state';
 import { assertMemberAccess, assertMemberManage } from "./member.service";
@@ -379,7 +380,7 @@ export function claimNextJob() {
     db.exec("COMMIT");
     return job;
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
 }
@@ -733,7 +734,7 @@ function expandPdf(job: JobRow, response: WorkerResponse) {
     }
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
 }
@@ -858,7 +859,7 @@ function completeJob(job: JobRow, response: WorkerResponse) {
       ).run(job.pageId, job.id);
       db.exec("COMMIT");
     } catch (error) {
-      db.exec("ROLLBACK");
+      rollbackAfterError(db);
       throw error;
     }
   }
@@ -1215,7 +1216,17 @@ export async function processNextJob(
   // Every processing job can outlive the five-minute lease on slower household
   // NAS devices. Renew local OCR/PDF jobs as well as AI jobs so another runner
   // cannot recover and duplicate work that is still actively executing.
-  const leaseHeartbeat = setInterval(renewLease, leaseHeartbeatIntervalMs());
+  const leaseHeartbeat = setInterval(() => {
+    try {
+      renewLease();
+    } catch (error) {
+      // Timer callbacks run outside the task's try/catch. Keep the worker active
+      // and retry next heartbeat; normal job persistence/lease recovery still applies.
+      void writeLog("warn", "processing-job-lease-renewal-failed", {
+        errorCode: classifySystemError(error)?.code || "INTERNAL_ERROR"
+      });
+    }
+  }, leaseHeartbeatIntervalMs());
   leaseHeartbeat.unref();
   try {
     if (job.jobType === "ai_extract") {
@@ -1637,7 +1648,7 @@ export function cancelReportProcessing(user: RequestUser, reportId: string) {
     }
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   const status = reconcileReportProcessingStatus(reportId);
@@ -1792,7 +1803,7 @@ export function reprocessReportOcrAndAi(user: RequestUser, reportId: string) {
     );
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
 

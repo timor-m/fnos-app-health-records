@@ -1,4 +1,4 @@
-import { getDatabase } from "../database/client";
+import { rollbackAfterError, getDatabase } from "../database/client";
 import { createId } from "../utils/identifier";
 import { cleanIndicatorName } from "../utils/indicator-name";
 import { cleanOcrResult } from "../utils/ocr-result";
@@ -3952,7 +3952,7 @@ export function persistAiExtraction(
     );
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return normalizeReportObservations(reportId);

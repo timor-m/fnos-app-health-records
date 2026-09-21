@@ -1,5 +1,5 @@
 import { createError } from "h3";
-import { getDatabase } from "../database/client";
+import { rollbackAfterError, getDatabase } from "../database/client";
 import {
   reportStructuredSectionKeys,
   type ReportStructuredSectionKey
@@ -126,7 +126,7 @@ export function createReportStructuredSection(
     appendAudit(user, "create", id, reportId, values.key);
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return { id, reportId };
@@ -162,7 +162,7 @@ export function updateReportStructuredSection(
     appendAudit(user, "update", id, section.reportId, values.key);
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return { id, reportId: section.reportId };
@@ -182,7 +182,7 @@ export function deleteReportStructuredSection(user: RequestUser, id: string) {
     appendAudit(user, "delete", id, section.reportId, current.sectionKey);
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return { id, reportId: section.reportId };

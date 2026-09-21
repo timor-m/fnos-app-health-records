@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { before, after } from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+const directory = mkdtempSync(join(tmpdir(), 'upload-api-error-'));
+before(() => { process.env.STORAGE_DIR = directory; });
+after(() => { delete process.env.STORAGE_DIR; rmSync(directory, { recursive: true, force: true }); });
 import { H3, type H3Event } from 'h3';
 import uploads from '../routes/api/uploads.post';
 import errorHandler from '../error-handler';

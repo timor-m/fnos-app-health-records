@@ -1,5 +1,5 @@
 import { createError } from "h3";
-import { getDatabase } from "../database/client";
+import { rollbackAfterError, getDatabase } from "../database/client";
 import { isAdministrator, type RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 import { writeLog } from "../utils/logger";
@@ -150,7 +150,7 @@ export function enqueueIndicatorNormalizationTask(user: RequestUser, options?: {
     `).run();
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   const task = createdId ? taskById(createdId) : null;
@@ -182,7 +182,7 @@ function claimNextTask() {
     db.exec("COMMIT");
     return changed.changes ? taskById(row.id) || null : null;
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
 }

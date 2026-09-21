@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mappedOcrMeasurement, mappedOcrUnit, mappedOcrResultCells, splitOcrTableCells } from "./ocr-table-columns";
 import { unitFromResultCell } from "./measurement-units.service";
 import { cleanOcrResult } from "../utils/ocr-result";
-import { getDatabase } from "../database/client";
+import { rollbackAfterError, getDatabase } from "../database/client";
 import { createId } from "../utils/identifier";
 import {
   aiInputPlanningPolicy,
@@ -247,7 +247,7 @@ function syncPlanUnits(
     });
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
 

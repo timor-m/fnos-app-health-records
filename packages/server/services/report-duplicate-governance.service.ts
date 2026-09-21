@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { createError } from "h3";
-import { getDatabase } from "../database/client";
+import { rollbackAfterError, getDatabase } from "../database/client";
 import type { RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 import { assertMemberAccess, assertMemberManage } from "./member.service";
@@ -310,7 +310,7 @@ export function setReportDuplicateDecision(user: RequestUser, input: {
     });
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return decisionRecord(pairKey);
@@ -411,7 +411,7 @@ export function setReportDuplicateDecisionsBatch(user: RequestUser, inputs: Arra
     }));
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return {
@@ -501,7 +501,7 @@ export function undoReportDuplicateDecisionsBatch(user: RequestUser, pairKeys: s
     }));
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return { memberId, undone: existingRecords.length, pairKeys: normalizedPairKeys };
@@ -518,7 +518,7 @@ export function undoReportDuplicateDecision(user: RequestUser, pairKey: string) 
     persistReportDuplicateDecisionUndo(db, existing, user.id);
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return { pairKey, undone: true };

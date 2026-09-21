@@ -162,9 +162,9 @@ function validateLocalFiles(files: LocalUploadInputFile[]): ValidatedUploadFile[
   });
 }
 
-function persistValidatedFile(file: ValidatedUploadFile, destination: string) {
+function persistValidatedFile(file: ValidatedUploadFile, destination?: string) {
   if (file.data) {
-    writeFileSync(destination, file.data, { flag: "wx", mode: 0o600 });
+    if (destination) writeFileSync(destination, file.data, { flag: "wx", mode: 0o600 });
     return createHash("sha256").update(file.data).digest("hex");
   }
   if (!file.sourcePath) throw new Error("Missing local import source path");
@@ -176,7 +176,7 @@ function persistValidatedFile(file: ValidatedUploadFile, destination: string) {
     if (!sourceStats.isFile() || sourceStats.size !== file.fileSize) {
       throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: `源文件“${file.originalName}”已发生变化，请重新选择` });
     }
-    target = openSync(destination, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+    if (destination) target = openSync(destination, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
     const hash = createHash("sha256");
     const chunk = Buffer.allocUnsafe(1024 * 1024);
     let copied = 0;
@@ -189,14 +189,14 @@ function persistValidatedFile(file: ValidatedUploadFile, destination: string) {
       }
       hash.update(chunk.subarray(0, bytesRead));
       let written = 0;
-      while (written < bytesRead) written += writeSync(target, chunk, written, bytesRead - written);
+      while (target !== null && written < bytesRead) written += writeSync(target, chunk, written, bytesRead - written);
     }
     if (copied !== file.fileSize) {
       throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: `源文件“${file.originalName}”已发生变化，请重新选择` });
     }
     return hash.digest("hex");
   } catch (error) {
-    rmSync(destination, { force: true });
+    if (destination) { try { rmSync(destination, { force: true }); } catch { /* Preserve original failure. */ } }
     throw error;
   } finally {
     if (target !== null) closeSync(target);
@@ -215,13 +215,28 @@ function createValidatedUpload(
   if (requestKey !== undefined && (typeof requestKey !== 'string' || !/^[a-zA-Z0-9_-]{16,100}$/.test(requestKey))) {
     throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: "上传请求编号无效" });
   }
+  const db = getDatabase();
+  const readReceipt = () => requestKey ? db.prepare(
+    'SELECT member_id, content_hash, report_id, response_json FROM upload_receipts WHERE user_id = ? AND request_key = ?'
+  ).get(user.id, requestKey) as { member_id: string; content_hash: string; report_id: string | null; response_json: string } | undefined : undefined;
+  const fingerprint = (files: Array<{sha256: string; originalName: string; rotation: number}>) =>
+    createHash('sha256').update(JSON.stringify({ memberId, source, files: files.map(page => [page.sha256, page.originalName, page.rotation]) })).digest('hex');
+  const receiptResult = (previous: NonNullable<ReturnType<typeof readReceipt>>, contentHash: string) => {
+    if (previous.member_id !== memberId || previous.content_hash !== contentHash) throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: '重试内容与原上传不一致，请重新创建上传任务' });
+    if (!previous.report_id) throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: '该上传对应的报告已删除，请重新创建上传任务' });
+    return JSON.parse(previous.response_json) as UploadCreated;
+  };
+  const existing = readReceipt();
+  if (existing) {
+    // Hash the retry without creating another report directory or copying its files.
+    return receiptResult(existing, fingerprint(validated.map(file => ({ ...file, sha256: persistValidatedFile(file) }))));
+  }
   const reportTitle = "待识别报告";
   const reportId = createId("report");
   const relativeDirectory = join("reports", memberId, reportId);
   const absoluteDirectory = join(getAppConfig().storageDir, relativeDirectory);
   mkdirSync(absoluteDirectory, { recursive: true });
 
-  const db = getDatabase();
   try {
     const prepared = validated.map((file, index) => {
       const pageId = createId("page");
@@ -241,17 +256,14 @@ function createValidatedUpload(
     });
 
     db.exec("BEGIN IMMEDIATE");
-    const contentHash = createHash('sha256').update(JSON.stringify({ memberId, source, files: prepared.map(page => [page.sha256, page.originalName, page.rotation]) })).digest('hex');
-    if (requestKey) {
-      const previous = db.prepare('SELECT member_id, content_hash, report_id, response_json FROM upload_receipts WHERE user_id = ? AND request_key = ?').get(user.id, requestKey) as
-        { member_id: string; content_hash: string; report_id: string | null; response_json: string } | undefined;
-      if (previous) {
-        if (previous.member_id !== memberId || previous.content_hash !== contentHash) throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: '重试内容与原上传不一致，请重新创建上传任务' });
-        if (!previous.report_id) throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: '该上传对应的报告已删除，请重新创建上传任务' });
-        db.exec('COMMIT');
-        rmSync(absoluteDirectory, { recursive: true, force: true });
-        return JSON.parse(previous.response_json) as UploadCreated;
-      }
+    const contentHash = fingerprint(prepared);
+    // Another process may have committed the same key while files were being copied.
+    const previous = readReceipt();
+    if (previous) {
+      const result = receiptResult(previous, contentHash);
+      db.exec('COMMIT');
+      rmSync(absoluteDirectory, { recursive: true, force: true });
+      return result;
     }
     db.prepare(`
       INSERT INTO reports (id, member_id, created_by, report_type, title, status)
@@ -318,7 +330,7 @@ function createValidatedUpload(
     return result;
   } catch (error) {
     try { db.exec("ROLLBACK"); } catch { /* Transaction may not have started yet. */ }
-    rmSync(absoluteDirectory, { recursive: true, force: true });
+    try { rmSync(absoluteDirectory, { recursive: true, force: true }); } catch { /* Preserve original failure. */ }
     throw error;
   }
 }
@@ -333,7 +345,7 @@ export function createUploadFromLocalFiles(user: RequestUser, memberId: string, 
   return createValidatedUpload(user, memberId, validateLocalFiles(files), "nas_import", requestKey);
 }
 
-export function createUploadFromStagedFiles(user: RequestUser, memberId: string, files: LocalUploadInputFile[], requestKey: string) {
+export function createUploadFromStagedFiles(user: RequestUser, memberId: string, files: LocalUploadInputFile[], requestKey?: string) {
   return createValidatedUpload(user, memberId, validateLocalFiles(files), "browser_upload", requestKey);
 }
 

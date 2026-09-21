@@ -82,7 +82,7 @@ export const aiProviderCatalog: Record<AiProviderKey, AiProviderOption> = {
 };
 
 export function normalizeAiProvider(value: unknown): AiProviderKey {
-  return typeof value === "string" && value in aiProviderCatalog
+  return typeof value === "string" && Object.hasOwn(aiProviderCatalog, value)
     ? value as AiProviderKey
     : "deepseek";
 }

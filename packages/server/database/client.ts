@@ -202,17 +202,23 @@ function failUpgradeHistory(db: DatabaseSync, id: string, error: unknown) {
   `).run(message.slice(0, 1000), id);
 }
 
-function runInTransaction(db: DatabaseSync, action: () => void) {
+// Only for failure cleanup: SQLite may already have rolled back (e.g. SQLITE_FULL).
+// Callers still rethrow the original error after completing their other cleanup.
+export function rollbackAfterError(db: DatabaseSync) {
+  try {
+    db.exec("ROLLBACK");
+  } catch {
+    // A secondary rollback failure must not replace the original error.
+  }
+}
+
+export function runInTransaction(db: DatabaseSync, action: () => void) {
   db.exec("BEGIN IMMEDIATE");
   try {
     action();
     db.exec("COMMIT");
   } catch (error) {
-    try {
-      db.exec("ROLLBACK");
-    } catch {
-      // The original migration error is more useful to the caller.
-    }
+    rollbackAfterError(db);
     throw error;
   }
 }
@@ -299,7 +305,11 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
     writeJsonSetting(db, "system.last_app_version", appVersion);
     if (upgradeId) completeUpgradeHistory(db, upgradeId);
   } catch (error) {
-    if (upgradeId) failUpgradeHistory(db, upgradeId, error);
+    try {
+      if (upgradeId) failUpgradeHistory(db, upgradeId, error);
+    } catch {
+      // Storage failures can also prevent recording the failed upgrade.
+    }
     throw error;
   }
 }
@@ -321,12 +331,19 @@ export function getDatabase() {
   ensureStorageDirectories(storageDir);
   const databasePath = join(storageDir, "db", "health-records.sqlite");
   mkdirSync(dirname(databasePath), { recursive: true });
-  database = new DatabaseSync(databasePath);
+  const opened = new DatabaseSync(databasePath);
+  try {
+    opened.exec("PRAGMA foreign_keys = ON");
+    opened.exec("PRAGMA journal_mode = WAL");
+    opened.exec("PRAGMA busy_timeout = 5000");
+    migrate(opened, storageDir, databasePath);
+  } catch (error) {
+    unreleasedSchemaVersion = null;
+    try { opened.close(); } catch { /* Preserve the initialization failure. */ }
+    throw error;
+  }
+  database = opened;
   openedDatabasePath = requestedPath;
-  database.exec("PRAGMA foreign_keys = ON");
-  database.exec("PRAGMA journal_mode = WAL");
-  database.exec("PRAGMA busy_timeout = 5000");
-  migrate(database, storageDir, databasePath);
   return database;
 }
 
@@ -348,7 +365,12 @@ export function repairUnreleasedSchemaVersions() {
   const backupPath = backupDatabaseBeforeMigration(database, storageDir, databasePath, fromVersion, schemaVersion);
   database.prepare("DELETE FROM schema_migrations WHERE version > 16 AND version <= 19").run();
   unreleasedSchemaVersion = null;
-  migrate(database, storageDir, databasePath);
+  try {
+    migrate(database, storageDir, databasePath);
+  } catch (error) {
+    try { closeDatabase(); } catch { /* Preserve the repair failure. */ }
+    throw error;
+  }
   return { fromVersion, toVersion: schemaVersion, backupPath };
 }
 
@@ -396,10 +418,11 @@ export function getDatabaseStatus() {
 }
 
 export function closeDatabase() {
-  database?.close();
+  const closing = database;
   database = null;
   openedDatabasePath = null;
   unreleasedSchemaVersion = null;
+  closing?.close();
 }
 
 export function closeDatabaseForTests() {

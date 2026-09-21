@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createError } from "h3";
-import { getDatabase } from "../database/client";
+import { rollbackAfterError, getDatabase } from "../database/client";
 import type { RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 import { assertMemberManage } from "./member.service";
@@ -217,7 +217,7 @@ export function createManualObservation(user: RequestUser, reportId: string, inp
     }));
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   normalizeReportObservations(reportId);
@@ -297,7 +297,7 @@ export function updateManualObservation(
     `).run(createId("audit"), user.id, observationId, JSON.stringify({ memberId: report.memberId, reportId, fields: changedFields }));
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   normalizeReportObservations(reportId);
@@ -319,7 +319,7 @@ export function deleteManualObservation(user: RequestUser, reportId: string, obs
       VALUES (?, ?, 'observation.manual_delete', 'observation', ?, '{}')`).run(createId('audit'), user.id, observationId);
     db.exec('COMMIT');
   } catch (error) {
-    db.exec('ROLLBACK');
+    rollbackAfterError(db);
     throw error;
   }
   normalizeReportObservations(reportId);

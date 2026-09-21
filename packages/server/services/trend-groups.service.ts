@@ -48,7 +48,11 @@ export function syncBuiltinTrendGroups(db: DatabaseSync) {
     db.exec('RELEASE sync_trend_groups');
     synced.set(db, signature);
   } catch (error) {
-    db.exec('ROLLBACK TO sync_trend_groups; RELEASE sync_trend_groups');
+    try {
+      db.exec('ROLLBACK TO sync_trend_groups; RELEASE sync_trend_groups');
+    } catch {
+      // An automatic SQLite rollback also removes savepoints. Keep the original error.
+    }
     throw error;
   }
 }

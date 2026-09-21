@@ -1,4 +1,4 @@
-import { getDatabase } from "../database/client";
+import { rollbackAfterError, getDatabase } from "../database/client";
 import { createError } from "h3";
 import type { RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
@@ -209,7 +209,7 @@ export function createClinicalFact(
     appendAudit(user, "create", type, id, reportId, columns);
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return { id, reportId, type };
@@ -235,7 +235,7 @@ export function updateClinicalFact(
     appendAudit(user, "update", type, id, fact.reportId, [...fields.keys()]);
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return { id, reportId: fact.reportId, type };
@@ -253,7 +253,7 @@ export function deleteClinicalFact(user: RequestUser, rawType: unknown, id: stri
     appendAudit(user, "delete", type, id, fact.reportId, []);
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return { id, reportId: fact.reportId, type };

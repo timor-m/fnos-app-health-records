@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createError } from "h3";
-import { getDatabase } from "../database/client";
+import { rollbackAfterError, getDatabase } from "../database/client";
 import { isAdministrator, type RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 import { isTrackableMorphologyFinding } from "../utils/morphology-rules";
@@ -125,7 +125,7 @@ export function backfillLegacyMorphologyFindings() {
     }));
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return { scanned: rows.length, migrated: candidates.length, alreadyCompleted: false };
@@ -645,7 +645,7 @@ function rebuildRows(rows: FindingRow[]): MorphologyTrackingResult {
     }
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return {
@@ -1113,7 +1113,7 @@ export function updateMorphologyFinding(user: RequestUser, findingId: string, in
     appendAudit(user, "morphology.update", findingId, { memberId: finding.memberId, fields: [...changed] });
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   rebuildMorphologyTrackingForMember(finding.memberId);
@@ -1179,7 +1179,7 @@ export function setMorphologyTracking(user: RequestUser, findingId: string, inpu
     appendAudit(user, action, findingId, { memberId: finding.memberId, trackingGroupId: groupId, mode });
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   if (mode === "automatic") rebuildMorphologyTrackingForMember(finding.memberId);
@@ -1199,7 +1199,7 @@ export function ignoreMorphologyFinding(user: RequestUser, findingId: string) {
     appendAudit(user, "morphology.ignore", findingId, { memberId: finding.memberId });
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return listMorphologyTracking(user, finding.memberId);
@@ -1239,7 +1239,7 @@ export function mergeMorphologyTrackingGroups(user: RequestUser, memberId: strin
     appendAudit(user, "morphology.merge", null, { memberId, sourceGroupId, targetGroupId, count: source.length });
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return listMorphologyTracking(user, memberId);

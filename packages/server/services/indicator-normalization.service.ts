@@ -1,4 +1,4 @@
-import { getDatabase } from "../database/client";
+import { rollbackAfterError, getDatabase } from "../database/client";
 import { createHash } from "node:crypto";
 import { createId } from "../utils/identifier";
 import { cleanIndicatorName } from "../utils/indicator-name";
@@ -2935,7 +2935,7 @@ export function resolveIndicatorNormalizationIssue(
       canonicalKey: indicator?.canonicalKey || null
     };
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
 }
@@ -3131,7 +3131,7 @@ export function undoIndicatorGovernanceDecision(
       reopenedIssues: rerun.reopenedIssues
     };
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
 }
@@ -3302,7 +3302,7 @@ export function setIndicatorAliasEnabled(
       reopenedIssues: rerun.reopenedIssues
     };
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
 }

@@ -1,5 +1,5 @@
 import { createError } from "h3";
-import { getDatabase } from "../database/client";
+import { rollbackAfterError, getDatabase } from "../database/client";
 import { createId } from "../utils/identifier";
 import type { RequestUser } from "../domain/request-user";
 import { patientSexFromOcrText } from "./ai-input-planner.service";
@@ -477,7 +477,7 @@ export function assignReportMember(
     ).run(reportId, identityDismissedFieldKey);
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return { reportId, memberId: targetMemberId };

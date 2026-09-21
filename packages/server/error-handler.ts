@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { type H3Event } from "h3";
 import { toApiErrorPayload, unwrapHttpError } from "./utils/api-error";
 import { writeLog } from "./utils/logger";
@@ -32,9 +33,27 @@ export default async function errorHandler(error: unknown, event: H3Event) {
     }
   }
 
-  if (!businessError) {
+  if (!businessError || status >= 500) {
+    body.errorId = randomUUID();
+    if (event.context) event.context.errorId = body.errorId;
+    let cause = error;
+    let nativeCode: string | undefined;
+    let sqliteCode: number | undefined;
+    const seen = new Set<unknown>();
+    for (let depth = 0; cause && typeof cause === "object" && depth < 10 && !seen.has(cause); depth++) {
+      seen.add(cause);
+      const item = cause as { code?: unknown; errcode?: unknown; cause?: unknown };
+      if (typeof item.code === "string" && /^(?:ERR_SQLITE_ERROR|SQLITE_[A-Z_]+|E[A-Z]{2,16}|AI_HTTP_[0-9]{3}|OCR_WORKER_[A-Z_]+)$/.test(item.code)) nativeCode = item.code;
+      if (typeof item.errcode === "number" && Number.isSafeInteger(item.errcode)) sqliteCode = item.errcode;
+      cause = item.cause;
+    }
     await writeLog("error", "unhandled-request-error", {
       method: event.method,
+      route: event.context?.matchedRoute?.route || "unmatched",
+      errorId: body.errorId,
+      statusCode: status,
+      nativeCode,
+      sqliteCode,
       errorCode: body.code,
       // Do not log exception messages: they may embed report content or upstream responses.
       detail: error instanceof Error ? error.stack?.split("\n").filter(line => /^\s+at /.test(line)).join("\n").slice(0, 2000) : undefined

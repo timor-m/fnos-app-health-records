@@ -1,4 +1,4 @@
-import { getDatabase } from "../database/client";
+import { rollbackAfterError, getDatabase } from "../database/client";
 import { isAdministrator, type RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 
@@ -92,7 +92,7 @@ export function rebindRestoredAdministrator(
       disabledLocalAccountCount
     };
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
 }

@@ -1,4 +1,4 @@
-import { defineEventHandler, getRequestURL } from "h3";
+import { defineEventHandler } from "h3";
 import { writeLog } from "../utils/logger";
 
 export function requestLogLevel(statusCode: number) {
@@ -9,7 +9,6 @@ export function requestLogLevel(statusCode: number) {
 
 export default defineEventHandler((event) => {
   const startedAt = Date.now();
-  const url = getRequestURL(event);
   const response = event.node!.res!;
 
   response.on("finish", () => {
@@ -18,7 +17,8 @@ export default defineEventHandler((event) => {
     if (!level) return;
     void writeLog(level, "request", {
       method: event.method,
-      path: url.pathname,
+      route: event.context.matchedRoute?.route || "unmatched",
+      errorId: event.context.errorId,
       statusCode: response.statusCode,
       durationMs: Date.now() - startedAt
     });

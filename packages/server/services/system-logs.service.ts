@@ -94,7 +94,8 @@ function classifyLog(
 ): SystemLogItem {
   const base = { id, timestamp, level };
   const method = stringValue(extra, "method").toUpperCase();
-  const path = stringValue(extra, "path");
+  const path = stringValue(extra, "route") || stringValue(extra, "path");
+  const errorId = stringValue(extra, "errorId");
   const statusCode = stringValue(extra, "statusCode") || stringValue(extra, "upstreamStatus");
   const durationMs = stringValue(extra, "durationMs");
   const provider = stringValue(extra, "provider");
@@ -109,7 +110,8 @@ function classifyLog(
       detail: [method, safeText(path)].filter(Boolean).join(" "),
       metadata: [
         statusCode ? `状态 ${statusCode}` : "",
-        durationMs ? `耗时 ${durationMs} ms` : ""
+        durationMs ? `耗时 ${durationMs} ms` : "",
+        errorId ? `问题编号 ${safeText(errorId, 80)}` : ""
       ].filter(Boolean)
     };
   }
@@ -118,9 +120,15 @@ function classifyLog(
     return {
       ...base,
       category: "服务端",
-      title: "服务端发生未处理异常",
+      title: "服务请求异常",
       detail: [method, safeText(path)].filter(Boolean).join(" "),
-      metadata: [`异常类型 ${errorType}`]
+      metadata: [
+        statusCode ? `状态 ${statusCode}` : "",
+        errorCode ? `错误码 ${safeText(errorCode, 80)}` : `异常类型 ${errorType}`,
+        errorId ? `问题编号 ${safeText(errorId, 80)}` : "",
+        stringValue(extra, "nativeCode") ? `系统码 ${safeText(extra.nativeCode, 80)}` : "",
+        stringValue(extra, "sqliteCode") ? `SQLite ${safeText(extra.sqliteCode, 20)}` : ""
+      ].filter(Boolean)
     };
   }
   if (message === "ai-connection-test-failed" || message === "ai-connection-test-rejected") {

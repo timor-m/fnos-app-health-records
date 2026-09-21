@@ -1,8 +1,9 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { createError, getRequestIP, setCookie, deleteCookie, type H3Event } from "h3";
-import { getDatabase } from "../database/client";
+import { rollbackAfterError, getDatabase } from "../database/client";
 import { isAdministrator, type RequestUser } from "../domain/request-user";
 import { getAppConfig } from "../utils/runtime-config";
+import { classifySystemError } from "../utils/api-error";
 import { createId } from "../utils/identifier";
 
 function requiredText(value: unknown, label: string) {
@@ -98,7 +99,7 @@ export function bootstrapLocalAdministrator() {
     db.exec("COMMIT");
     return { created: true, setupRequired: false, username };
   } catch (cause) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw cause;
   }
 }
@@ -111,17 +112,24 @@ export function getLocalSessionUser(event: H3Event): RequestUser | null {
   const db = getDatabase();
   const row = db.prepare(`
     SELECT u.id, u.display_name AS displayName, u.is_gateway_admin AS isAdmin,
-      la.must_change_password AS mustChangePassword
+      la.must_change_password AS mustChangePassword,
+      s.last_seen_at < datetime('now', '-5 minutes') AS needsTouch
     FROM auth_sessions s
     JOIN users u ON u.id = s.user_id
     JOIN local_accounts la ON la.user_id = u.id AND la.disabled_at IS NULL
     WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > CURRENT_TIMESTAMP
-  `).get(hash) as { id: string; displayName: string; isAdmin: number; mustChangePassword: number } | undefined;
+  `).get(hash) as { id: string; displayName: string; isAdmin: number; mustChangePassword: number; needsTouch: number } | undefined;
   if (!row) return null;
-  db.prepare(`
-    UPDATE auth_sessions SET last_seen_at = CURRENT_TIMESTAMP
-    WHERE token_hash = ? AND last_seen_at < datetime('now', '-5 minutes')
-  `).run(hash);
+  if (row.needsTouch) {
+    try {
+      db.prepare(`UPDATE auth_sessions SET last_seen_at = CURRENT_TIMESTAMP
+        WHERE token_hash = ? AND last_seen_at < datetime('now', '-5 minutes')`).run(hash);
+    } catch (cause) {
+      // Last-seen is informational; session validity and permissions were read above.
+      const code = classifySystemError(cause)?.code;
+      if (code !== "DATABASE_UNAVAILABLE" && code !== "STORAGE_UNAVAILABLE") throw cause;
+    }
+  }
   return {
     id: row.id,
     displayName: row.displayName,
@@ -272,7 +280,7 @@ export function changeLocalPassword(event: H3Event, user: RequestUser, body: Rec
     `).run(createId("audit"), user.id, forcedChange ? "auth.local_password_first_changed" : "auth.local_password_changed", user.id, JSON.stringify({ username: account.username, sessionsRevoked: true }));
     db.exec("COMMIT");
   } catch (cause) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw cause;
   }
   deleteCookie(event, "health_session", { path: "/" });
@@ -334,7 +342,7 @@ export function createLocalAccount(actor: RequestUser, body: Record<string, unkn
     `).run(createId("audit"), actor.id, userId, JSON.stringify({ username, displayName, temporaryPassword: true }));
     db.exec("COMMIT");
   } catch (cause) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw cause;
   }
   return { created: true, userId, username, displayName, temporaryPassword: defaultLocalAdminPassword, mustChangePassword: true };
@@ -378,7 +386,7 @@ export function resetLocalAccountPassword(actor: RequestUser, body: Record<strin
     `).run(createId("audit"), actor.id, account.userId, JSON.stringify({ username: account.username, sessionsRevoked: true, mustChangePassword: true }));
     db.exec("COMMIT");
   } catch (cause) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw cause;
   }
   return {
@@ -436,7 +444,7 @@ export function renameLocalAccount(actor: RequestUser, body: Record<string, unkn
     `).run(createId("audit"), actor.id, userId, JSON.stringify({ previousUsername: account.username, username }));
     db.exec("COMMIT");
   } catch (cause) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw cause;
   }
   return { renamed: true, userId, previousUsername: account.username, username, displayName: account.displayName };
@@ -461,7 +469,7 @@ export function updateLocalAccountDisplayName(actor: RequestUser, body: Record<s
     `).run(createId("audit"), actor.id, userId, JSON.stringify({ previousDisplayName: account.displayName, displayName, username: account.username }));
     db.exec("COMMIT");
   } catch (cause) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw cause;
   }
   return { updated: true, userId, username: account.username, previousDisplayName: account.displayName, displayName };
@@ -498,7 +506,7 @@ export function setLocalAccountDisabled(actor: RequestUser, body: Record<string,
     `).run(createId("audit"), actor.id, disabled ? "auth.local_account_disabled" : "auth.local_account_enabled", userId, JSON.stringify({ username: account.username, sessionsRevoked: disabled }));
     db.exec("COMMIT");
   } catch (cause) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw cause;
   }
   return { userId, username: account.username, displayName: account.displayName, disabled, changed: true };
@@ -548,7 +556,7 @@ export function deleteLocalAccount(actor: RequestUser, body: Record<string, unkn
     `).run(createId("audit"), actor.id, userId, JSON.stringify({ username: account.username, displayName: account.displayName, forced: force, exclusiveMemberCount: exclusiveMembers.length, exclusiveReportCount }));
     db.exec("COMMIT");
   } catch (cause) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw cause;
   }
   return { deleted: true, userId, username: account.username, displayName: account.displayName, exclusiveMemberCount: exclusiveMembers.length, exclusiveReportCount };

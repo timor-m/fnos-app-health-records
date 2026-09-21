@@ -1,4 +1,4 @@
-import { getDatabase } from "../database/client";
+import { rollbackAfterError, getDatabase } from "../database/client";
 import { getAppConfig } from '../utils/runtime-config';
 import { storageMigrationPaused } from '../utils/storage-migration-state';
 import { writeLog } from "../utils/logger";
@@ -164,7 +164,7 @@ export function runObservationDisplayFlagBackfillIfNeeded() {
     markObservationDisplayFlagVersion();
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return { previousVersion, recomputed: rows.length };

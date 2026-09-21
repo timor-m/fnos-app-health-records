@@ -39,18 +39,21 @@ test('explicit domain code survives H3 adapter wrapping and preserves metadata',
   const error = apiError(503, 'FILE_DECODE_FAILED', '文件内容与实际格式不匹配', { retryable: false });
   const wrapped = new HTTPError({ unhandled: true, cause: error });
   const response = await errorHandler(wrapped, apiEvent);
-  assert.deepEqual(await response.json(), { error: true, status: 503, code: 'FILE_DECODE_FAILED',
+  const body = await response.json();
+  assert.match(body.errorId, /^[a-f0-9-]{36}$/);
+  delete body.errorId;
+  assert.deepEqual(body, { error: true, status: 503, code: 'FILE_DECODE_FAILED',
     message: '文件内容与实际格式不匹配', meta: { retryable: false } });
 });
 
-test('unknown error is safe, including wrapped error, and never generates errorId', async () => {
+test('unknown error is safe, including wrapped error, and generates a correlation ID', async () => {
   for (const error of [new Error('something internal /private/report'), new HTTPError({ unhandled: true, cause: new Error('secret') })]) {
     const response = await errorHandler(error, apiEvent);
     assert.equal(response.status, 500);
     const body = await response.json();
     assert.equal(body.code, 'INTERNAL_ERROR');
     assert.match(body.message, /系统处理异常/);
-    assert.equal(body.errorId, undefined);
+    assert.match(body.errorId, /^[a-f0-9-]{36}$/);
     assert.doesNotMatch(JSON.stringify(body), /something internal|private|secret|stack/);
   }
 });
@@ -101,4 +104,33 @@ test('fail preserves old envelope and metadata with the same top-level code', ()
   assert.equal(body.status, 503);
   assert.deepEqual(body.meta?.maintenance, { supportedVersion: 1 });
   assert.equal(fail('旧提示').error.message, '旧提示');
+});
+
+test('error response and persisted diagnostics share one ID without recording request values or exception text', async () => {
+  const { mkdtempSync, readFileSync, rmSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const directory = mkdtempSync(join(tmpdir(), 'error-correlation-'));
+  process.env.LOG_DIR = directory;
+  try {
+    const event = { method: 'GET', url: new URL('http://localhost/api/reports/private-report?query=private-query'),
+      context: { matchedRoute: { route: '/api/reports/:id' } } } as H3Event;
+    const error = Object.assign(new Error('private-error-text'), { code: 'ERR_SQLITE_ERROR', errcode: 261 });
+    const first = await errorHandler(new HTTPError({ unhandled: true, cause: error }), event);
+    const body = await first.json();
+    const second = await errorHandler(error, event);
+    assert.notEqual((await second.json()).errorId, body.errorId);
+    const lines = readFileSync(join(directory, 'app.log'), 'utf8');
+    const record = JSON.parse(lines.trim().split('\n')[0]);
+    assert.equal(record.extra.errorId, body.errorId);
+    assert.equal(record.extra.route, '/api/reports/:id');
+    assert.equal(record.extra.nativeCode, 'ERR_SQLITE_ERROR');
+    assert.equal(record.extra.sqliteCode, 261);
+    assert.doesNotMatch(lines, /private-report|private-query|private-error-text/);
+    const { listSystemLogs } = await import('../services/system-logs.service');
+    const logs = await listSystemLogs({ id: 'test-admin', displayName: 'Test', authenticated: true, isGatewayAdmin: true, provider: 'development' });
+    const visible = logs.items.find(item => item.metadata.includes(`问题编号 ${body.errorId}`));
+    assert.equal(visible?.detail, 'GET /api/reports/:id');
+    assert.ok(visible?.metadata.includes('系统码 ERR_SQLITE_ERROR'));
+  } finally { delete process.env.LOG_DIR; rmSync(directory, { recursive: true, force: true }); }
 });

@@ -10,7 +10,7 @@ export class ApiRequestError extends Error {
   readonly errorId?: string;
   readonly meta?: Record<string, unknown>;
   constructor(message: string, options: { status: number; code?: string; errorId?: string; meta?: Record<string, unknown> }) {
-    super(options.code ? `${message}\n错误码：${options.code}` : message);
+    super([message, options.code && `错误码：${options.code}`, options.errorId && `问题编号：${options.errorId}`].filter(Boolean).join("\n"));
     this.name = "ApiRequestError";
     this.status = options.status;
     this.code = options.code;

@@ -1,5 +1,6 @@
 import { apiError, classifySystemError } from "../utils/api-error";
 import {
+  rollbackAfterError,
   checkpointDatabase,
   closeDatabase,
   getDatabase,
@@ -25,7 +26,6 @@ import {
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { isAdministrator, type RequestUser } from "../domain/request-user";
 import type {
@@ -1086,6 +1086,7 @@ export function listReports(
       : { memberId: memberIdOrFilters, cursor: cursorValue };
   const memberId = filters.memberId;
   if (memberId) assertMemberAccess(user, memberId);
+  if (!Number.isFinite(limit)) throw createError({ statusCode: 400, statusMessage: "分页数量无效" });
   const safeLimit = Math.min(50, Math.max(1, Math.round(limit)));
   const cursor = decodeCursor(filters.cursor);
   const cursorId = cursor?.id ?? null;
@@ -2915,7 +2916,7 @@ function purgeTrashedReport(
     );
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return { id: reportId, deleted: true };
@@ -3105,7 +3106,7 @@ export function recoverTimedOutDuplicateReportOperations(timeoutMinutes = 30) {
     }
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return {
@@ -3827,7 +3828,7 @@ export function mergeDuplicateReport(
     );
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return {
@@ -4040,7 +4041,7 @@ export function updateReportFields(
     );
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return getReportDetail(user, reportId);
@@ -4380,7 +4381,7 @@ export function updateReportPages(
     );
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return getReportDetail(user, reportId);
@@ -4464,7 +4465,7 @@ export function deleteReportPage(
     );
     db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw error;
   }
   return getReportDetail(user, reportId);
@@ -6291,6 +6292,7 @@ function createReportSuggestionReminder(user: RequestUser, reportId: string) {
 }
 
 export function listAuditLogs(user: RequestUser, limit = 80) {
+  if (!Number.isFinite(limit)) throw createError({ statusCode: 400, statusMessage: "分页数量无效" });
   if (!isAdministrator(user))
     throw createError({
       statusCode: 403,
@@ -6648,6 +6650,7 @@ export function listUserOperationAuditLogs(
       statusCode: 403,
       statusMessage: "仅管理员可查看用户操作日志",
     });
+  if (!Number.isFinite(limit)) throw createError({ statusCode: 400, statusMessage: "分页数量无效" });
   const safeLimit = Math.min(50, Math.max(1, Math.round(limit)));
   const cursor = decodeAuditCursor(cursorValue);
   const rows = getDatabase()
@@ -6843,7 +6846,7 @@ export function clearUserOperationAuditLogs(user: RequestUser) {
     db.exec("COMMIT");
     return { deletedCount };
   } catch (cause) {
-    db.exec("ROLLBACK");
+    rollbackAfterError(db);
     throw cause;
   }
 }
@@ -6858,6 +6861,7 @@ export function getAiAuditSummary(
       statusCode: 403,
       statusMessage: "仅管理员可查看 AI 审计",
     });
+  if (!Number.isFinite(limit)) throw createError({ statusCode: 400, statusMessage: "分页数量无效" });
   const safeLimit = Math.min(50, Math.max(1, Math.round(limit)));
   const cursor = decodeAuditCursor(cursorValue);
   const summary = getDatabase()
@@ -7883,7 +7887,7 @@ function validateBackupArchivePath(
     return { ...emptyBackupValidationResult(), errors: ["备份不存在"] };
   }
   const extractRoot = mkdtempSync(
-    join(tmpdir(), "health-records-backup-check-"),
+    join(backupStagingBaseDirectory(), ".check-"),
   );
   try {
     extractTarArchive(archivePath, extractRoot);
@@ -7996,7 +8000,7 @@ function restoreBackupFromArchive(
       statusMessage: "后台识别任务正在执行，请稍后再恢复备份",
     });
   }
-  const extractRoot = mkdtempSync(join(tmpdir(), "health-records-restore-"));
+  const extractRoot = mkdtempSync(join(backupStagingBaseDirectory(), ".restore-"));
   let shouldRestartRunner = false;
   const localCredential = captureRestoringAdministratorCredential(user);
 

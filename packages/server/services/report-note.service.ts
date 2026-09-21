@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, lstatSync, realpathSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { createError } from 'h3';
-import { getDatabase } from '../database/client';
+import { rollbackAfterError, getDatabase } from '../database/client';
 import type { RequestUser } from '../domain/request-user';
 import { createId } from '../utils/identifier';
 import { getAppConfig } from '../utils/runtime-config';
@@ -100,7 +100,7 @@ export async function stageReportNoteImage(user: RequestUser, reportId: string, 
     writeFileSync(join(directory, 'note.json'), JSON.stringify(stage), { mode: 0o600 });
     return { uploadToken: token, originalName: stage.originalName, mimeType: stage.mimeType, fileSize: stage.fileSize };
   } catch (error) {
-    rmSync(directory, { recursive: true, force: true });
+    try { rmSync(directory, { recursive: true, force: true }); } catch { /* Staging expiry will retry cleanup. */ }
     // Never propagate worker errors containing paths or image details to logs/UI.
     if ((error as { statusCode?: number }).statusCode) throw error;
     const classified = classifySystemError(error);
@@ -200,12 +200,14 @@ export function saveReportNote(user: RequestUser, reportId: string, input: Repor
     if (added) audit(user, reportId, id, 'report.note.asset.upload', added);
     if (removed.length) audit(user, reportId, id, 'report.note.asset.delete', removed.length);
     db.exec('COMMIT');
-    return { ...requireNote(reportId, id), assets: rows.map(publicAsset) };
   } catch (error) {
-    db.exec('ROLLBACK');
-    for (const path of copied) rmSync(path, { force: true });
+    rollbackAfterError(db);
+    for (const path of copied) {
+      try { rmSync(path, { force: true }); } catch { /* Orphan scanning will retry cleanup. */ }
+    }
     throw error;
   }
+  return { ...requireNote(reportId, id), assets: rows.map(publicAsset) };
 }
 export function deleteReportNote(user: RequestUser, reportId: string, noteId: string) {
   assertReportNoteAccess(user, reportId, true);
@@ -216,7 +218,7 @@ export function deleteReportNote(user: RequestUser, reportId: string, noteId: st
     db.prepare('UPDATE report_notes SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(noteId);
     audit(user, reportId, noteId, 'report.note.delete', assetRows(noteId).length);
     db.exec('COMMIT');
-  } catch (error) { db.exec('ROLLBACK'); throw error; }
+  } catch (error) { rollbackAfterError(db); throw error; }
   // Soft-deleted assets stay referenced until the report is permanently purged.
   return { deleted: true };
 }

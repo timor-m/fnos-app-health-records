@@ -1,43 +1,22 @@
-import {
-  createError,
-  defineEventHandler,
-  getHeader,
-  readMultipartFormData
-} from "h3";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { createError, defineEventHandler } from "h3";
 import { restoreUploadedBackup } from "../../../services/records.service";
 import { ok } from "../../../utils/api-response";
 import { getRequestUser } from "../../../utils/request-user";
+import { isAdministrator } from "../../../domain/request-user";
+import { withMultipartUpload } from "../../../utils/read-multipart-upload";
 
 const maxUploadedBackupBytes = 1024 * 1024 * 1024;
 
 export default defineEventHandler(async (event) => {
-  const contentLength = Number(getHeader(event, "content-length") || 0);
-  if (contentLength > maxUploadedBackupBytes) {
-    throw createError({
-      statusCode: 413,
-      statusMessage: `备份文件大小超过限制（最大 ${Math.round(maxUploadedBackupBytes / 1024 / 1024)}MB）`
-    });
-  }
-  const parts = await readMultipartFormData(event);
-  const backup = parts.find((part) => (part.name === "backup" || part.name === "file") && part.filename);
-  if (!backup?.filename) throw createError({ statusCode: 400, statusMessage: "请选择备份文件" });
-  if (!/\.tar\.gz$/i.test(backup.filename)) {
-    throw createError({ statusCode: 400, statusMessage: "仅支持 .tar.gz 完整应用备份" });
-  }
-
-  const tempDirectory = mkdtempSync(join(tmpdir(), "health-records-uploaded-backup-"));
-  const tempArchivePath = join(tempDirectory, basename(backup.filename));
-  try {
-    writeFileSync(tempArchivePath, backup.data, { mode: 0o600 });
-    chmodSync(tempArchivePath, 0o600);
-    return ok({
-      ...restoreUploadedBackup(getRequestUser(event), tempArchivePath),
-      filename: backup.filename
-    });
-  } finally {
-    rmSync(tempDirectory, { recursive: true, force: true });
-  }
+  const user = getRequestUser(event);
+  if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可恢复备份" });
+  return withMultipartUpload(event, {
+    requestBytes: maxUploadedBackupBytes, fileBytes: maxUploadedBackupBytes, files: 1,
+    sizeMessage: "备份文件大小超过限制（最大 1024MB）"
+  }, ({ files }) => {
+    const backup = files.find(part => (part.name === "backup" || part.name === "file") && part.filename);
+    if (!backup) throw createError({ statusCode: 400, statusMessage: "请选择备份文件" });
+    if (!/\.tar\.gz$/i.test(backup.filename)) throw createError({ statusCode: 400, statusMessage: "仅支持 .tar.gz 完整应用备份" });
+    return ok({ ...restoreUploadedBackup(user, backup.path), filename: backup.filename });
+  });
 });

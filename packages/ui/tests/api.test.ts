@@ -9,7 +9,7 @@ describe('API error compatibility', () => {
       expect(() => parseApiPayload(400, false, JSON.stringify(payload))).toThrow('中文错误');
     });
   }
-  it('keeps status, code, meta, hidden errorId and displays Chinese plus code', () => {
+  it('keeps status, code, meta, errorId and displays Chinese plus code', () => {
     for (const nested of [false, true]) {
       const fields = { message: '档案数据库当前繁忙，请稍后重试', code: 'DATABASE_UNAVAILABLE', errorId: 'future-id' };
       try {
@@ -18,8 +18,7 @@ describe('API error compatibility', () => {
       } catch (error) {
         expect(error).toBeInstanceOf(ApiRequestError);
         expect(error).toMatchObject({ status: 503, code: fields.code, errorId: 'future-id', meta: { retryable: true } });
-        expect((error as Error).message).toBe(`${fields.message}\n错误码：DATABASE_UNAVAILABLE`);
-        expect((error as Error).message).not.toContain('future-id');
+        expect((error as Error).message).toBe(`${fields.message}\n错误码：DATABASE_UNAVAILABLE\n问题编号：future-id`);
       }
     }
   });
