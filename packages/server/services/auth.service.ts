@@ -158,7 +158,7 @@ export function login(event: H3Event, body: Record<string, unknown>) {
   if (getAppConfig().authMode !== "local") {
     throw createError({ statusCode: 410, statusMessage: "当前部署使用 fnOS 账号体系，不提供独立登录" });
   }
-  if (localAuthSetupRequired()) throw createError({ statusCode: 503, statusMessage: "本地管理员尚未初始化，请重启应用" });
+  if (localAuthSetupRequired()) throw createError({ statusCode: 503, data: { code: "AUTH_REQUIRED" }, statusMessage: "本地管理员尚未初始化，请重启应用" });
   const username = requiredText(body.username, "用户名");
   const password = requiredText(body.password, "密码");
   const ip = getRequestIP(event, { xForwardedFor: getAppConfig().trustProxy }) || "unknown";

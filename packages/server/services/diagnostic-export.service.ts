@@ -251,9 +251,6 @@ export function createDiagnosticBundle(user: RequestUser) {
   } catch (error) {
     rmSync(temporaryRoot, { recursive: true, force: true });
     if (error && typeof error === "object" && "status" in error) throw error;
-    throw createError({
-      statusCode: 500,
-      statusMessage: `诊断包生成失败：${error instanceof Error ? error.message : "未知错误"}`
-    });
+    throw error;
   }
 }

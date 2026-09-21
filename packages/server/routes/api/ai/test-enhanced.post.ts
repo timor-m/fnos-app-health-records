@@ -11,6 +11,8 @@ type TestStep = {
   name: string;
   status: "pending" | "success" | "failed";
   message: string;
+  code?: "AI_UPSTREAM_ERROR";
+  errorId?: string;
   elapsedMs?: number;
 };
 
@@ -53,20 +55,20 @@ export default defineEventHandler(async (event) => {
   const modelTimeoutMs = provider === "ollama" ? 120_000 : 15_000;
 
   if (isMiniMaxM2Model(visionModel) && body.visionEnabled === true) {
-    throw createError({ statusCode: 400, statusMessage: "MiniMax M2 系列当前不支持视觉增强，请关闭视觉增强" });
+    throw createError({ statusCode: 400, data: { code: "AI_CONFIG_INVALID" }, statusMessage: "MiniMax M2 系列当前不支持视觉增强，请关闭视觉增强" });
   }
 
   // 验证必填项
   if (aiProviderCatalog[provider].apiKeyRequired !== false && !apiKey) {
     throw createError({
-      statusCode: 400,
+      statusCode: 400, data: { code: "AI_CONFIG_INVALID" },
       statusMessage: `请先配置 ${aiProviderCatalog[provider].label} API Key`
     });
   }
 
   if (!textModel) {
     throw createError({
-      statusCode: 400,
+      statusCode: 400, data: { code: "AI_CONFIG_INVALID" },
       statusMessage: "请先配置文本模型"
     });
   }
@@ -88,8 +90,7 @@ export default defineEventHandler(async (event) => {
     });
 
     if (!response.ok) {
-      const detail = await response.text().catch(() => "");
-      throw new Error(`HTTP ${response.status}: ${detail.slice(0, 200)}`);
+      throw new Error("AI 服务验证失败");
     }
 
     steps[steps.length - 1] = {
@@ -106,7 +107,8 @@ export default defineEventHandler(async (event) => {
     steps[steps.length - 1] = {
       name: serviceStepName,
       status: "failed",
-      message: timedOut ? "连接超时" : `验证失败：${error.message}`,
+      code: "AI_UPSTREAM_ERROR",
+      message: timedOut ? "连接超时" : "验证失败，请检查 AI 服务配置和网络",
       elapsedMs: Date.now() - step1Start
     };
 
@@ -161,12 +163,13 @@ export default defineEventHandler(async (event) => {
         ? "模型启动或响应超时，请先在 Ollama 中运行该模型并检查设备内存"
         : "连接超时，请检查网络";
     } else {
-      message = `测试失败：${error.message}`;
+      message = "测试失败，请检查 AI 服务状态和网络";
     }
 
     steps[steps.length - 1] = {
       name: "测试文本模型",
       status: "failed",
+      code: "AI_UPSTREAM_ERROR",
       message,
       elapsedMs: Date.now() - step2Start
     };
@@ -227,12 +230,13 @@ export default defineEventHandler(async (event) => {
       } else if (timedOut) {
         message = "连接超时，请检查网络";
       } else {
-        message = `测试失败：${error.message}`;
+        message = "测试失败，请检查 AI 服务状态和网络";
       }
 
       steps[steps.length - 1] = {
         name: "测试视觉模型",
         status: "failed",
+      code: "AI_UPSTREAM_ERROR",
         message,
         elapsedMs: Date.now() - step3Start
       };
@@ -291,7 +295,8 @@ export default defineEventHandler(async (event) => {
       steps[steps.length - 1] = {
         name: "校验多模态能力",
         status: "failed",
-        message: `探测失败：${error.message}`,
+      code: "AI_UPSTREAM_ERROR",
+        message: "探测失败，请检查 AI 服务状态和网络",
         elapsedMs: Date.now() - step4Start
       };
     }

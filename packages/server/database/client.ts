@@ -308,12 +308,12 @@ export function getDatabase() {
   const config = getAppConfig();
   if (config.storageError) {
     closeDatabase();
-    throw createError({ statusCode: 503, statusMessage: config.storageError });
+    throw createError({ statusCode: 503, data: { code: "STORAGE_UNAVAILABLE" }, statusMessage: config.storageError });
   }
   const requestedPath = resolve(config.storageDir, 'db', 'health-records.sqlite');
   if (database) {
     if (openedDatabasePath !== requestedPath) {
-      throw createError({ statusCode: 503, statusMessage: '档案目录已变化，数据库尚未完成安全切换，已暂停访问。请通过迁移流程关闭旧连接后重新打开。' });
+      throw createError({ statusCode: 503, data: { code: "STORAGE_UNAVAILABLE" }, statusMessage: '档案目录已变化，数据库尚未完成安全切换，已暂停访问。请通过迁移流程关闭旧连接后重新打开。' });
     }
     return database;
   }

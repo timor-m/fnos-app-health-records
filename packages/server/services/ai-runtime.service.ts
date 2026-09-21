@@ -113,7 +113,7 @@ export async function executeAiChatCompletion(
       requestBody = fallbackBody;
       response = await send(requestBody);
     } else {
-      throw Object.assign(new Error(`AI 服务返回 ${response.status}${detail ? `：${detail}` : ""}`), {
+      throw Object.assign(new Error("AI 服务请求失败，请检查配置和服务状态"), {
         code: `AI_HTTP_${response.status}`,
         upstreamStatus: response.status,
         upstreamDetail: detail,
@@ -130,7 +130,7 @@ export async function executeAiChatCompletion(
       const { response_format: _unsupported, ...fallbackBody } = requestBody;
       response = await send(fallbackBody);
     } else {
-      throw Object.assign(new Error(`AI 服务返回 ${response.status}${detail ? `：${detail}` : ""}`), {
+      throw Object.assign(new Error("AI 服务请求失败，请检查配置和服务状态"), {
         code: `AI_HTTP_${response.status}`,
         upstreamStatus: response.status,
         upstreamDetail: detail,
@@ -143,7 +143,7 @@ export async function executeAiChatCompletion(
 
   if (!response.ok) {
     const detail = await upstreamError(response);
-    throw Object.assign(new Error(`AI 服务返回 ${response.status}${detail ? `：${detail}` : ""}`), {
+    throw Object.assign(new Error(response.status === 429 ? "AI 服务请求受限，请检查调用频率、额度或余额" : "AI 服务请求失败，请检查配置和服务状态"), {
       code: `AI_HTTP_${response.status}`,
       upstreamStatus: response.status,
       upstreamDetail: detail,

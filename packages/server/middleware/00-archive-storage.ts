@@ -1,3 +1,4 @@
+import { classifySystemError } from "../utils/api-error";
 import { defineEventHandler, readBody, setResponseHeader, setResponseStatus } from 'h3';
 import { gatewayUser } from '../utils/request-user';
 import { getAppConfig } from '../utils/runtime-config';
@@ -19,13 +20,13 @@ export default defineEventHandler(async event => {
   const control = path.match(/\/api\/storage(?:\/(preview|migrate|resume|cancel|cleanup-preview|cleanup))?$/);
   if (control) {
     setResponseHeader(event, 'cache-control', 'no-store');
-    if (!administrator || !user) { setResponseStatus(event, 403); return fail('仅管理员可操作档案存储'); }
+    if (!administrator || !user) { setResponseStatus(event, 403); return fail('仅管理员可操作档案存储', { status: 403 }); }
     try {
       if (!control[1] && event.method === 'GET') return ok(await getArchiveStorageStatus(user));
       // Non-simple header prevents browser form/CSRF requests. No CORS preflight is granted here.
       if (event.method !== 'POST' || event.req.headers.get('x-storage-operation') !== '1'
         || event.req.headers.get('sec-fetch-site') === 'cross-site') {
-        setResponseStatus(event, 403); return fail('请从应用存储设置发起操作');
+        setResponseStatus(event, 403); return fail('请从应用存储设置发起操作', { status: 403, code: 'REQUEST_BLOCKED' });
       }
       const action = control[1];
       if (action === 'resume') return ok(resumeStorageMigration());
@@ -43,16 +44,21 @@ export default defineEventHandler(async event => {
       }
       if (action === 'preview') return ok(await previewStorageMigration(body.rootId));
       if (action === 'migrate') return ok(await startStorageMigration(body.rootId));
-      setResponseStatus(event, 404); return fail('操作不存在');
+      setResponseStatus(event, 404); return fail('操作不存在', { status: 404 });
     } catch (error) {
+      const classified = classifySystemError(error);
+      if (classified) {
+        setResponseStatus(event, classified.status);
+        return fail(classified.message, { status: classified.status, code: classified.code });
+      }
       setResponseStatus(event, 409);
-      return fail(error instanceof Error && error.name === 'StorageMigrationError' ? error.message : '存储操作未完成，请检查目录授权、剩余空间和迁移状态。');
+      return fail(error instanceof Error && error.name === 'StorageMigrationError' ? error.message : '存储操作未完成，请检查目录授权、剩余空间和迁移状态。', { status: 409, code: 'STORAGE_UNAVAILABLE' });
     }
   }
   if (!(storageMigrationPaused() || config.storageError)) return;
   setResponseHeader(event, 'cache-control', 'no-store');
   if (event.method !== 'GET' || path.includes('/api/')) {
-    setResponseStatus(event, 503); return fail('档案维护中，业务访问已暂停');
+    setResponseStatus(event, 503); return fail('档案维护中，业务访问已暂停', { status: 503, code: 'STORAGE_UNAVAILABLE' });
   }
   setResponseHeader(event, 'content-type', 'text/html; charset=utf-8');
   if (!administrator) { setResponseStatus(event, 503); return '<!doctype html><meta charset="utf-8"><p>档案维护中，请稍后再试或联系管理员。</p>'; }

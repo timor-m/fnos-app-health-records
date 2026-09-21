@@ -1,3 +1,4 @@
+import { apiError, classifySystemError } from "../utils/api-error";
 import {
   checkpointDatabase,
   closeDatabase,
@@ -18,7 +19,6 @@ import {
   readdirSync,
   renameSync,
   rmSync,
-  statfsSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -2332,7 +2332,7 @@ export async function getReportPagePreviewFile(
       statusMessage: "报告原件损坏或格式不匹配，无法生成预览",
     });
   }
-  throw createError({ statusCode: 503, statusMessage: "当前页预览图尚未生成" });
+  throw createError({ statusCode: 503, data: { code: "PROCESSING_NOT_READY" }, statusMessage: "当前页预览图尚未生成" });
 }
 
 export function listReportOcrText(user: RequestUser, reportId: string) {
@@ -7275,45 +7275,10 @@ function createBackupStagingDirectory() {
   return mkdtempSync(join(base, ".staging-"));
 }
 
-function backupStorageFreeText() {
-  try {
-    const stats = statfsSync(getAppConfig().storageDir);
-    const freeBytes = stats.bavail * stats.bsize;
-    return freeBytes >= 1024 * 1024 * 1024
-      ? `约 ${(freeBytes / 1024 / 1024 / 1024).toFixed(1)} GB`
-      : `约 ${Math.round(freeBytes / 1024 / 1024)} MB`;
-  } catch {
-    return "未知";
-  }
-}
-
-/*
- * 备份失败时给出可定位的明细：失败步骤、系统错误码、存储剩余空间；
- * 空间不足和权限问题直接返回用户可读的中文提示，其余错误保留 cause 供 app.log 记录完整堆栈。
- */
-function asBackupCreateError(step: string, cause: unknown): Error {
-  const original = cause instanceof Error ? cause : new Error(String(cause));
-  const code = (original as NodeJS.ErrnoException).code;
-  const freeText = backupStorageFreeText();
-  if (code === "ENOSPC" || code === "EDQUOT") {
-    return createError({
-      statusCode: 507,
-      // HTTPError 的 message 优先取 cause.message，需显式设置 message 才能让用户看到中文明细
-      message: `创建备份失败：${step}时存储空间不足（${code}：${original.message}；存储目录剩余${freeText}）。请清理磁盘或删除旧备份后重试。`,
-      cause: original
-    });
-  }
-  if (code === "EACCES" || code === "EPERM" || code === "EROFS") {
-    return createError({
-      statusCode: 500,
-      message: `创建备份失败：${step}时存储目录不可写（${code}：${original.message}；存储目录剩余${freeText}），请检查数据目录权限后重试。`,
-      cause: original
-    });
-  }
-  return new Error(
-    `创建备份失败：${step}（${code ? `${code}，` : ""}${original.message}；存储目录剩余${freeText}）`,
-    { cause: original }
-  );
+function asBackupCreateError(cause: unknown): Error {
+  const classified = classifySystemError(cause);
+  if (classified) return apiError(classified.status, classified.code, classified.message);
+  return new Error("创建备份失败", { cause });
 }
 
 function assertSafeBackupId(id: string) {
@@ -7485,26 +7450,23 @@ export function createFullBackup(
   const filename = createBackupArchiveFilename(config.appName, createdDate, id);
   const archivePath = join(backupDirectory(), filename);
   const metadataPath = backupMetadataPath(id);
-  let step = "创建备份暂存目录";
+
   let stagingRoot: string;
   try {
     stagingRoot = createBackupStagingDirectory();
   } catch (cause) {
-    throw asBackupCreateError(step, cause);
+    throw asBackupCreateError(cause);
   }
 
   try {
-    step = "快照数据库";
     mkdirSync(join(stagingRoot, "db"), { recursive: true });
     const databaseStatus = getDatabaseStatus();
     const counts = countBackupSourceRows();
     copyDatabaseSnapshot(join(stagingRoot, "db", "health-records.sqlite"));
     for (const directoryName of backupIncludedDirectories) {
-      step = `复制${directoryName}目录`;
       copyDirectoryForBackup(stagingRoot, directoryName);
     }
 
-    step = "计算文件校验清单";
     const manifestFiles = createBackupFileManifest(stagingRoot);
     const manifest: BackupManifest = {
       formatVersion: backupFormatVersion,
@@ -7525,13 +7487,13 @@ export function createFullBackup(
       notes:
         "完整备份包含健康档案数据库、报告原件、分页/缩略图、运行配置和 AI 加密密钥，请仅在可信设备保存。",
     };
-    step = "写入备份清单";
+
     writeFileSync(
       join(stagingRoot, "manifest.json"),
       JSON.stringify(manifest, null, 2),
       { mode: 0o600 },
     );
-    step = "打包压缩备份文件";
+
     createTarArchive(stagingRoot, archivePath);
 
     const metadata: CreatedBackup = {
@@ -7549,12 +7511,11 @@ export function createFullBackup(
       fileCount: manifestFiles.length,
       path: archivePath,
     };
-    step = "写入备份元数据";
+
     writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), {
       mode: 0o600,
     });
 
-    step = "记录备份审计日志";
     getDatabase()
       .prepare(
         `
@@ -7581,7 +7542,7 @@ export function createFullBackup(
     } catch {
       // 清理失败不影响错误上报
     }
-    throw asBackupCreateError(step, cause);
+    throw asBackupCreateError(cause);
   } finally {
     rmSync(stagingRoot, { recursive: true, force: true });
   }

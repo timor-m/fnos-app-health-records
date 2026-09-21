@@ -19,28 +19,36 @@ export function cleanupExpiredStagedUploads(now = Date.now()) {
   }
 }
 function stageDirectory(user: RequestUser, key: string) {
-  if (typeof key !== 'string' || !/^[a-zA-Z0-9_-]{16,100}$/.test(key)) throw createError({ statusCode: 400, statusMessage: '上传请求编号无效' });
+  if (typeof key !== 'string' || !/^[a-zA-Z0-9_-]{16,100}$/.test(key)) throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: '上传请求编号无效' });
   return join(getAppConfig().storageDir, 'upload-staging', createHash('sha256').update(`${user.id}\0${key}`).digest('hex'));
 }
 function readStage(user: RequestUser, key: string) {
   const directory = stageDirectory(user, key);
   if (!existsSync(join(directory, 'manifest.json'))) throw createError({ statusCode: 404, statusMessage: '上传暂存不存在，请重新初始化' });
-  const manifest = JSON.parse(readFileSync(join(directory, 'manifest.json'), 'utf8')) as StagedManifest;
+  const text = readFileSync(join(directory, 'manifest.json'), 'utf8');
+  let manifest: StagedManifest;
+  try {
+    manifest = JSON.parse(text);
+    if (!manifest || typeof manifest.memberId !== 'string' || !Array.isArray(manifest.files)) throw new Error();
+  } catch {
+    throw createError({ statusCode: 409, data: { code: 'UPLOAD_CONFLICT' }, statusMessage: '上传暂存信息不完整，请重新上传' });
+  }
   assertMemberManage(user, manifest.memberId);
   return { directory, manifest };
 }
 export function startStagedUpload(user: RequestUser, key: string, input: StagedManifest) {
-  if (!input || typeof input.memberId !== 'string') throw createError({ statusCode: 400, statusMessage: '请选择报告所属成员' });
+  if (!input || typeof input.memberId !== 'string') throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: '请选择报告所属成员' });
   assertMemberManage(user, input.memberId);
   cleanupExpiredStagedUploads();
-  if (!Array.isArray(input.files) || !input.files.length || input.files.length > 1000) throw createError({ statusCode: 400, statusMessage: '一次导入请选择 1 至 1000 个文件' });
+  if (!Array.isArray(input.files) || !input.files.length || input.files.length > 1000) throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: '一次导入请选择 1 至 1000 个文件' });
   let total = 0;
   const files = input.files.map(file => {
-    if (!file || typeof file.originalName !== 'string' || !file.originalName.trim() || file.originalName.length > 255 || !Number.isInteger(file.size) || file.size <= 0 || file.size > 40 * 1024 * 1024 || ![0, 90, 180, 270].includes(file.rotation)) throw createError({ statusCode: 400, statusMessage: '文件清单无效，单文件上限 40MB' });
+    if (file?.size > 40 * 1024 * 1024) throw createError({ statusCode: 413, data: { code: "FILE_TOO_LARGE" }, statusMessage: '单文件上限 40 MB' });
+    if (!file || typeof file.originalName !== 'string' || !file.originalName.trim() || file.originalName.length > 255 || !Number.isInteger(file.size) || file.size <= 0 || file.size > 40 * 1024 * 1024 || ![0, 90, 180, 270].includes(file.rotation)) throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: '文件清单无效，单文件上限 40MB' });
     total += file.size;
     return { originalName: file.originalName, size: file.size, rotation: file.rotation };
   });
-  if (total > 2 * 1024 * 1024 * 1024) throw createError({ statusCode: 413, statusMessage: '一次导入总大小不能超过 2GB' });
+  if (total > 2 * 1024 * 1024 * 1024) throw createError({ statusCode: 413, data: { code: "FILE_TOO_LARGE" }, statusMessage: '一次导入总大小不能超过 2GB' });
   const manifest = { memberId: input.memberId, files };
   const directory = stageDirectory(user, key);
   mkdirSync(directory, { recursive: true });
@@ -48,7 +56,7 @@ export function startStagedUpload(user: RequestUser, key: string, input: StagedM
   utimesSync(directory, now, now);
   const path = join(directory, 'manifest.json');
   if (existsSync(path)) {
-    if (readFileSync(path, 'utf8') !== JSON.stringify(manifest)) throw createError({ statusCode: 409, statusMessage: '重试文件清单发生变化，请新建上传任务' });
+    if (readFileSync(path, 'utf8') !== JSON.stringify(manifest)) throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: '重试文件清单发生变化，请新建上传任务' });
   } else {
     writeFileSync(join(directory, 'manifest.tmp'), JSON.stringify(manifest), { mode: 0o600 });
     renameSync(join(directory, 'manifest.tmp'), path);
@@ -62,11 +70,12 @@ export function startStagedUpload(user: RequestUser, key: string, input: StagedM
 export function storeStagedFile(user: RequestUser, key: string, index: number, data: Uint8Array) {
   const { directory, manifest } = readStage(user, key);
   const file = Number.isInteger(index) && index >= 0 ? manifest.files[index] : undefined;
-  if (!file || data.byteLength !== file.size || !detectUploadType(data)) throw createError({ statusCode: 400, statusMessage: '文件大小或实际格式与上传要求不符' });
+  if (!file || data.byteLength !== file.size) throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: '文件大小或实际格式与上传要求不符' });
+  if (!detectUploadType(data)) throw createError({ statusCode: 415, data: { code: "FILE_FORMAT_UNSUPPORTED" }, statusMessage: '文件实际格式不受支持' });
   const path = join(directory, `${index}.bin`);
   const hash = (data: Uint8Array) => createHash('sha256').update(data).digest('hex');
   if (existsSync(path)) {
-    if (hash(readFileSync(path)) !== hash(data)) throw createError({ statusCode: 409, statusMessage: '重试文件内容发生变化' });
+    if (hash(readFileSync(path)) !== hash(data)) throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: '重试文件内容发生变化' });
   } else {
     writeFileSync(`${path}.tmp`, data, { mode: 0o600 });
     renameSync(`${path}.tmp`, path);
@@ -77,7 +86,7 @@ export function completeStagedUpload(user: RequestUser, key: string) {
   const { directory, manifest } = readStage(user, key);
   const files = manifest.files.map((file, index) => {
     const path = join(directory, `${index}.bin`);
-    if (!existsSync(path) || statSync(path).size !== file.size) throw createError({ statusCode: 409, statusMessage: '报告文件尚未传齐，请继续上传后再识别' });
+    if (!existsSync(path) || statSync(path).size !== file.size) throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: '报告文件尚未传齐，请继续上传后再识别' });
     return { originalName: file.originalName, rotation: file.rotation, sourcePath: path };
   });
   const result = createUploadFromStagedFiles(user, manifest.memberId, files, key);

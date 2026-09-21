@@ -348,14 +348,14 @@ async function testEnhanced() {
   try {
     const result = await request<{
       provider: string;
-      steps: Array<{ name: string; status: string; message: string; elapsedMs?: number }>;
+      steps: Array<{ name: string; status: string; message: string; code?: string; errorId?: string; elapsedMs?: number }>;
       overallSuccess: boolean;
       totalElapsedMs: number;
     }>("ai/test-enhanced", {
       method: "POST",
       body: JSON.stringify(editorBody())
     });
-    testSteps.value = result.steps;
+    testSteps.value = result.steps.map(step => ({ ...step, message: step.code ? `${step.message}\n错误码：${step.code}` : step.message }));
     editorMessage.value = result.overallSuccess
       ? `全部测试通过，总耗时 ${result.totalElapsedMs} ms`
       : `部分测试失败，请查看详细结果`;

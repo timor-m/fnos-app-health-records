@@ -1,3 +1,4 @@
+import { classifySystemError } from "../utils/api-error";
 import { createHash } from "node:crypto";
 import {
   closeSync, constants, fstatSync, mkdirSync, openSync, readSync, rmSync, statSync, writeFileSync, writeSync
@@ -74,29 +75,29 @@ function cleanOriginalName(value: string, index: number) {
 function cleanRotation(value: number | undefined) {
   const rotation = Number(value || 0);
   if (![0, 90, 180, 270].includes(rotation)) {
-    throw createError({ statusCode: 400, statusMessage: "页面旋转角度无效" });
+    throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: "页面旋转角度无效" });
   }
   return rotation;
 }
 
 function validateFiles(files: UploadInputFile[]) {
-  if (!files.length) throw createError({ statusCode: 400, statusMessage: "请选择至少一个报告文件" });
+  if (!files.length) throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: "请选择至少一个报告文件" });
   if (files.length > maxFileCount) {
-    throw createError({ statusCode: 413, statusMessage: `一次最多上传 ${maxFileCount} 个文件` });
+    throw createError({ statusCode: 413, data: { code: "FILE_TOO_LARGE" }, statusMessage: `一次最多上传 ${maxFileCount} 个文件` });
   }
   let totalBytes = 0;
   return files.map((file, index) => {
-    if (!file.data.byteLength) throw createError({ statusCode: 400, statusMessage: `第 ${index + 1} 个文件为空` });
+    if (!file.data.byteLength) throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: `第 ${index + 1} 个文件为空` });
     if (file.data.byteLength > maxFileBytes) {
-      throw createError({ statusCode: 413, statusMessage: `单个文件不能超过 ${maxFileBytes / 1024 / 1024} MB` });
+      throw createError({ statusCode: 413, data: { code: "FILE_TOO_LARGE" }, statusMessage: `单个文件不能超过 ${maxFileBytes / 1024 / 1024} MB` });
     }
     totalBytes += file.data.byteLength;
     if (totalBytes > maxTotalBytes) {
-      throw createError({ statusCode: 413, statusMessage: `单次上传不能超过 ${maxTotalBytes / 1024 / 1024} MB` });
+      throw createError({ statusCode: 413, data: { code: "FILE_TOO_LARGE" }, statusMessage: `单次上传不能超过 ${maxTotalBytes / 1024 / 1024} MB` });
     }
     const detected = detectUploadType(file.data);
     if (!detected) {
-      throw createError({ statusCode: 415, statusMessage: `不支持文件“${cleanOriginalName(file.originalName, index)}”的实际格式` });
+      throw createError({ statusCode: 415, data: { code: "FILE_FORMAT_UNSUPPORTED" }, statusMessage: `不支持文件“${cleanOriginalName(file.originalName, index)}”的实际格式` });
     }
     return {
       ...file,
@@ -119,35 +120,37 @@ function readFileSignature(path: string) {
 }
 
 function validateLocalFiles(files: LocalUploadInputFile[]): ValidatedUploadFile[] {
-  if (!files.length) throw createError({ statusCode: 400, statusMessage: "请选择至少一个报告文件" });
+  if (!files.length) throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: "请选择至少一个报告文件" });
   if (files.length > maxFileCount) {
-    throw createError({ statusCode: 413, statusMessage: `一次最多上传 ${maxFileCount} 个文件` });
+    throw createError({ statusCode: 413, data: { code: "FILE_TOO_LARGE" }, statusMessage: `一次最多上传 ${maxFileCount} 个文件` });
   }
   let totalBytes = 0;
   return files.map((file, index) => {
     let stats: ReturnType<typeof statSync>;
     try {
       stats = statSync(file.sourcePath);
-    } catch {
-      throw createError({ statusCode: 409, statusMessage: `源文件“${cleanOriginalName(file.originalName, index)}”已不可读取，请重新选择` });
+    } catch (cause) {
+      if (classifySystemError(cause)) throw cause;
+      throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: `源文件“${cleanOriginalName(file.originalName, index)}”已不可读取，请重新选择` });
     }
-    if (!stats.isFile()) throw createError({ statusCode: 400, statusMessage: `“${cleanOriginalName(file.originalName, index)}”不是普通文件` });
-    if (!stats.size) throw createError({ statusCode: 400, statusMessage: `第 ${index + 1} 个文件为空` });
+    if (!stats.isFile()) throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: `“${cleanOriginalName(file.originalName, index)}”不是普通文件` });
+    if (!stats.size) throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: `第 ${index + 1} 个文件为空` });
     if (stats.size > maxFileBytes) {
-      throw createError({ statusCode: 413, statusMessage: `单个文件不能超过 ${maxFileBytes / 1024 / 1024} MB` });
+      throw createError({ statusCode: 413, data: { code: "FILE_TOO_LARGE" }, statusMessage: `单个文件不能超过 ${maxFileBytes / 1024 / 1024} MB` });
     }
     totalBytes += stats.size;
     if (totalBytes > maxTotalBytes) {
-      throw createError({ statusCode: 413, statusMessage: `单次上传不能超过 ${maxTotalBytes / 1024 / 1024} MB` });
+      throw createError({ statusCode: 413, data: { code: "FILE_TOO_LARGE" }, statusMessage: `单次上传不能超过 ${maxTotalBytes / 1024 / 1024} MB` });
     }
     let detected: DetectedType | null;
     try {
       detected = detectUploadType(readFileSignature(file.sourcePath));
-    } catch {
-      throw createError({ statusCode: 409, statusMessage: `源文件“${cleanOriginalName(file.originalName, index)}”已不可读取，请重新选择` });
+    } catch (cause) {
+      if (classifySystemError(cause)) throw cause;
+      throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: `源文件“${cleanOriginalName(file.originalName, index)}”已不可读取，请重新选择` });
     }
     if (!detected) {
-      throw createError({ statusCode: 415, statusMessage: `不支持文件“${cleanOriginalName(file.originalName, index)}”的实际格式` });
+      throw createError({ statusCode: 415, data: { code: "FILE_FORMAT_UNSUPPORTED" }, statusMessage: `不支持文件“${cleanOriginalName(file.originalName, index)}”的实际格式` });
     }
     return {
       originalName: cleanOriginalName(file.originalName, index),
@@ -171,7 +174,7 @@ function persistValidatedFile(file: ValidatedUploadFile, destination: string) {
   try {
     const sourceStats = fstatSync(source);
     if (!sourceStats.isFile() || sourceStats.size !== file.fileSize) {
-      throw createError({ statusCode: 409, statusMessage: `源文件“${file.originalName}”已发生变化，请重新选择` });
+      throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: `源文件“${file.originalName}”已发生变化，请重新选择` });
     }
     target = openSync(destination, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
     const hash = createHash("sha256");
@@ -182,14 +185,14 @@ function persistValidatedFile(file: ValidatedUploadFile, destination: string) {
       if (!bytesRead) break;
       copied += bytesRead;
       if (copied > maxFileBytes || copied > file.fileSize) {
-        throw createError({ statusCode: 409, statusMessage: `源文件“${file.originalName}”已发生变化，请重新选择` });
+        throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: `源文件“${file.originalName}”已发生变化，请重新选择` });
       }
       hash.update(chunk.subarray(0, bytesRead));
       let written = 0;
       while (written < bytesRead) written += writeSync(target, chunk, written, bytesRead - written);
     }
     if (copied !== file.fileSize) {
-      throw createError({ statusCode: 409, statusMessage: `源文件“${file.originalName}”已发生变化，请重新选择` });
+      throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: `源文件“${file.originalName}”已发生变化，请重新选择` });
     }
     return hash.digest("hex");
   } catch (error) {
@@ -210,7 +213,7 @@ function createValidatedUpload(
 ) {
   assertMemberManage(user, memberId);
   if (requestKey !== undefined && (typeof requestKey !== 'string' || !/^[a-zA-Z0-9_-]{16,100}$/.test(requestKey))) {
-    throw createError({ statusCode: 400, statusMessage: "上传请求编号无效" });
+    throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: "上传请求编号无效" });
   }
   const reportTitle = "待识别报告";
   const reportId = createId("report");
@@ -243,8 +246,8 @@ function createValidatedUpload(
       const previous = db.prepare('SELECT member_id, content_hash, report_id, response_json FROM upload_receipts WHERE user_id = ? AND request_key = ?').get(user.id, requestKey) as
         { member_id: string; content_hash: string; report_id: string | null; response_json: string } | undefined;
       if (previous) {
-        if (previous.member_id !== memberId || previous.content_hash !== contentHash) throw createError({ statusCode: 409, statusMessage: '重试内容与原上传不一致，请重新创建上传任务' });
-        if (!previous.report_id) throw createError({ statusCode: 409, statusMessage: '该上传对应的报告已删除，请重新创建上传任务' });
+        if (previous.member_id !== memberId || previous.content_hash !== contentHash) throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: '重试内容与原上传不一致，请重新创建上传任务' });
+        if (!previous.report_id) throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: '该上传对应的报告已删除，请重新创建上传任务' });
         db.exec('COMMIT');
         rmSync(absoluteDirectory, { recursive: true, force: true });
         return JSON.parse(previous.response_json) as UploadCreated;
@@ -372,6 +375,8 @@ export function listProcessingJobs(user: RequestUser, reportId: string) {
     createdAt: string;
     jobSequence: number;
     ocrTextLength: number | null;
+    errorCode: string | null;
+    errorMessage: string | null;
   }>;
   const queuedEvents = db.prepare(`
     SELECT job_id AS jobId, detail_json AS detailJson
@@ -438,6 +443,8 @@ export function listProcessingJobs(user: RequestUser, reportId: string) {
   return jobs.map((job) => {
     const batch = jobBatches.get(job.id)!;
     const { deduplicationKey: _deduplicationKey, jobSequence: _jobSequence, ...visibleJob } = job;
+    const failure = classifySystemError({ code: job.errorCode });
+    if (failure && job.errorMessage) visibleJob.errorMessage = `${failure.message}\n错误码：${failure.code}`;
     if (job.jobType !== "ai_extract") return { ...visibleJob, ...batch };
     const jobUnits = byJob.get(job.id) || [];
     const jobAttempts = attemptsByJob.get(job.id) || [];

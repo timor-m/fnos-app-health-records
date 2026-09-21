@@ -13,20 +13,20 @@ export function assertLocalRequestOrigin(input: {
 }) {
   if (safeMethods.has(input.method.toUpperCase())) return;
   if (input.fetchSite === "cross-site") {
-    throw createError({ statusCode: 403, statusMessage: "跨站请求已拒绝" });
+    throw createError({ statusCode: 403, data: { code: "REQUEST_BLOCKED" }, statusMessage: "跨站请求已拒绝" });
   }
   if (!input.origin) return;
   let originHost = "";
   try {
     originHost = new URL(input.origin).host.toLowerCase();
   } catch {
-    throw createError({ statusCode: 403, statusMessage: "请求来源无效" });
+    throw createError({ statusCode: 403, data: { code: "REQUEST_BLOCKED" }, statusMessage: "请求来源无效" });
   }
   const expectedHost = String(
     input.trustProxy && input.forwardedHost ? input.forwardedHost.split(",", 1)[0] : input.host || ""
   ).trim().toLowerCase();
   if (!expectedHost || originHost !== expectedHost) {
-    throw createError({ statusCode: 403, statusMessage: "请求来源与当前服务不一致" });
+    throw createError({ statusCode: 403, data: { code: "REQUEST_BLOCKED" }, statusMessage: "请求来源与当前服务不一致" });
   }
 }
 

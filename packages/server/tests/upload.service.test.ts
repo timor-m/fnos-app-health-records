@@ -83,3 +83,28 @@ test("detects supported formats from file signatures", () => {
   assert.equal(detectUploadType(Buffer.from("%PDF-1.7\n"))?.mimeType, "application/pdf");
   assert.equal(detectUploadType(Buffer.from("plain text")), null);
 });
+
+test('processing failure display uses public decode code without changing persisted retry code', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'upload-error-display-'));
+  process.env.STORAGE_DIR = directory;
+  try {
+    const db = getDatabase();
+    db.prepare('INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 1)').run(manager.id, 'Test');
+    db.prepare("INSERT INTO health_members (id, display_name, relationship, created_by) VALUES ('error-member', 'Test', 'self', ?)").run(manager.id);
+    db.prepare("INSERT INTO member_permissions (member_id, user_id, permission, granted_by) VALUES ('error-member', ?, 'manager', ?)").run(manager.id, manager.id);
+    const upload = createUpload(manager, 'error-member', [{ originalName: 'test.png', data: pngBytes() }]);
+    db.prepare("UPDATE processing_jobs SET status = 'failed', error_code = 'IMAGE_DECODE_FAILED', error_message = 'private worker detail' WHERE report_id = ?").run(upload.reportId);
+    const { listProcessingJobs } = await import('../services/upload.service');
+    const jobs = listProcessingJobs(manager, upload.reportId);
+    assert.ok(jobs.length);
+    for (const job of jobs) {
+      assert.equal(job.errorCode, 'IMAGE_DECODE_FAILED');
+      assert.equal(job.errorMessage, '图片内容无法读取，可能已损坏或格式异常\n错误码：FILE_DECODE_FAILED');
+    }
+    assert.equal((db.prepare('SELECT error_code FROM processing_jobs WHERE report_id = ?').get(upload.reportId) as { error_code: string }).error_code, 'IMAGE_DECODE_FAILED');
+  } finally {
+    closeDatabaseForTests();
+    delete process.env.STORAGE_DIR;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

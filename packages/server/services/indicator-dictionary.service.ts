@@ -1048,8 +1048,10 @@ async function fetchRemoteBundle(
     return bundledRemoteBundle(failures);
   }
   throw createError({
-    statusCode: 502,
-    statusMessage: `所有远程指标字典源均不可用（${failures.join("；")}）`,
+    statusCode: 502, data: { code: "REMOTE_SERVICE_ERROR" },
+    statusMessage: failures.some(message => message.endsWith("SHA-256 校验失败"))
+      ? "所有远程指标字典源均不可用（SHA-256 校验失败）"
+      : "所有远程指标字典源均不可用",
   });
 }
 

@@ -5,7 +5,10 @@ export type ApiResponse<T> = {
   statusMessage?: string;
   statusText?: string;
   message?: string;
-  error?: boolean | { message?: string };
+  status?: number;
+  code?: string;
+  errorId?: string;
+  error?: boolean | { message?: string; code?: string; errorId?: string };
 };
 
 export type Session = {

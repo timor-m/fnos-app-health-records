@@ -1,3 +1,4 @@
+import { apiError, classifySystemError } from "../utils/api-error";
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, lstatSync, realpathSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
@@ -84,9 +85,11 @@ export async function stageReportNoteImage(user: RequestUser, reportId: string, 
   try {
     writeFileSync(originalPath, file.data, { mode: 0o600, flag: 'wx' });
     const thumbnail = await render({ action: 'thumbnail', imagePath: originalPath, mimeType: type.mimeType, outputPath: join(directory, 'thumbnail.jpg'), maxSize: 480 });
+    if (!thumbnail.ok && thumbnail.errorCode) throw Object.assign(new Error('图片处理失败'), { code: thumbnail.errorCode });
     if (!thumbnail.ok || !existsSync(join(directory, 'thumbnail.jpg'))) fail(422, '图片缩略图生成失败，请检查图片及本地图片处理环境后重试');
     if (type.mimeType === 'image/heic') {
       const preview = await render({ action: 'thumbnail', imagePath: originalPath, mimeType: type.mimeType, outputPath: join(directory, 'preview.jpg'), maxSize: 2560 });
+      if (!preview.ok && preview.errorCode) throw Object.assign(new Error('图片处理失败'), { code: preview.errorCode });
       if (!preview.ok || !existsSync(join(directory, 'preview.jpg'))) fail(422, 'HEIC 图片预览生成失败，请检查图片处理环境后重试');
     }
     assertReportNoteAccess(user, reportId, true); // Permission may change during rendering.
@@ -100,7 +103,9 @@ export async function stageReportNoteImage(user: RequestUser, reportId: string, 
     rmSync(directory, { recursive: true, force: true });
     // Never propagate worker errors containing paths or image details to logs/UI.
     if ((error as { statusCode?: number }).statusCode) throw error;
-    return fail(422, '图片处理失败，请确认本地图片处理环境已安装，或重试上传');
+    const classified = classifySystemError(error);
+    if (classified) throw apiError(classified.status, classified.code, classified.message);
+    throw apiError(422, 'OCR_UNAVAILABLE', '图片处理失败，请确认本地图片处理环境已安装，或重试上传');
   }
 }
 export function getStagedNoteImage(user: RequestUser, reportId: string, token: string, variant = 'preview') {

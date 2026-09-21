@@ -114,12 +114,12 @@ export default defineEventHandler((event) => {
   if (storageMigrationPaused()) {
     setResponseStatus(event, 503);
     setResponseHeader(event, 'retry-after', '5');
-    return fail('档案迁移维护中，业务访问已暂停。请等待迁移完成或由管理员恢复迁移。');
+    return fail('档案迁移维护中，业务访问已暂停。请等待迁移完成或由管理员恢复迁移。', { status: 503, code: 'STORAGE_UNAVAILABLE' });
   }
   const storageError = getAppConfig().storageError;
   if (storageError) {
     setResponseStatus(event, 503);
-    return fail(storageError);
+    return fail(storageError, { status: 503, code: 'STORAGE_UNAVAILABLE' });
   }
   getDatabase();
   const maintenance = getUnreleasedSchemaMaintenance();
@@ -131,7 +131,7 @@ export default defineEventHandler((event) => {
 
   if (path.includes("/api/")) {
     setResponseStatus(event, 503);
-    return fail("数据库需要修复未发布的结构版本后才能使用", { maintenance });
+    return fail("数据库需要修复未发布的结构版本后才能使用", { maintenance, status: 503, code: 'DATABASE_UNAVAILABLE' });
   }
   if (event.method === "GET") {
     setResponseHeader(event, "content-type", "text/html; charset=utf-8");

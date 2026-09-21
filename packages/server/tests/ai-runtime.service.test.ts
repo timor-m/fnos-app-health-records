@@ -61,10 +61,12 @@ test("returns provider status and detail through a stable runtime error", async 
         timeoutMs: 15_000
       }),
       (error: unknown) => {
-        const value = error as { code?: string; upstreamStatus?: number; upstreamDetail?: string };
+        const value = error as { message: string; code?: string; upstreamStatus?: number; upstreamDetail?: string };
         return value.code === "AI_HTTP_429"
           && value.upstreamStatus === 429
-          && value.upstreamDetail === "quota exhausted";
+          && value.upstreamDetail === "quota exhausted"
+          && !value.message.includes("quota exhausted")
+          && value.message.includes("请求受限");
       }
     );
   } finally {

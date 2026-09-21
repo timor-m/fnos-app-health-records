@@ -46,7 +46,7 @@ async function callFnosOpenApi<T>(requestName: string, data: Record<string, unkn
   const token = String(process.env.TRIM_API_TOKEN || "").trim();
   if (!token || !existsSync(socketPath())) {
     throw createError({
-      statusCode: 503,
+      statusCode: 503, data: { code: "PLATFORM_UNAVAILABLE" },
       statusMessage: "当前飞牛系统尚未提供用户文件授权 API，请升级系统后重试"
     });
   }
@@ -88,21 +88,20 @@ async function callFnosOpenApi<T>(requestName: string, data: Record<string, unkn
           if ((response.statusCode || 500) >= 400 || code !== 0) {
             reject(createError({
               statusCode: response.statusCode === 401 || response.statusCode === 403 || code === 403 ? 403 : 503,
-              statusMessage: typeof parsed.msg === "string" && parsed.msg.trim()
-                ? `飞牛文件授权接口返回错误：${parsed.msg.trim()}`
-                : "飞牛文件授权接口暂不可用"
+              data: { code: response.statusCode === 401 || response.statusCode === 403 || code === 403 ? "PERMISSION_DENIED" : "PLATFORM_UNAVAILABLE" },
+              statusMessage: "飞牛文件授权接口暂不可用，请检查授权或系统运行状态"
             }));
             return;
           }
           resolve(parsed.data as T);
         } catch {
-          reject(createError({ statusCode: 503, statusMessage: "飞牛文件授权接口返回了无法识别的数据" }));
+          reject(createError({ statusCode: 503, data: { code: "PLATFORM_UNAVAILABLE" }, statusMessage: "飞牛文件授权接口返回了无法识别的数据" }));
         }
       });
     });
     request.on("timeout", () => request.destroy(new Error("飞牛开放 API 请求超时")));
     request.on("error", (error) => {
-      reject(createError({ statusCode: 503, statusMessage: `无法连接飞牛文件授权接口：${error.message}` }));
+      reject(createError({ statusCode: 503, data: { code: "PLATFORM_UNAVAILABLE" }, statusMessage: "无法连接飞牛文件授权接口，请检查系统运行状态" }));
     });
     request.end(payload);
   });
@@ -129,7 +128,7 @@ export async function checkFnosUserAcl(user: RequestUser, paths: string[]) {
       path: chunk.length === 1 ? chunk[0] : chunk
     });
     if (!Array.isArray(data)) {
-      throw createError({ statusCode: 503, statusMessage: "飞牛文件权限检查返回了无法识别的数据" });
+      throw createError({ statusCode: 503, data: { code: "PLATFORM_UNAVAILABLE" }, statusMessage: "飞牛文件权限检查返回了无法识别的数据" });
     }
     result.push(...data.flatMap((item): FnosUserAcl[] => {
       if (!item || typeof item !== "object") return [];

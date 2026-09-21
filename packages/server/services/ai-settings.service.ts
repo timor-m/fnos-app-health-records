@@ -146,7 +146,7 @@ function submittedRequestTimeoutSeconds(value: unknown, fallback: number) {
   const seconds = Number(value);
   if (!Number.isFinite(seconds) || seconds < minRequestTimeoutSeconds || seconds > maxRequestTimeoutSeconds) {
     throw createError({
-      statusCode: 400,
+      statusCode: 400, data: { code: "AI_CONFIG_INVALID" },
       statusMessage: `AI 请求超时必须在 ${minRequestTimeoutSeconds} 至 ${maxRequestTimeoutSeconds} 秒之间`
     });
   }
@@ -411,7 +411,7 @@ function normalizeBaseUrl(value: unknown, fallback: string) {
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error();
     return parsed.toString().replace(/\/+$/, "");
   } catch {
-    throw createError({ statusCode: 400, statusMessage: "AI API 地址无效" });
+    throw createError({ statusCode: 400, data: { code: "AI_CONFIG_INVALID" }, statusMessage: "AI API 地址无效" });
   }
 }
 
@@ -560,7 +560,7 @@ function applyProfileInput(
     ? raw.provider as AiProviderKey
     : existing?.provider;
   if (!provider) {
-    throw createError({ statusCode: 400, statusMessage: "连接配置的服务商类型无效" });
+    throw createError({ statusCode: 400, data: { code: "AI_CONFIG_INVALID" }, statusMessage: "连接配置的服务商类型无效" });
   }
   let id = typeof raw.id === "string" ? raw.id.trim() : "";
   if (id && existing && id !== existing.id) id = "";
@@ -573,10 +573,10 @@ function applyProfileInput(
   const visionEnabled = raw.visionEnabled === undefined ? existing?.visionEnabled === true : raw.visionEnabled === true;
   const visionModel = String(raw.visionModel ?? existing?.visionModel ?? defaults.visionModel).trim();
   if (isMiniMaxM2Model(visionModel) && visionEnabled) {
-    throw createError({ statusCode: 400, statusMessage: "MiniMax M2 系列当前不支持视觉增强，请关闭视觉增强" });
+    throw createError({ statusCode: 400, data: { code: "AI_CONFIG_INVALID" }, statusMessage: "MiniMax M2 系列当前不支持视觉增强，请关闭视觉增强" });
   }
   if (visionEnabled && !visionModel) {
-    throw createError({ statusCode: 400, statusMessage: "已开启视觉增强，请先填写视觉模型名称" });
+    throw createError({ statusCode: 400, data: { code: "AI_CONFIG_INVALID" }, statusMessage: "已开启视觉增强，请先填写视觉模型名称" });
   }
   return {
     id,
@@ -622,7 +622,7 @@ function applyTaskBindings(
     }
     const model = String(value.model || "").trim();
     if (profileId && !next.profiles.some((profile) => profile.id === profileId)) {
-      throw createError({ statusCode: 400, statusMessage: `场景“${task.label}”引用的连接配置不存在` });
+      throw createError({ statusCode: 400, data: { code: "AI_CONFIG_INVALID" }, statusMessage: `场景“${task.label}”引用的连接配置不存在` });
     }
     if (!profileId && !model) {
       delete next.taskBindings[task.key];
@@ -637,7 +637,7 @@ function applyTaskBindings(
 
 function validateAndPersist(next: ParsedAiSettings) {
   if (next.enabled && !next.defaultProfileId) {
-    throw createError({ statusCode: 400, statusMessage: "启用 AI 整理前请先添加连接配置" });
+    throw createError({ statusCode: 400, data: { code: "AI_CONFIG_INVALID" }, statusMessage: "启用 AI 整理前请先添加连接配置" });
   }
   persistSettings(next);
   return publicSettings(next);
@@ -699,7 +699,7 @@ export function saveAiSettings(input: AiSettingsInput) {
   if (input.defaultProfileId !== undefined) {
     const defaultProfileId = String(input.defaultProfileId || "").trim();
     if (defaultProfileId && !next.profiles.some((profile) => profile.id === defaultProfileId)) {
-      throw createError({ statusCode: 400, statusMessage: "默认连接配置不存在" });
+      throw createError({ statusCode: 400, data: { code: "AI_CONFIG_INVALID" }, statusMessage: "默认连接配置不存在" });
     }
     next.defaultProfileId = defaultProfileId;
   }
@@ -725,11 +725,11 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
   const testVision = input.testVision === true;
   const model = testVision ? String(input.visionModel || current.visionModel).trim() : textModel;
   if (isMiniMaxM2Model(model) && testVision) {
-    throw createError({ statusCode: 400, statusMessage: "MiniMax M2 系列当前不支持图片输入，请使用文本模型测试" });
+    throw createError({ statusCode: 400, data: { code: "AI_CONFIG_INVALID" }, statusMessage: "MiniMax M2 系列当前不支持图片输入，请使用文本模型测试" });
   }
   if ((aiProviderHasRequiredApiKey(provider) && !apiKey) || !model) {
     throw createError({
-      statusCode: 400,
+      statusCode: 400, data: { code: "AI_CONFIG_INVALID" },
       statusMessage: aiProviderCatalog[provider].apiKeyRequired === false
         ? `请先配置 ${aiProviderCatalog[provider].label} ${testVision ? "视觉" : "文本"}模型`
         : `请先配置 ${aiProviderCatalog[provider].label} API Key 和${testVision ? "视觉" : "文本"}模型`
@@ -795,7 +795,7 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
       host: new URL(baseUrl).host,
       model,
       errorCode: code,
-      detail: detail.slice(0, 600)
+      upstreamStatus: error.upstreamStatus
     });
     if (error.upstreamStatus) {
       const summary = error.upstreamStatus === 401 || error.upstreamStatus === 403
@@ -807,10 +807,9 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
             : error.upstreamStatus >= 500
               ? "AI 服务暂时不可用"
               : "AI 服务拒绝了测试请求，请检查模型名称和接口兼容性";
-      const suffix = error.upstreamDetail ? `：${error.upstreamDetail.slice(0, 240)}` : "";
       throw createError({
-        statusCode: 502,
-        statusMessage: `${summary}（上游 ${error.upstreamStatus}）${suffix}`
+        statusCode: 502, data: { code: "AI_UPSTREAM_ERROR", meta: { upstreamStatus: error.upstreamStatus } },
+        statusMessage: summary
       });
     }
     const statusMessage = code === "AI_STRUCTURED_JSON_UNSUPPORTED"
@@ -824,7 +823,7 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
         : tlsFailed
           ? "AI 服务 TLS 证书校验失败，请检查 NAS 时间、证书或代理设置"
           : "NAS 无法连接 AI 服务，请检查外网连接、代理、DNS 和 API 地址";
-    throw createError({ statusCode: timedOut ? 504 : 502, statusMessage });
+    throw createError({ statusCode: timedOut ? 504 : 502, data: { code: "AI_UPSTREAM_ERROR" }, statusMessage });
   }
     return { ok: true, provider, model, vision: testVision, elapsedMs: Date.now() - started };
 }

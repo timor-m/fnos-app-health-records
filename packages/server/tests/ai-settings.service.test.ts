@@ -473,14 +473,14 @@ test("rejects visual enhancement for MiniMax M2 models", async () => {
         visionModel: "MiniMax-M2.7"
       }),
       (error: unknown) => {
-        const value = error as { status?: number; statusText?: string; message?: string };
+        const value = error as { status?: number; statusText?: string; message?: string; data?: { code?: string; meta?: { upstreamStatus?: number } } };
         return value.status === 400 && `${value.statusText} ${value.message}`.includes("不支持视觉增强");
       }
     );
     await assert.rejects(
       () => testAiConnection({ provider: "minimax", testVision: true, visionModel: "MiniMax-M2.7" }),
       (error: unknown) => {
-        const value = error as { status?: number; statusText?: string; message?: string };
+        const value = error as { status?: number; statusText?: string; message?: string; data?: { code?: string; meta?: { upstreamStatus?: number } } };
         return value.status === 400 && `${value.statusText} ${value.message}`.includes("不支持图片输入");
       }
     );
@@ -502,7 +502,7 @@ test("reports an Ollama model that cannot return structured JSON", async () => {
           textModel: "qwen2.5:7b"
         }),
         (error: unknown) => {
-          const value = error as { status?: number; statusText?: string; message?: string };
+          const value = error as { status?: number; statusText?: string; message?: string; data?: { code?: string; meta?: { upstreamStatus?: number } } };
           return value.status === 502
             && `${value.statusText} ${value.message}`.includes("结构化 JSON");
         }
@@ -624,7 +624,7 @@ test("returns a client error when AI test configuration is incomplete", async ()
     await assert.rejects(
       () => testAiConnection({ provider: "deepseek", apiKey: "", textModel: "deepseek-v4-flash" }),
       (error: unknown) => {
-        const value = error as { status?: number; statusText?: string; message?: string };
+        const value = error as { status?: number; statusText?: string; message?: string; data?: { code?: string; meta?: { upstreamStatus?: number } } };
         return value.status === 400 && `${value.statusText} ${value.message}`.includes("API Key");
       }
     );
@@ -645,11 +645,13 @@ test("returns an actionable error when the AI provider rejects credentials", asy
           textModel: "deepseek-v4-flash"
         }),
         (error: unknown) => {
-          const value = error as { status?: number; statusText?: string; message?: string };
+          const value = error as { status?: number; statusText?: string; message?: string; data?: { code?: string; meta?: { upstreamStatus?: number } } };
           const detail = `${value.statusText} ${value.message}`;
           return value.status === 502
             && detail.includes("认证失败")
-            && detail.includes("invalid api key");
+            && !detail.includes("invalid api key")
+            && value.data?.code === "AI_UPSTREAM_ERROR"
+            && value.data?.meta?.upstreamStatus === 401;
         }
       );
     } finally {
@@ -674,7 +676,7 @@ test("returns an actionable error when the NAS cannot resolve the AI host", asyn
           textModel: "deepseek-v4-flash"
         }),
         (error: unknown) => {
-          const value = error as { status?: number; statusText?: string; message?: string };
+          const value = error as { status?: number; statusText?: string; message?: string; data?: { code?: string; meta?: { upstreamStatus?: number } } };
           return value.status === 502 && `${value.statusText} ${value.message}`.includes("DNS");
         }
       );

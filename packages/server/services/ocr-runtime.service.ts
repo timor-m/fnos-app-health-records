@@ -1,3 +1,4 @@
+import { apiError } from "../utils/api-error";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -172,7 +173,7 @@ function normalizePipIndexUrl(value: unknown) {
     if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error();
     return parsed.toString().replace(/\/+$/, "");
   } catch {
-    throw new Error("PyPI 镜像地址无效，请填写 http(s)://.../simple 格式地址");
+    throw apiError(400, "REQUEST_INVALID", "PyPI 镜像地址无效，请填写 http(s)://.../simple 格式地址");
   }
 }
 
@@ -208,7 +209,7 @@ export function getOcrInstallSettings() {
 export function saveOcrInstallSettings(input: Partial<OcrInstallSettings>) {
   const pipMirror = isPipMirrorKey(input.pipMirror) ? input.pipMirror : defaultPipMirror;
   const customPipIndexUrl = normalizePipIndexUrl(input.customPipIndexUrl);
-  if (pipMirror === "custom" && !customPipIndexUrl) throw new Error("请选择自定义镜像源地址");
+  if (pipMirror === "custom" && !customPipIndexUrl) throw apiError(400, "REQUEST_INVALID", "请选择自定义镜像源地址");
   const settings: OcrInstallSettings = { pipMirror, customPipIndexUrl };
   getDatabase().prepare(`
     INSERT INTO app_settings (setting_key, value_json) VALUES (?, ?)

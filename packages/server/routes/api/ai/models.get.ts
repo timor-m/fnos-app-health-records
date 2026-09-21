@@ -28,7 +28,7 @@ export default defineEventHandler(async (event) => {
 
   if (aiProviderCatalog[provider].apiKeyRequired !== false && !apiKey) {
     throw createError({
-      statusCode: 400,
+      statusCode: 400, data: { code: "AI_CONFIG_INVALID" },
       statusMessage: `请先配置 ${aiProviderCatalog[provider].label} API Key`
     });
   }
@@ -48,10 +48,9 @@ export default defineEventHandler(async (event) => {
     });
 
     if (!response.ok) {
-      const detail = await response.text().catch(() => "");
       throw createError({
-        statusCode: 502,
-        statusMessage: `获取模型列表失败（上游 ${response.status}）${detail ? `：${detail.slice(0, 200)}` : ""}`
+        statusCode: 502, data: { code: "AI_UPSTREAM_ERROR", meta: { upstreamStatus: response.status } },
+        statusMessage: "获取模型列表失败，请检查 AI 服务状态和配置"
       });
     }
 
@@ -83,12 +82,12 @@ export default defineEventHandler(async (event) => {
     const dnsFailed = /ENOTFOUND|EAI_AGAIN/i.test(code);
 
     throw createError({
-      statusCode: timedOut ? 504 : 502,
+      statusCode: timedOut ? 504 : 502, data: { code: "AI_UPSTREAM_ERROR" },
       statusMessage: timedOut
         ? "获取模型列表超时，请检查网络连接"
         : dnsFailed
           ? "无法解析 AI 服务域名，请检查 DNS"
-          : `获取模型列表失败：${error.message}`
+          : "获取模型列表失败，请检查 AI 服务状态和网络"
     });
   }
 });

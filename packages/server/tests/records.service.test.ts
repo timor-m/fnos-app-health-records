@@ -457,8 +457,10 @@ test("creates backups with on-storage staging and reports detailed failure reaso
           () => createBackup(manager),
           (error) => {
             assert.ok(error instanceof Error);
-            assert.match(error.message, /创建备份失败：创建备份暂存目录/);
-            assert.match(error.message, /EACCES|EPERM/);
+            assert.match(error.message, /档案存储目录当前不可写/);
+            assert.doesNotMatch(error.message, /EACCES|EPERM|\/backups/);
+            assert.equal((error as Error & { status: number }).status, 503);
+            assert.equal((error as Error & { data: { code: string } }).data.code, 'STORAGE_UNAVAILABLE');
             return true;
           }
         );

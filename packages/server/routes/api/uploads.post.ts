@@ -5,6 +5,7 @@ import {
   readMultipartFormData,
   setResponseStatus
 } from "h3";
+import { apiError } from "../../utils/api-error";
 import { createUpload } from "../../services/upload.service";
 import { ok } from "../../utils/api-response";
 import { getRequestUser } from "../../utils/request-user";
@@ -23,13 +24,19 @@ export default defineEventHandler(async (event) => {
   const contentLength = Number(getHeader(event, "content-length") || 0);
   if (contentLength > maxRequestBytes) {
     throw createError({
-      statusCode: 413,
+      statusCode: 413, data: { code: "FILE_TOO_LARGE" },
       statusMessage: `请求体大小超过限制（最大 ${Math.round(maxRequestBytes / 1024 / 1024)}MB）`
     });
   }
-  const parts = await readMultipartFormData(event);
+  let parts: Awaited<ReturnType<typeof readMultipartFormData>>;
+  try {
+    parts = await readMultipartFormData(event);
+    if (!parts?.length) throw new Error();
+  } catch {
+    throw apiError(400, "UPLOAD_INVALID", "上传数据读取失败，请重新选择文件后重试");
+  }
   const memberId = textPart(parts, "memberId").trim();
-  if (!memberId) throw createError({ statusCode: 400, statusMessage: "请选择报告所属成员" });
+  if (!memberId) throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: "请选择报告所属成员" });
 
   let rotations: number[] = [];
   let expectedPages: Array<{ rotation?: number; size?: number }> | undefined;
@@ -40,7 +47,7 @@ export default defineEventHandler(async (event) => {
       expectedPages = parsed.pages;
       rotations = Array.isArray(parsed.pages) ? parsed.pages.map((page) => Number(page.rotation || 0)) : [];
     } catch {
-      throw createError({ statusCode: 400, statusMessage: "页面顺序信息无效" });
+      throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: "页面顺序信息无效" });
     }
   }
 
@@ -52,7 +59,7 @@ export default defineEventHandler(async (event) => {
   }));
   const requestKey = textPart(parts, 'requestKey') || undefined;
   if (requestKey && (!Array.isArray(expectedPages) || expectedPages.length !== files.length || expectedPages.some((page, index) => page.size !== files[index]?.data.byteLength))) {
-    throw createError({ statusCode: 400, statusMessage: '文件清单与接收内容不一致，请重试整份报告' });
+    throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: '文件清单与接收内容不一致，请重试整份报告' });
   }
   const result = createUpload(getRequestUser(event), memberId, files, requestKey);
   setResponseStatus(event, 201);
