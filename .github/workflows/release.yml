@@ -63,6 +63,8 @@ jobs:
           RELEASE_STRICT_CHANGELOG=1 npm run validate:release
           npm test
           npm run typecheck
+      - name: Check duplicate scan performance in isolation
+        run: npm run test:duplicates:benchmark
 
   fpk:
     needs: [prepare, validate]

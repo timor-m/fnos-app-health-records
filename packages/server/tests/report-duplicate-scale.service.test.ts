@@ -186,7 +186,7 @@ test("P2 scale golden keeps governed duplicate pairs visible beyond the 80/300 a
   }
 });
 
-test("P2 bounded scan benchmark keeps 1,200 archived reports within the configured source window", () => {
+test("P2 bounded scan benchmark keeps 1,200 archived reports within the configured source window", (t) => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-p2-duplicate-benchmark-"));
   process.env.STORAGE_DIR = storageDir;
   try {
@@ -202,7 +202,14 @@ test("P2 bounded scan benchmark keeps 1,200 archived reports within the configur
     assert.equal(overview.metrics.sourceReportsScanned, fixture.benchmark.expectedSourceReports);
     assert.equal(overview.metrics.candidateComparisons, fixture.benchmark.maximumCandidateComparisons);
     assert.equal(overview.metrics.candidateGroups, 0);
-    assert.equal(overview.metrics.scanDurationMs <= fixture.benchmark.maximumScanDurationMs, true);
+    const duration = overview.metrics.scanDurationMs;
+    const budget = fixture.benchmark.maximumScanDurationMs;
+    t.diagnostic(`Duplicate scan: ${duration} ms; isolated benchmark budget: ${budget} ms`);
+    // Wall time under the parallel full suite measures contention as well as scan work.
+    // CI enforces the unchanged budget separately via test:duplicates:benchmark.
+    if (process.env.DUPLICATE_SCAN_BENCHMARK === "1") {
+      assert.ok(duration <= budget, `Duplicate scan took ${duration} ms, exceeding ${budget} ms`);
+    }
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;
@@ -211,7 +218,7 @@ test("P2 bounded scan benchmark keeps 1,200 archived reports within the configur
 });
 
 
-test("P2 candidate benchmark exercises bounded comparisons across 1,200 reports with realistic structured evidence", () => {
+test("P2 candidate benchmark exercises bounded comparisons across 1,200 reports with realistic structured evidence", (t) => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-p2-duplicate-candidate-benchmark-"));
   process.env.STORAGE_DIR = storageDir;
   try {
@@ -238,7 +245,14 @@ test("P2 candidate benchmark exercises bounded comparisons across 1,200 reports 
     assert.equal(overview.metrics.candidatePairs > 0, true);
     assert.equal(overview.metrics.candidatePairs <= fixture.candidateBenchmark.maximumCandidatePairs, true);
     assert.equal(overview.metrics.highCandidates, overview.metrics.candidatePairs);
-    assert.equal(overview.metrics.scanDurationMs <= fixture.candidateBenchmark.maximumScanDurationMs, true);
+    const duration = overview.metrics.scanDurationMs;
+    const budget = fixture.candidateBenchmark.maximumScanDurationMs;
+    t.diagnostic(`Duplicate scan: ${duration} ms; isolated benchmark budget: ${budget} ms`);
+    // Wall time under the parallel full suite measures contention as well as scan work.
+    // CI enforces the unchanged budget separately via test:duplicates:benchmark.
+    if (process.env.DUPLICATE_SCAN_BENCHMARK === "1") {
+      assert.ok(duration <= budget, `Duplicate scan took ${duration} ms, exceeding ${budget} ms`);
+    }
     assert.equal(overview.pagination.totalGroups, overview.metrics.candidateGroups);
     assert.equal(overview.pagination.totalPairs, overview.metrics.candidatePairs);
   } finally {
