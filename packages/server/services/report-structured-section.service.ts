@@ -1,3 +1,4 @@
+import { assertNoPageAppend } from "./page-append-lock.service";
 import { createError } from "h3";
 import { rollbackAfterError, getDatabase } from "../database/client";
 import {
@@ -49,6 +50,7 @@ function reportForManage(user: RequestUser, reportId: string) {
   `).get(reportId) as { id: string; memberId: string } | undefined;
   if (!row) throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   assertMemberManage(user, row.memberId);
+  assertNoPageAppend(row.id);
   return row;
 }
 
@@ -61,6 +63,7 @@ function sectionForManage(user: RequestUser, id: string) {
   `).get(id) as { id: string; reportId: string; memberId: string } | undefined;
   if (!row) throw createError({ statusCode: 404, statusMessage: "报告专属内容不存在" });
   assertMemberManage(user, row.memberId);
+  assertNoPageAppend(row.reportId);
   return row;
 }
 

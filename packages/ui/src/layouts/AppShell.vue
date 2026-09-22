@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import MemberManager from "../components/MemberManager.vue";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
 import { Bell, Camera, ChartNoAxesCombined, ChevronsUpDown, FolderHeart, LayoutDashboard, Search, UserRound, X } from "@lucide/vue";
@@ -221,9 +222,10 @@ const navItems = [
         </template>
       </header>
       <main class="page-content">
-        <RouterView v-slot="{ Component }">
+        <MemberManager v-if="!app.selectedMemberId.value && !route.path.startsWith('/me')" />
+        <RouterView v-else v-slot="{ Component }">
           <Transition name="page-fade" mode="out-in" @before-leave="savePageScroll" @enter="restorePageScroll">
-            <KeepAlive>
+            <KeepAlive :key="`${app.session.value?.id}:${app.selectedMemberId.value}:${app.accessVersion.value}`">
               <component :is="Component" />
             </KeepAlive>
           </Transition>

@@ -1,3 +1,4 @@
+import {createMember,setMemberPermission} from "../services/member.service";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -189,7 +190,7 @@ test("deletes ordinary local accounts but keeps users and member data", () => {
       userId: created.userId,
       username: "ordinary",
       displayName: "普通用户",
-      exclusiveMemberCount: 1,
+      exclusiveMemberCount: 0,
       exclusiveReportCount: 0
     });
 
@@ -202,7 +203,7 @@ test("deletes ordinary local accounts but keeps users and member data", () => {
 
     /* 用户与成员档案保留，避免误删健康数据 */
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM users WHERE id = ?").get(created.userId)!.count, 1);
-    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM health_members WHERE created_by = ?").get(created.userId)!.count, 1);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM health_members WHERE created_by = ?").get(created.userId)!.count, 0);
 
     /* 用户名释放后可直接重建同名账号 */
     const recreated = createLocalAccount(admin.user, { username: "ordinary", displayName: "普通用户" });
@@ -272,55 +273,15 @@ test("updates local account display names and reflects them in sessions", () => 
   }
 });
 
-test("blocks deleting accounts that would orphan member data unless forced", () => {
-  const { storageDir, admin } = setupLocalAdmin();
-  try {
-    const db = getDatabase();
-    const created = createLocalAccount(admin.user, { username: "ordinary", displayName: "普通用户" });
-    const member = db.prepare("SELECT id FROM health_members WHERE created_by = ?").get(created.userId) as { id: string };
-    db.prepare("INSERT INTO reports (id, member_id, created_by, report_type, title) VALUES (?, ?, ?, ?, ?)")
-      .run("report_orphan_1", member.id, created.userId, "exam", "体检报告");
-
-    assert.throws(
-      () => deleteLocalAccount(admin.user, { userId: created.userId }),
-      (error: unknown) => statusCode(error) === 409 && String((error as Error).message).includes("1 份报告")
-    );
-    /* 阻断后账号仍可登录 */
-    assert.deepEqual(login(localAuthEvent(), { username: "ordinary", password: "admin" }), {
-      authenticated: true,
-      mustChangePassword: true
-    });
-
-    const forced = deleteLocalAccount(admin.user, { userId: created.userId, force: true });
-    assert.deepEqual(forced, {
-      deleted: true,
-      userId: created.userId,
-      username: "ordinary",
-      displayName: "普通用户",
-      exclusiveMemberCount: 1,
-      exclusiveReportCount: 1
-    });
-    /* 强制删除后成员与报告仍保留（孤儿数据，管理员知情） */
-    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM health_members WHERE id = ?").get(member.id)!.count, 1);
-    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM reports WHERE id = 'report_orphan_1'").get()!.count, 1);
-
-    /* 成员同时授权给其他账号时不构成孤儿数据，无需强制确认 */
-    const shared = createLocalAccount(admin.user, { username: "shared", displayName: "共享用户" });
-    const sharedMember = db.prepare("SELECT id FROM health_members WHERE created_by = ?").get(shared.userId) as { id: string };
-    db.prepare("INSERT INTO reports (id, member_id, created_by, report_type, title) VALUES (?, ?, ?, ?, ?)")
-      .run("report_shared_1", sharedMember.id, shared.userId, "exam", "门诊报告");
-    db.prepare("INSERT INTO member_permissions (member_id, user_id, permission, granted_by) VALUES (?, ?, 'manager', ?)")
-      .run(sharedMember.id, admin.user.id, admin.user.id);
-    const deletedShared = deleteLocalAccount(admin.user, { userId: shared.userId });
-    assert.equal(deletedShared.exclusiveMemberCount, 0);
-    assert.equal(deletedShared.exclusiveReportCount, 0);
-
-    /* 无报告的成员档案不触发阻断 */
-    const empty = createLocalAccount(admin.user, { username: "empty", displayName: "空档案" });
-    const deletedEmpty = deleteLocalAccount(admin.user, { userId: empty.userId });
-    assert.equal(deletedEmpty.exclusiveMemberCount, 1);
-    assert.equal(deletedEmpty.exclusiveReportCount, 0);
-  } finally {
-    cleanup(storageDir);
-  }
+test("account deletion cannot bypass last manager protection even with force", () => {
+ const {storageDir,admin}=setupLocalAdmin();
+ try {
+  const created=createLocalAccount(admin.user,{username:'ordinary',displayName:'合成账号'});
+  const ordinary=loginAs('ordinary','admin');
+  const member=createMember(ordinary.user,{displayName:'合成成员',createSelf:true});
+  assert.throws(()=>deleteLocalAccount(admin.user,{userId:created.userId,force:true}),(error:unknown)=>statusCode(error)===409);
+  setMemberPermission(ordinary.user,member.id,{userId:admin.user.id,permission:'manager',canManageSharing:true,version:0});
+  assert.equal(deleteLocalAccount(admin.user,{userId:created.userId}).deleted,true);
+  assert.equal(getDatabase().prepare('SELECT COUNT(*) AS n FROM health_members WHERE id=?').get(member.id)!.n,1);
+ } finally {cleanup(storageDir);}
 });

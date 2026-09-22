@@ -26,6 +26,9 @@ export type Session = {
 };
 
 export type HealthMember = {
+  isSelf: boolean;
+  hidden: boolean;
+  canManageSharing: boolean;
   id: string;
   displayName: string;
   relationship: string;
@@ -99,6 +102,8 @@ export type LocalAccount = {
 };
 
 export type MemberAccess = {
+  canManageSharing: boolean;
+  version: number;
   userId: string;
   displayName: string;
   permission: "viewer" | "manager";
@@ -106,6 +111,8 @@ export type MemberAccess = {
 };
 
 export type ReportSummary = {
+  deletedAt?: string | null;
+  purgeAfter?: string | null;
   id: string;
   memberId: string;
   title: string;
@@ -303,7 +310,7 @@ export type ProcessingJob = {
   jobType: "pdf_extract" | "thumbnail" | "ocr" | "ai_extract";
   pipelineVersion: string;
   batchId: string;
-  batchKind: "initial_upload" | "manual_reprocess" | "manual_ai";
+  batchKind: "initial_upload" | "manual_reprocess" | "manual_ai" | "page_append";
   batchStartedAt: string;
   batchSequence: number;
   status: "queued" | "processing" | "completed" | "failed" | "cancelled";
@@ -1127,6 +1134,7 @@ export type ReportStructuredSection = {
 };
 
 export type ReportDetail = ReportSummary & {
+  pageAppend?: {originalRevision:number;recognizedRevision:number|null;state:string;reviewWarnings?:string[]};
   createdAt: string;
   updatedAt: string;
   city: string | null;
@@ -1295,4 +1303,11 @@ export type SystemLogPage = {
     maxArchiveFiles: number;
     maxTotalBytes: number;
   };
+};
+
+export type TrashCleanupSummary = {
+ memberId:string; serverTime:string; pendingFileCount:number; retryingFileCount:number;
+ nextCleanupCheckAt:string|null;
+ status:'none'|'waiting'|'retrying'|'paused'|'delayed'|'unknown';
+ reasonCode:string|null; reasonMessage:string|null;
 };

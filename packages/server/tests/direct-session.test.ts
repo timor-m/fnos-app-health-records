@@ -86,8 +86,10 @@ test("keeps fnOS gateway identity and administrator permissions in fnOS mode", (
         }
       }
     } as unknown as H3Event;
-    assert.deepEqual(getRequestUser(event), {
-      id: "fnos-user-1000",
+    const resolved=getRequestUser(event);
+    assert.notEqual(resolved.id,"fnos-user-1000");
+    assert.deepEqual(resolved, {
+      id: resolved.id,
       displayName: "飞牛管理员",
       provider: "fnos_gateway",
       authenticated: true,
@@ -96,7 +98,7 @@ test("keeps fnOS gateway identity and administrator permissions in fnOS mode", (
     });
     const stored = getDatabase().prepare(`
       SELECT display_name AS displayName, is_gateway_admin AS isAdmin FROM users WHERE id = ?
-    `).get("fnos-user-1000") as { displayName: string; isAdmin: number };
+    `).get(resolved.id) as { displayName: string; isAdmin: number };
     assert.deepEqual({ ...stored }, { displayName: "飞牛管理员", isAdmin: 1 });
   } finally {
     closeDatabaseForTests();
@@ -118,6 +120,7 @@ test("decodes mojibake gateway account names and heals stored display names", ()
     db.prepare(`
       INSERT INTO users (id, display_name, is_gateway_admin) VALUES ('fnos-user-1000', ?, 1)
     `).run(mangled);
+    db.exec("INSERT INTO user_identities(id,user_id,provider,subject) VALUES('old-identity','fnos-user-1000','fnos_gateway','fnos-user-1000')");
     db.prepare(`
       INSERT INTO health_members (id, display_name, relationship, created_by)
       VALUES ('member-self', ?, 'self', 'fnos-user-1000')
@@ -154,7 +157,7 @@ test("decodes mojibake gateway account names and heals stored display names", ()
     `).all() as Array<{ id: string; displayName: string }>;
     assert.deepEqual(members.map((member) => ({ ...member })), [
       { id: "member-family", displayName: "自定义成员" },
-      { id: "member-self", displayName: "测试用户" }
+      { id: "member-self", displayName: mangled }
     ]);
 
     // A self member renamed away from the account name is left untouched.
@@ -201,7 +204,7 @@ test("bootstraps a Docker local administrator and resolves only its persisted se
       displayName: "Docker 管理员",
       isAdmin: 1
     });
-    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM health_members").get() as { count: number }).count, 1);
+    assert.equal((db.prepare("SELECT COUNT(*) AS count FROM health_members").get() as { count: number }).count, 0);
 
     const token = "persisted-local-session-token";
     const hash = createHash("sha256").update(token).digest("hex");

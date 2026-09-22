@@ -1,6 +1,6 @@
 import { computed, readonly, ref, shallowRef, watch, type Ref } from "vue";
 import { ApiRequestError, request } from "../utils/api";
-import { readStorage, removeStorage, writeStorage } from "../utils/storage";
+import { readStorage, writeStorage } from "../utils/storage";
 import type { AppNotification, HealthMember, Reminder, Session } from "../types/api";
 
 const loading = ref(true);
@@ -9,7 +9,13 @@ const repairError = ref("");
 const repairingSchema = ref(false);
 const session = ref<Session | null>(null);
 const members = ref<HealthMember[]>([]);
-const selectedMemberId = ref(readStorage("health-records:selected-member") || "");
+const selectedMemberId = ref("");
+const allMembers = ref<HealthMember[]>([]);
+const preferences = ref<{selfMemberId:string|null;selfProfileChoice:string;defaultMemberId:string|null}|null>(null);
+let memberRequest=0;
+let loadRequest=0;
+const identityKey=()=>`${session.value?.authMode}:${session.value?.id}`;
+const selectionKey=()=>`health-records:selected-member:${identityKey()}`;
 const selectedMember = computed(() => members.value.find((member) => member.id === selectedMemberId.value) || null);
 const topbarSubtitles = ref<Record<string, string>>({});
 export type TopbarSearchConfig = {
@@ -23,6 +29,7 @@ const topbarSearch = shallowRef<TopbarSearchConfig | null>(null);
 const pendingReminderCount = ref(0);
 /* 数据变更信号：上传完成、后台任务跑完等场景递增，各页面据此静默刷新缓存数据 */
 const dataVersion = ref(0);
+const accessVersion=ref(0);
 type SchemaMaintenance = {
   databaseVersion: number;
   supportedVersion: number;
@@ -43,8 +50,7 @@ function notifyDataChanged() {
 }
 
 watch(selectedMemberId, (value) => {
-  if (value) writeStorage("health-records:selected-member", value);
-  else removeStorage("health-records:selected-member");
+  if (value) writeStorage(selectionKey(), value);
   void refreshReminderCount(value);
 });
 
@@ -58,6 +64,7 @@ async function refreshReminderCount(memberId = selectedMemberId.value) {
       request<Reminder[]>(`reminders?memberId=${encodeURIComponent(memberId)}`),
       request<AppNotification[]>(`notifications?memberId=${encodeURIComponent(memberId)}`)
     ]);
+    if(memberId!==selectedMemberId.value) return;
     pendingReminderCount.value = reminders.filter((item) => item.status === "pending").length
       + notifications.filter((item) => item.status === "unread").length;
   } catch (cause) {
@@ -67,19 +74,31 @@ async function refreshReminderCount(memberId = selectedMemberId.value) {
 }
 
 async function refreshMembers() {
-  members.value = await request<HealthMember[]>("members");
-  if (!members.value.some((member) => member.id === selectedMemberId.value)) {
-    selectedMemberId.value = members.value[0]?.id || "";
+  const sequence=++memberRequest; const identity=identityKey();
+  const [result,prefs]=await Promise.all([request<HealthMember[]>('members'),request<NonNullable<typeof preferences.value>>('account/preferences')]);
+  if(sequence!==memberRequest || identity!==identityKey()) return;
+  if(JSON.stringify(result.map(m=>[m.id,m.permission,m.canManageSharing,m.hidden]))!==JSON.stringify(allMembers.value.map(m=>[m.id,m.permission,m.canManageSharing,m.hidden]))) accessVersion.value++;
+  allMembers.value=result;preferences.value=prefs;
+  members.value=result.filter(member=>!member.hidden);
+  if(!members.value.some(member=>member.id===selectedMemberId.value)) {
+    const remembered=readStorage(selectionKey());
+    selectedMemberId.value=members.value.find(member=>member.id===remembered)?.id || members.value.find(member=>member.id===prefs.defaultMemberId)?.id || members.value[0]?.id || '';
   }
   await refreshReminderCount();
 }
 
 async function load() {
+  const sequence=++loadRequest;
+  ++memberRequest;
   loading.value = true;
+  members.value=[]; allMembers.value=[]; preferences.value=null; selectedMemberId.value="";
+  topbarSearch.value=null; topbarSubtitles.value={}; pendingReminderCount.value=0;
   error.value = "";
   schemaMaintenance.value = null;
   try {
-    session.value = await request<Session>("session");
+    const nextSession=await request<Session>("session");
+    if(sequence!==loadRequest) return;
+    session.value=nextSession;
     if (session.value.authenticated && !session.value.mustChangePassword) {
       await refreshMembers();
     } else {
@@ -92,7 +111,7 @@ async function load() {
       error.value = cause instanceof Error ? cause.message : "加载失败";
     }
   } finally {
-    loading.value = false;
+    if(sequence===loadRequest) loading.value = false;
   }
 }
 
@@ -127,12 +146,15 @@ export function useAppContext() {
     schemaMaintenance: readonly(schemaMaintenance),
     session: readonly(session),
     members: readonly(members),
+    allMembers: readonly(allMembers),
+    preferences: readonly(preferences),
     selectedMemberId,
     selectedMember,
     topbarSubtitles: readonly(topbarSubtitles),
     topbarSearch: readonly(topbarSearch),
     pendingReminderCount: readonly(pendingReminderCount),
     dataVersion: readonly(dataVersion),
+    accessVersion: readonly(accessVersion),
     notifyDataChanged,
     setTopbarSubtitle: (key: string, value: string) => {
       topbarSubtitles.value = { ...topbarSubtitles.value, [key]: value };
@@ -161,4 +183,20 @@ export function useAppContext() {
     logout,
     load
   };
+}
+
+if(typeof window!=='undefined') {
+ let refreshing=false;
+ const refresh=async()=>{
+  if(refreshing || loading.value || !session.value?.authenticated) return;
+  refreshing=true;
+  try {
+   const current=await request<Session>('session');
+   if(current.id!==session.value?.id || !current.authenticated) await load();
+   else await refreshMembers();
+  } catch { members.value=[];allMembers.value=[];selectedMemberId.value=''; }
+  finally {refreshing=false;}
+ };
+ window.addEventListener('focus',()=>void refresh());
+ window.addEventListener('health-access-denied',()=>void refresh());
 }

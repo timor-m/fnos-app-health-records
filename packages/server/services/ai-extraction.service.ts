@@ -1,3 +1,4 @@
+import { snapshotPublishedRecords, assertPublishedRecordsRetained } from "./page-append-result-guard.service";
 import { rollbackAfterError, getDatabase } from "../database/client";
 import { createId } from "../utils/identifier";
 import { cleanIndicatorName } from "../utils/indicator-name";
@@ -143,6 +144,7 @@ export type AiTableEvidence = {
 };
 
 export type AiEvidence = {
+  pageId?: string;
   pageNumber: number;
   quote: string;
   table?: AiTableEvidence;
@@ -3037,6 +3039,7 @@ function enrichPersistedObservationEvidence(
   return observations.map((observation) => ({
     ...observation,
     evidence: observation.evidence.map((evidence) => {
+      evidence = { ...evidence, pageId: plannedPages.find(page => page.pageNumber === evidence.pageNumber)?.pageId };
       const quote = compactPersistedEvidence(evidence.quote);
       const line = (linesByPage.get(evidence.pageNumber) || []).find(
         (candidate) => compactPersistedEvidence(candidate.text) === quote,
@@ -3394,6 +3397,7 @@ export function persistAiExtraction(
   jobId: string,
   result: AiExtractionResult,
   inputCharacters: number,
+  publicationGuard?: () => void,
 ) {
   const db = getDatabase();
   const existing = db
@@ -3454,12 +3458,13 @@ export function persistAiExtraction(
         deduplicationKey: string;
       }
     | undefined;
+  const isAppend = job?.pipelineVersion === "page-append-v1" || Boolean(db.prepare("SELECT 1 FROM report_page_appends WHERE report_id=? AND published=1 AND result_version IS NULL AND state='ocr_only'").get(reportId));
   const replacesGeneratedFields =
     job?.pipelineVersion === "manual-reprocess-v1" ||
     job?.pipelineVersion === "manual-ai-v1" ||
     job?.deduplicationKey.includes(":ai_extract:manual:") === true;
   const resetFields = replacesGeneratedFields
-    ? reportFieldDefinitions.filter((field) => !manualFieldKeys.has(field.key))
+    ? reportFieldDefinitions.filter((field) => !isAppend && !manualFieldKeys.has(field.key))
     : [];
   const updates: string[] = [];
   const values: Array<string | number> = [];
@@ -3468,13 +3473,13 @@ export function persistAiExtraction(
     column: string,
     value: string | number | null | undefined,
   ) => {
-    if (manualFieldKeys.has(fieldKey)) return;
+    if (isAppend || manualFieldKeys.has(fieldKey)) return;
     if (value === null || value === undefined || value === "") return;
     updates.push(`${column} = ?`);
     values.push(value);
   };
   const generatedTitle = buildReportTitle(fields);
-  if (!manualFieldKeys.has("title")) {
+  if (!isAppend && !manualFieldKeys.has("title")) {
     updates.push(
       replacesGeneratedFields
         ? "title = ?"
@@ -3537,6 +3542,8 @@ export function persistAiExtraction(
 
   db.exec("BEGIN IMMEDIATE");
   try {
+    publicationGuard?.();
+    const appendSnapshot = isAppend ? snapshotPublishedRecords(reportId) : null;
     if (resetFields.length) {
       db.prepare(
         `
@@ -3950,10 +3957,20 @@ export function persistAiExtraction(
       result.completionTokens,
       result.elapsedMs,
     );
+    if (appendSnapshot) {
+      assertPublishedRecordsRetained(reportId, appendSnapshot);
+      db.prepare("UPDATE report_page_appends SET state=CASE WHEN job_id=? THEN 'normalizing' ELSE state END,result_version=base_version WHERE job_id=? OR (report_id=? AND published=1 AND result_version IS NULL AND state='ocr_only')").run(jobId,jobId,reportId);
+    }
     db.exec("COMMIT");
   } catch (error) {
     rollbackAfterError(db);
+    if ((error as {appendCandidateRejected?:boolean}).appendCandidateRejected) {
+      // Preserve the rejected candidate for audit, but do not reuse it as a successful unit.
+      db.prepare("UPDATE ai_extraction_units SET status='failed',error_code='APPEND_RESULT_INCOMPLETE',error_message='候选结果未通过完整性校验',updated_at=CURRENT_TIMESTAMP WHERE job_id=? AND status IN ('completed','warning')").run(jobId);
+    }
     throw error;
   }
-  return normalizeReportObservations(reportId);
+  const normalization = normalizeReportObservations(reportId);
+  if (isAppend) db.prepare("UPDATE report_page_appends SET state='complete' WHERE report_id=? AND result_version IS NOT NULL AND state IN ('normalizing','ocr_only')").run(reportId);
+  return normalization;
 }

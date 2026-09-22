@@ -274,6 +274,8 @@ export type ReportPage = {
 };
 
 export type ReportSummary = {
+  deletedAt?: string | null;
+  purgeAfter?: string | null;
   id: string;
   memberId: string;
   title: string;
@@ -416,6 +418,7 @@ export type ReportDuplicateDecisionRecord = {
 };
 
 export type ReportDetail = ReportSummary & {
+  pageAppend?: {originalRevision:number;recognizedRevision:number|null;state:string;reviewWarnings?:string[]};
   createdAt: string;
   updatedAt: string;
   hospitalBranch: string | null;

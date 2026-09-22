@@ -704,6 +704,7 @@ test("classifies reported dictionary candidates without resubmitting known or po
     }
     assert.equal(byId.get("feedback-ambiguous-abi")?.canonicalKey, null);
 
+    db.prepare("INSERT OR IGNORE INTO member_permissions(member_id,user_id,permission,granted_by) SELECT id,?,'manager',? FROM health_members WHERE created_by=?").run(admin.id,admin.id,admin.id);
     const issueNames = new Set(listIndicatorNormalizationIssues(admin).map((issue) => issue.rawName));
     assert.equal(issueNames.has("切变率(1/S)50.00"), false);
     assert.equal(issueNames.has("小结"), false);

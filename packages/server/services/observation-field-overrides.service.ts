@@ -1,3 +1,4 @@
+import { assertNoPageAppend } from "./page-append-lock.service";
 import { createHash } from "node:crypto";
 import { createError } from "h3";
 import { rollbackAfterError, getDatabase } from "../database/client";
@@ -44,15 +45,16 @@ function compactIdentity(value: unknown) {
   return String(value || "").normalize("NFKC").toLocaleLowerCase("zh-CN").replace(/\s+/g, "").trim();
 }
 
-export function observationSourceKey(input: EditableObservationFields & Partial<Pick<PersistableObservation, "evidence">>) {
+export function observationSourceKey(input: EditableObservationFields & Partial<Pick<PersistableObservation, "evidence" | "method">>, reportId?: string) {
   const evidence = (input.evidence || []).map((entry) => ({
-    pageNumber: Number(entry.pageNumber) || 0,
+    pageNumber: reportId ? (entry.pageId || (getDatabase().prepare("SELECT id FROM report_pages WHERE report_id=? AND page_number=?").get(reportId,Number(entry.pageNumber)||0) as {id:string}|undefined)?.id || Number(entry.pageNumber) || 0) : Number(entry.pageNumber) || 0,
     quote: compactIdentity(entry.quote),
   }));
   return createHash("sha256").update(JSON.stringify({
     sectionName: compactIdentity(input.sectionName),
     itemCode: compactIdentity(input.itemCode),
     itemName: compactIdentity(input.itemName),
+    ...(reportId ? {unit:compactIdentity(input.unit),method:compactIdentity(input.method)} : {}),
     evidence,
   })).digest("hex");
 }
@@ -77,8 +79,9 @@ export function applyObservationFieldOverrides(
   `).all(reportId) as OverrideRow[];
   const bySourceKey = new Map(rows.map((row) => [row.sourceKey, row]));
   const used = new Set<string>();
-  const result = observations.map((observation) => {
-    const override = bySourceKey.get(observationSourceKey(observation));
+  const suppressed = new Set((getDatabase().prepare('SELECT source_key FROM observation_suppressions WHERE report_id=?').all(reportId) as {source_key:string}[]).map(row=>row.source_key));
+  const result = observations.filter(observation=>!suppressed.has(observationSourceKey(observation,reportId)) && !suppressed.has(observationSourceKey(observation))).map((observation) => {
+    const override = bySourceKey.get(observationSourceKey(observation,reportId)) || bySourceKey.get(observationSourceKey(observation));
     const fields = override ? parseFields(override.fieldsJson) : null;
     if (!override || !fields || used.has(override.id)) {
       return { observation, overrideId: null, manualCreated: false };
@@ -164,6 +167,7 @@ function managedReport(user: RequestUser, reportId: string) {
   `).get(reportId) as { memberId: string } | undefined;
   if (!row) throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   assertMemberManage(user, row.memberId);
+  assertNoPageAppend(reportId);
   return row;
 }
 
@@ -236,14 +240,14 @@ export function updateManualObservation(
       o.result_text AS resultText, o.numeric_value AS numericValue, o.unit,
       o.reference_low AS referenceLow, o.reference_high AS referenceHigh,
       o.reference_text AS referenceText, o.abnormal_flag AS abnormalFlag,
-      o.evidence_json AS evidenceJson, override.id AS overrideId,
+      o.evidence_json AS evidenceJson, o.method, override.id AS overrideId,
       override.source_key AS sourceKey, override.canonical_key AS currentCanonicalKey,
       override.is_manual_created AS isManualCreated
     FROM observations o
     LEFT JOIN observation_field_overrides override ON override.observation_id = o.id
     WHERE o.id = ? AND o.report_id = ?
   `).get(observationId, reportId) as (EditableObservationFields & {
-    evidenceJson: string; overrideId: string | null; sourceKey: string | null;
+    evidenceJson: string; method: string | null; overrideId: string | null; sourceKey: string | null;
     currentCanonicalKey: string | null; isManualCreated: number | null;
   }) | undefined;
   if (!current) throw createError({ statusCode: 404, statusMessage: "指标不存在" });
@@ -256,7 +260,7 @@ export function updateManualObservation(
     const parsed: unknown = JSON.parse(current.evidenceJson);
     evidence = Array.isArray(parsed) ? parsed as PersistableObservation["evidence"] : [];
   } catch { evidence = []; }
-  const sourceKey = current.sourceKey || observationSourceKey({ ...current, evidence });
+  const sourceKey = current.sourceKey || observationSourceKey({ ...current, evidence }, reportId);
   const overrideId = current.overrideId || createId("observation-override");
   const changedFields = (Object.keys(fields) as Array<keyof EditableObservationFields>)
     .filter((key) => (current[key] ?? null) !== (fields[key] ?? null));
@@ -311,7 +315,13 @@ export function deleteManualObservation(user: RequestUser, reportId: string, obs
     if (!db.prepare('SELECT 1 FROM observations WHERE id = ? AND report_id = ?').get(observationId, reportId)) {
       throw createError({ statusCode: 404, statusMessage: '指标不存在' });
     }
-    // Remove the manual override as well, otherwise the next extraction re-adds it.
+    const deleted = db.prepare(`SELECT section_name AS sectionName,item_code AS itemCode,item_name AS itemName,result_text AS resultText,unit,method,evidence_json AS evidenceJson FROM observations WHERE id=? AND report_id=?`).get(observationId,reportId) as EditableObservationFields & {evidenceJson:string;method:string|null};
+    const original = db.prepare('SELECT source_key FROM observation_field_overrides WHERE observation_id=? AND report_id=?').get(observationId,reportId) as {source_key:string}|undefined;
+    const parsed = JSON.parse(deleted.evidenceJson);
+    const sourceKey = observationSourceKey({...deleted,evidence:Array.isArray(parsed)?parsed:[]},reportId);
+    db.prepare('INSERT OR IGNORE INTO observation_suppressions(report_id,source_key) VALUES(?,?)').run(reportId,sourceKey);
+    if(original) db.prepare('INSERT OR IGNORE INTO observation_suppressions(report_id,source_key) VALUES(?,?)').run(reportId,original.source_key);
+    // Keep a source tombstone so future full-report extraction cannot resurrect it.
     db.prepare('DELETE FROM observation_field_overrides WHERE observation_id = ? AND report_id = ?').run(observationId, reportId);
     db.prepare('DELETE FROM observations WHERE id = ? AND report_id = ?').run(observationId, reportId);
     db.prepare('UPDATE reports SET source_version = source_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(reportId);

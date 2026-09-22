@@ -1,3 +1,5 @@
+import { ensurePageAppendDraft } from "./page-append-draft";
+import { ensureMemberSharingDraft } from "./member-sharing-draft";
 import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -233,6 +235,8 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
     ensureObservationDisplayFlagColumns(db);
     ensureIndicatorGovernanceSchema(db);
     ensureLocalAccountColumns(db);
+    ensureMemberSharingDraft(db);
+    ensurePageAppendDraft(db);
     ensureObservationFieldOverrideSchema(db);
     ensureOcrCoordSpaceColumns(db);
     ensureReportDuplicateGovernanceSchema(db);
@@ -261,7 +265,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
 
   const pendingMigrations = databaseMigrations.filter((migration) => migration.version > currentVersion);
   // Complete older v17 test drafts without renumbering their existing records.
-  if (pendingMigrations.length || !tableExists(db, "indicator_groups") || !tableExists(db, "indicator_group_members") || !tableExists(db, "report_notes") || !tableExists(db, "report_note_assets") || !tableExists(db, "upload_receipts")
+  if (!tableExists(db, "report_page_appends") || !tableColumnNames(db,"report_page_appends").has("confirmation_hash") || !tableColumnNames(db,"report_page_appends").has("input_hash") || !tableColumnNames(db,"report_page_append_files").has("error_message") || !tableExists(db, "file_gc_members") || !tableColumnNames(db, "member_permissions").has("can_manage_sharing") || pendingMigrations.length || !tableExists(db, "indicator_groups") || !tableExists(db, "indicator_group_members") || !tableExists(db, "report_notes") || !tableExists(db, "report_note_assets") || !tableExists(db, "upload_receipts")
     || !tableExists(db, "institution_trend_auto_rules") || !tableExists(db, "institution_trend_auto_decisions")) {
     backupDatabaseBeforeMigration(db, storageDir, databasePath, currentVersion, schemaVersion);
   }
@@ -293,6 +297,8 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
     ensureObservationDisplayFlagColumns(db);
     ensureIndicatorGovernanceSchema(db);
     ensureLocalAccountColumns(db);
+    ensureMemberSharingDraft(db);
+    ensurePageAppendDraft(db);
     ensureObservationFieldOverrideSchema(db);
     ensureOcrCoordSpaceColumns(db);
     ensureReportDuplicateGovernanceSchema(db);
@@ -427,4 +433,18 @@ export function closeDatabase() {
 
 export function closeDatabaseForTests() {
   closeDatabase();
+}
+
+/** Upgrade an extracted backup before switching the live database. Never changes the cached connection. */
+export function prepareRestoredDatabase(databasePath: string) {
+  const staged = new DatabaseSync(databasePath);
+  const previousMaintenance = unreleasedSchemaVersion;
+  try {
+    staged.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000');
+    migrate(staged, getAppConfig().storageDir, databasePath);
+    if (unreleasedSchemaVersion !== previousMaintenance) throw new Error('备份包含待确认的历史 schema 草案，请先在独立副本中完成适配');
+    if ((staged.prepare('PRAGMA integrity_check').get() as {integrity_check:string}).integrity_check !== 'ok' || staged.prepare('PRAGMA foreign_key_check').all().length) throw new Error('备份数据库完整性校验失败');
+    return staged;
+  } catch(error) { staged.close(); throw error; }
+  finally { unreleasedSchemaVersion=previousMaintenance; }
 }

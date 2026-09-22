@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, watch } from "vue";
-import { Check, X } from "@lucide/vue";
+import { Check, ChevronRight, UsersRound, X } from "@lucide/vue";
 import { useAppContext } from "../composables/useAppContext";
 import { useScrollLock } from "../composables/useScrollLock";
 
@@ -20,7 +20,7 @@ watch(() => props.open, (open) => {
 onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 
 const relationshipLabels: Record<string, string> = {
-  self: "本人", spouse: "配偶", child: "子女", parent: "父母", sibling: "兄弟姐妹", other: "其他"
+  shared: "共享档案", self: "本人", spouse: "配偶", child: "子女", parent: "父母", sibling: "兄弟姐妹", other: "其他"
 };
 
 function pick(id: string) {
@@ -39,6 +39,12 @@ function pick(id: string) {
           <button type="button" class="plain-icon-button" title="关闭" @click="emit('close')"><X :size="19" /></button>
         </header>
         <div class="member-sheet-list">
+          <p v-if="!app.members.value.length" class="member-sheet-empty">暂无常用成员，可在成员管理中恢复显示已隐藏的档案。</p>
+          <RouterLink class="member-sheet-item member-sheet-manage" to="/me/members" @click="emit('close')">
+            <span class="member-avatar" aria-hidden="true"><UsersRound :size="20" /></span>
+            <span class="member-sheet-info"><strong>管理成员与已隐藏档案</strong><span>添加成员、查看或取消隐藏</span></span>
+            <ChevronRight :size="18" class="member-sheet-arrow" aria-hidden="true" />
+          </RouterLink>
           <button
             v-for="member in app.members.value"
             :key="member.id"

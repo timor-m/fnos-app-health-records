@@ -490,7 +490,7 @@ test("conservatively links morphology findings into member-scoped timelines", ()
     assert.equal(rebuildMorphologyTrackingIfNeeded(), null);
 
     const adminResult = rebuildMorphologyTrackingForAdministrator(owner);
-    assert.equal(adminResult.members, 2);
+    assert.equal(adminResult.members, 1); // System admin only manages explicitly granted member data.
     const audit = db.prepare(`
       SELECT action, target_type AS targetType
       FROM audit_logs WHERE action = 'maintenance.rebuild_morphology_tracking'

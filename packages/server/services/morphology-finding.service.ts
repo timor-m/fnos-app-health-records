@@ -1,3 +1,4 @@
+import { assertNoPageAppend } from "./page-append-lock.service";
 import { createHash } from "node:crypto";
 import { createError } from "h3";
 import { rollbackAfterError, getDatabase } from "../database/client";
@@ -1051,6 +1052,7 @@ function findingForManage(user: RequestUser, findingId: string) {
   } | undefined;
   if (!row) throw createError({ statusCode: 404, statusMessage: "形态发现不存在" });
   assertMemberManage(user, row.memberId);
+  assertNoPageAppend(row.reportId);
   return row;
 }
 
@@ -1249,7 +1251,8 @@ export function rebuildMorphologyTrackingForAdministrator(user: RequestUser) {
   if (!isAdministrator(user)) {
     throw createError({ statusCode: 403, statusMessage: "仅管理员可重新关联历史形态发现" });
   }
-  const result = rebuildAllMorphologyTracking();
+  const ids=getDatabase().prepare("SELECT m.id FROM health_members m JOIN member_permissions p ON p.member_id=m.id WHERE p.user_id=? AND p.permission='manager' AND m.deleted_at IS NULL").all(user.id) as Array<{id:string}>;
+  const result = rebuildRows(ids.flatMap(member=>trackingRows(member.id)));
   getDatabase().prepare(`
     INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
     VALUES (?, ?, 'maintenance.rebuild_morphology_tracking', 'morphology_finding', NULL, ?)

@@ -52,12 +52,13 @@ beforeEach(() => {
   fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = String(init?.method || "GET");
+    if(url.endsWith("/preflight")) return jsonResponse({token:"test-plan",warning:"账号和授权将回到备份时点，普通账号不会统一停用"});
     if (url.includes("/api/backups/") && method === "POST") {
       return jsonResponse({
         restored: true,
         backupId: "backup_1",
         safetyBackupId: "backup_0",
-        identityRebind: { disabledLocalAccountCount: 2 }
+        identityRebind: { strategy: "same" }
       });
     }
     if (url.includes("/api/backups")) return jsonResponse([backup]);
@@ -72,7 +73,7 @@ afterEach(() => {
 });
 
 describe("DataAuditSettingsPage restore notices", () => {
-  it("warns about disabled local accounts before and after restoring in local mode", async () => {
+  it("requires preflight confirmation and preserves local account permissions", async () => {
     const wrapper = mount(DataAuditSettingsPage, { attachTo: document.body });
     await flushPromises();
 
@@ -80,17 +81,19 @@ describe("DataAuditSettingsPage restore notices", () => {
       .find(button => button.text().includes("恢复"));
     expect(restoreButton).toBeTruthy();
     await restoreButton!.trigger("click");
+    await flushPromises();
 
     expect(confirmAsk).toHaveBeenCalledTimes(1);
     const options = confirmAsk.mock.calls[0][0] as { title: string; message: string; danger: boolean; run: () => Promise<void> };
     expect(options.title).toBe("从备份恢复");
-    expect(options.message).toContain("恢复后其他本地账号将被停用");
-    expect(options.message).toContain("可在「账号安全」中重新启用");
+    expect(options.message).toContain("账号和授权将回到备份时点");
+    expect(options.message).toContain("普通账号不会统一停用");
 
     await options.run();
     await flushPromises();
 
-    expect(wrapper.text()).toContain("已停用 2 个其他本地账号，可前往「我的 → 账号安全」重新启用");
+    expect(wrapper.text()).toContain("授权已回到备份时点，请重新登录");
+    expect(fetchMock.mock.calls.some(([url,init])=>String(url).endsWith("/restore") && JSON.parse(String(init?.body)).token==="test-plan")).toBe(true);
     expect(toastShow).toHaveBeenCalledWith("备份已恢复");
     expect(appLoad).toHaveBeenCalled();
   });

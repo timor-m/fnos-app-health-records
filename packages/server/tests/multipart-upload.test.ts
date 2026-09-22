@@ -1,3 +1,4 @@
+import {createMember} from "../services/member.service";
 import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -82,8 +83,8 @@ function authenticatedApp() {
 }
 
 test('legacy multipart report upload preserves manifest order, rotation, file names and retry result',()=>withStorage(async dir=>{
-  const {app}=authenticatedApp(); app.post('/api/uploads',uploads);
-  const {id}=getDatabase().prepare('SELECT id FROM health_members').get() as {id:string};
+  const {app,user}=authenticatedApp(); app.post('/api/uploads',uploads);
+  const {id}=createMember(user,{displayName:'合成测试',createSelf:true});
   const body=new FormData(); const bytes=Buffer.from('%PDF-1.4\n%%EOF');
   body.set('memberId',id); body.set('requestKey','legacy-request-0001');
   body.set('manifest',JSON.stringify({pages:[{size:bytes.length,rotation:90}]})); body.append('files',new Blob([bytes]),'示例.pdf');
@@ -100,6 +101,8 @@ test('uploaded backup restores through the existing validator and rejects unauth
   assert.equal(existsSync(path),true);
   const db=getDatabase(); db.prepare('UPDATE users SET display_name=? WHERE id=?').run('Changed',user.id);
   const body=new FormData(); body.append('backup',new Blob([readFileSync(path)]),'backup.tar.gz');
+  const preview=await app.request('http://localhost/api/backups/restore-upload',{method:'POST',body});
+  const plan=(await preview.json()).data;assert.equal(plan.strategy,'same');body.append('token',plan.token);
   const response=await app.request('http://localhost/api/backups/restore-upload',{method:'POST',body});
   assert.equal(response.status,200); assert.equal((await response.json()).data.restored,true); clean(dir);
   assert.equal(readdirSync(join(dir,"backups")).some(name => name.startsWith(".check-") || name.startsWith(".restore-")),false);

@@ -267,6 +267,7 @@ test("installs, upgrades and rolls back remote dictionaries while preserving unm
     assert.equal(remoteGroupCount.count, 1);
 
     normalizeReportObservations("dictionary-report");
+    db.prepare("INSERT OR IGNORE INTO member_permissions(member_id,user_id,permission,granted_by) SELECT id,?,'manager',? FROM health_members WHERE created_by=?").run(admin.id,admin.id,admin.id);
     const firstIssues = listIndicatorNormalizationIssues(admin);
     assert.equal(firstIssues.find((item) => item.rawName === "待收录项目")?.count, 1);
     const repeatedIssues = listIndicatorNormalizationIssues(admin);

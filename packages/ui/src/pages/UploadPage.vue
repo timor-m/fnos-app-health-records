@@ -733,7 +733,8 @@ onActivated(() => {
 </script>
 
 <template>
-  <section class="plain-page upload-page">
+  <section v-if="app.selectedMember.value?.permission !== 'manager'" class="plain-page"><h2>当前档案仅可查看</h2><p>上传报告需要档案管理权限，请联系该档案的共享管理者。</p></section>
+  <section v-else class="plain-page upload-page">
     <div class="page-intro">
       <div><h2>上传健康报告</h2><p>保存到 {{ app.selectedMember.value?.displayName || "当前成员" }} 的档案</p></div>
       <span v-if="items.length" class="count-label">{{ items.length }} 个文件 · {{ formatBytes(totalBytes) }}</span>

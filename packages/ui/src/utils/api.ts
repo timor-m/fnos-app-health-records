@@ -64,6 +64,7 @@ export async function request<T>(path: string, init?: RequestInit) {
   } catch (cause) {
     throw networkError();
   }
+  if([401,403,404].includes(response.status) && typeof window!=="undefined") window.dispatchEvent(new Event("health-access-denied"));
   return parseApiPayload<T>(response.status, response.ok, await response.text());
 }
 
@@ -106,6 +107,7 @@ export async function requestUpload<T>(path: string, body: FormData, onProgress?
       throw networkError();
     }
   }
+  if([401,403,404].includes(response.status) && typeof window!=="undefined") window.dispatchEvent(new Event("health-access-denied"));
   return parseApiPayload<T>(response.status, response.ok, await response.text());
 }
 

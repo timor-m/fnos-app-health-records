@@ -158,6 +158,8 @@ HTTP 状态描述协议语义，code 描述故障领域，二者不是一一对�
 
 ## 最终验证结果
 
+2026-09-21 合并复核发现 `error-handler.ts` 丢失 `node:crypto` 的 `randomUUID` 导入，导致错误处理器自身抛出 ReferenceError。仅补回这一行代码后，文件与合并前暂存记录一致。缺少导入时服务端 752 项通过、21 项失败且类型检查失败；恢复后重新执行 `npm test`，773 项全部通过，`npm run typecheck`、`npm run build` 及暂存/未暂存差异检查均通过。该前后对照确认导入不可省略，无需增加抽象或重复测试；版本及 schema 不变，未重新进行实机部署验证。
+
 2026-09-20 独立复验及构建产物 HTTP 检查见 [服务异常修复测试报告](./SERVICE_ERROR_TEST_REPORT_2026-09-20.md)。该报告同时记录了非默认部署组合下新发现的首次改密路径兼容问题及尚未覆盖的实机范围。
 
 - `npm test`：773 通过，0 失败（含两轮服务异常修复回归）。
@@ -169,3 +171,20 @@ HTTP 状态描述协议语义，code 描述故障领域，二者不是一一对�
 - 未进行正式发布检查、FPK 打包或容器部署；本次没有发布授权，版本和迁移不变。
 
 最终审查发现并处理了：multipart 裸 500、备份路径和系统原文泄露、AI/飞牛上游原文透传、OCR 设置 catch 将系统错误转成输入错误、维护 fail 缺少分类、上传 XHR 回退遮蔽业务错误。新增用例验证 AI 429 与 PDF/图片解码分类不会混淆。治理后的 HTTP 错误统一具有公共错误码；业务成功响应中的历史任务诊断仍保留原有内部结构，不能据此宣称整个历史数据/诊断日志系统已完成全面敏感信息审计。
+
+### 成员共享与恢复预检（0.2.10 Unreleased）
+
+新增 `MEMBER_MANAGE_REQUIRED`、`MEMBER_SHARE_REQUIRED`（403），`MEMBER_LAST_MANAGER`、`MEMBER_PERMISSION_CONFLICT`、`RESTORE_PLAN_EXPIRED`（409）。成员/报告资源路径对不存在和完全无访问权限统一返回 404 `RESOURCE_NOT_FOUND`，避免猜测资源是否存在；已有查看权限但不能修改仍返回 403。授权冲突刷新成员权限后重试；恢复预检失效需重新预检并明确确认，不能自动重新恢复。
+
+
+## 回收站文件清理状态
+
+`GET /api/reports/trash-cleanup?memberId=...` 复用成员管理权限校验及统一错误协议。401/403/资源不可访问时前端清空管理状态并停止重试；数据库查询失败返回规范错误，不返回假零值；全局存储维护拦截继续生效。响应使用 `Cache-Control: private, no-store`。
+
+成功查询的 `reasonCode` 是运行状态原因而非 API 错误码：`STORAGE_UNAVAILABLE`、`STORAGE_MIGRATION`、`SCHEDULE_UNKNOWN`、`SCHEDULE_OVERDUE`、`MAINTENANCE_RUNNING`、`MAINTENANCE_FAILED`、`FILE_RETRY`。只映射固定安全中文文案，不返回 `last_error`、路径或异常堆栈。详见 [清理状态口径](TRASH_CLEANUP.md)。
+
+## 补充报告页 API
+
+`POST/GET reports/:id/page-appends` 创建批次/查询本人最近批次；`POST page-appends/import` 使用现有授权目录导入；`GET/DELETE page-appends/:batchId` 查询/放弃未发布批次。子路径 `files/:fileId` POST 单文件，`pages/:pageId` GET 私有预览，`submit`、`confirm`、`retry` POST 提交选页、确认冲突和重试；retry 的 keepOcr=true 可结束已发布但失败的识别。所有操作要求当前成员管理权限并绑定原账号。
+
+非法清单返回 400 UPLOAD_INVALID；重复键但载荷不一致、并发冲突或失效版本返回 409 UPLOAD_CONFLICT；无权访问返回 403 或对资源路径统一隐藏为 404。未发布页不会从正式原件接口读取。批次失败通过 state/error 返回安全说明，保留旧结果；不可把 HTTP 提交成功显示成 AI 已完成。

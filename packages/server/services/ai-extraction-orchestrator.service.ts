@@ -68,6 +68,8 @@ export type AiExtractionUnitEvent = {
 };
 
 type ExecuteOptions = {
+  /** Append runs one existing supplement pass even in overview mode. */
+  supplementMissingCandidates?: boolean;
   onEvent?: (event: AiExtractionUnitEvent) => void;
   shouldContinue?: () => boolean;
   /* 视觉复核执行器，默认 runVisionReview；测试可注入桩。 */
@@ -215,7 +217,7 @@ function syncPlanUnits(
         character_count = excluded.character_count,
         candidate_count = excluded.candidate_count,
         status = CASE
-          WHEN ai_extraction_units.status = 'superseded' AND ai_extraction_units.result_json IS NOT NULL THEN 'completed'
+          WHEN ai_extraction_units.status = 'superseded' AND ai_extraction_units.result_json IS NOT NULL AND COALESCE(ai_extraction_units.error_code, '') <> 'APPEND_RESULT_INCOMPLETE' THEN 'completed'
           WHEN ai_extraction_units.status = 'superseded' THEN 'planned'
           ELSE ai_extraction_units.status
         END,
@@ -3607,7 +3609,7 @@ export async function executeAiExtractionPlan(
     merged.fields.observations.length === 0 &&
     merged.fields.morphologyFindings.length === 0;
   const supplements =
-    plan.extractionDepth === "overview" && !overviewTotalWipe
+    plan.extractionDepth === "overview" && !overviewTotalWipe && !options.supplementMissingCandidates
       ? []
       : supplementUnits(plan, merged);
   let effectivePlan = plan;

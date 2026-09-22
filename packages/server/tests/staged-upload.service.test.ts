@@ -24,6 +24,7 @@ test('30 images plus PDF finalize atomically, preserve order and retry without d
     db.prepare('INSERT INTO users (id, display_name) VALUES (?, ?)').run(user.id, 'Test');
     db.exec("INSERT INTO health_members (id, display_name, relationship, created_by) VALUES ('member', 'Test', 'self', 'staging-user')");
     db.exec("INSERT INTO member_permissions (member_id, user_id, permission, granted_by) VALUES ('member', 'staging-user', 'manager', 'staging-user')");
+    db.prepare("INSERT INTO user_identities(id,user_id,provider,subject) VALUES('stage-identity',?,'fnos_gateway',?)").run(user.id,user.id);
     // Exercise the previous-version migration independently, without changing old migrations.
     db.exec('DROP TABLE upload_receipts');
     closeDatabaseForTests(); db = getDatabase();

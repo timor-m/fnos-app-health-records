@@ -480,34 +480,32 @@ function resolveFilesFromRoots(
     if (seen.has(key)) throw createError({ statusCode: 400, statusMessage: "不能重复导入同一个文件" });
     seen.add(key);
     const sourcePath = resolveInsideRoot(root, path);
-    const stats = statSync(sourcePath);
+    let stats: ReturnType<typeof statSync>;
+    try { stats = statSync(sourcePath); }
+    catch { throw createError({ statusCode: 404, statusMessage: `文件“${basename(path)}”不存在或不可读取` }); }
     if (!stats.isFile()) throw createError({ statusCode: 400, statusMessage: `“${basename(path)}”不是普通文件` });
     return { originalName: basename(path), sourcePath, rotation: Number(file.rotation || 0) };
   });
 }
 
-export async function importLocalFilesForUser(
+export async function resolveLocalFilesForUser(
   user: RequestUser,
-  memberId: string,
-  files: Array<{ rootId?: unknown; path?: unknown; rotation?: unknown }>,
-  requestKey?: string
+  files: Array<{ rootId?: unknown; path?: unknown; rotation?: unknown }>
 ) {
   if (getAppConfig().authMode !== "fnos") {
     if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可从 NAS 导入报告" });
-    return importLocalFiles(user, memberId, files, requestKey);
+    return resolveFilesFromRoots(listLocalImportRoots(), files);
   }
   const inspected = await inspectLocalImportRootsForUser(user);
   const resolved = resolveFilesFromRoots(inspected.roots, files);
   if (isFnosUserFileApiConfigured()) await requireFnosUserReadable(user, resolved.map((file) => file.sourcePath));
   else if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "当前飞牛系统不支持个人文件导入" });
-  return createUploadFromLocalFiles(user, memberId, resolved, requestKey);
+  return resolved;
 }
 
-export async function importAuthorizedFnosFiles(
+export async function resolveAuthorizedFnosFiles(
   user: RequestUser,
-  memberId: string,
-  pathValues: unknown,
-  requestKey?: string
+  pathValues: unknown
 ) {
   if (getAppConfig().authMode !== "fnos" || !isFnosUserFileApiConfigured()) {
     throw createError({ statusCode: 400, statusMessage: "当前部署环境不支持飞牛用户文件授权" });
@@ -544,5 +542,12 @@ export async function importAuthorizedFnosFiles(
   if (canonicalPaths.some((path, index) => path !== requestedPaths[index])) {
     await requireFnosUserReadable(user, canonicalPaths);
   }
-  return createUploadFromLocalFiles(user, memberId, resolved, requestKey);
+  return resolved;
+}
+
+export async function importLocalFilesForUser(user: RequestUser, memberId: string, files: Array<{rootId?:unknown;path?:unknown;rotation?:unknown}>,requestKey?:string) {
+ return createUploadFromLocalFiles(user,memberId,await resolveLocalFilesForUser(user,files),requestKey);
+}
+export async function importAuthorizedFnosFiles(user: RequestUser, memberId:string, paths:unknown,requestKey?:string) {
+ return createUploadFromLocalFiles(user,memberId,await resolveAuthorizedFnosFiles(user,paths),requestKey);
 }

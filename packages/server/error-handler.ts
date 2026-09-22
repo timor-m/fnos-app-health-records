@@ -18,6 +18,13 @@ function baseURL() {
 export default async function errorHandler(error: unknown, event: H3Event) {
   const businessError = unwrapHttpError(error);
   const body = toApiErrorPayload(error);
+  const path = event.url?.pathname || (event.req?.url ? new URL(event.req.url).pathname : "");
+  // A guessed resource ID must not reveal whether an inaccessible archive exists.
+  if (/\/api\/(?:reports|members)\//.test(path) && (body.code === 'MEMBER_ACCESS_DENIED' || body.status === 404)) {
+    body.status = 404;
+    body.code = 'RESOURCE_NOT_FOUND';
+    body.message = '资源不存在或无权访问';
+  }
   const status = body.status;
 
   if (status === 404) {

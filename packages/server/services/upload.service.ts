@@ -119,7 +119,7 @@ function readFileSignature(path: string) {
   }
 }
 
-function validateLocalFiles(files: LocalUploadInputFile[]): ValidatedUploadFile[] {
+export function validateLocalFiles(files: LocalUploadInputFile[]): ValidatedUploadFile[] {
   if (!files.length) throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: "请选择至少一个报告文件" });
   if (files.length > maxFileCount) {
     throw createError({ statusCode: 413, data: { code: "FILE_TOO_LARGE" }, statusMessage: `一次最多上传 ${maxFileCount} 个文件` });
@@ -162,7 +162,7 @@ function validateLocalFiles(files: LocalUploadInputFile[]): ValidatedUploadFile[
   });
 }
 
-function persistValidatedFile(file: ValidatedUploadFile, destination?: string) {
+export function persistValidatedFile(file: ValidatedUploadFile, destination?: string) {
   if (file.data) {
     if (destination) writeFileSync(destination, file.data, { flag: "wx", mode: 0o600 });
     return createHash("sha256").update(file.data).digest("hex");

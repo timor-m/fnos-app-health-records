@@ -111,28 +111,18 @@ function removeAccount(account: LocalAccount) {
     message: `确认删除 ${account.displayName}（${account.username}）的账号？删除后无法登录且不可恢复；其成员档案与健康数据保留。`,
     confirmText: "删除账号",
     danger: true,
-    run: () => runDeleteAccount(account, false)
+    run: () => runDeleteAccount(account)
   });
 }
 
-function forceRemoveAccount(account: LocalAccount, serverMessage: string) {
-  confirmDialog.ask({
-    title: "确认强制删除",
-    message: `${serverMessage}。强制删除不可恢复，确认继续？`,
-    confirmText: "仍要删除",
-    danger: true,
-    run: () => runDeleteAccount(account, true)
-  });
-}
-
-async function runDeleteAccount(account: LocalAccount, force: boolean) {
+async function runDeleteAccount(account: LocalAccount) {
   if (actionPending.value) return;
   resetError.value = "";
   actionPending.value = true;
   try {
     const result = await request<{ exclusiveReportCount?: number }>("auth/accounts", {
       method: "DELETE",
-      body: JSON.stringify({ userId: account.userId, ...(force ? { force: true } : {}) })
+      body: JSON.stringify({ userId: account.userId })
     });
     await loadAccounts();
     toast.show(
@@ -142,10 +132,6 @@ async function runDeleteAccount(account: LocalAccount, force: boolean) {
       4200
     );
   } catch (cause) {
-    if (!force && cause instanceof ApiRequestError && cause.status === 409) {
-      forceRemoveAccount(account, cause.message);
-      return;
-    }
     resetError.value = cause instanceof Error ? cause.message : "账号删除失败";
   } finally {
     actionPending.value = false;
@@ -289,7 +275,6 @@ onMounted(() => { void loadAccounts(); });
 <template>
   <section class="settings-page">
     <SubPageHeader title="账号安全" description="管理本地账号与登录密码" />
-
     <section v-if="isAdmin" class="settings-band account-management-band">
       <header class="account-management-header">
         <ShieldCheck :size="21" />

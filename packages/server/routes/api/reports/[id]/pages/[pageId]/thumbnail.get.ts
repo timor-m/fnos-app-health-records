@@ -10,6 +10,6 @@ export default defineEventHandler((event) => {
   if (!reportId || !pageId) throw createError({ statusCode: 400, statusMessage: "报告页面 ID 无效" });
   const file = getReportPageFile(getRequestUser(event), reportId, pageId, "thumbnail");
   setHeader(event, "content-type", file.mimeType);
-  setHeader(event, "cache-control", "private, max-age=300");
+  setHeader(event, "cache-control", "private, no-store");
   return sendStream(event, Readable.toWeb(createReadStream(file.path)) as unknown as ReadableStream);
 });

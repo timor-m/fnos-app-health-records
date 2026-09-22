@@ -1,4 +1,4 @@
-import { readFileSync, mkdirSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, unlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join, dirname, isAbsolute, resolve, basename } from 'node:path';
 import { getAppConfig } from './runtime-config';
@@ -52,6 +52,7 @@ export function writeStorageMigration(state: StorageMigration) {
 }
 
 export function storageMigrationPaused() {
+  if(existsSync(join(getAppConfig().runtimeDir,"restore-maintenance.json"))) return true;
   // Docker only uses its existing mounted /data; copied fnOS control files have no effect.
   if (!['fnos', 'development'].includes(getAppConfig().authMode)) return false;
   try {

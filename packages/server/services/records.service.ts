@@ -1,9 +1,17 @@
+import { appendReviewWarnings } from "./page-append-result-guard.service";
+import { assertNoPageAppend } from "./page-append-lock.service";
+import { getDeploymentIdentity } from '../utils/deployment-identity';
+import { activeStorageRequests, atomicStorageJson } from '../utils/storage-migration-state';
+import { isStorageMaintenanceActive } from './maintenance-runner.service';
+import { isStorageNormalizationActive } from './indicator-normalization-task.service';
 import { apiError, classifySystemError } from "../utils/api-error";
 import {
   rollbackAfterError,
   checkpointDatabase,
+  prepareRestoredDatabase,
   closeDatabase,
   getDatabase,
+  runInTransaction,
   getDatabasePath,
   getDatabaseStatus,
 } from "../database/client";
@@ -53,7 +61,7 @@ import { isAiReportStructuredSectionCompatible } from "../domain/health-record";
 import { getAppConfig } from "../utils/runtime-config";
 import { createId } from "../utils/identifier";
 import { schemaVersion } from "../database/schema";
-import { assertMemberAccess, assertMemberManage } from "./member.service";
+import { assertMemberAccess, assertMemberManage, memberAccessSql } from "./member.service";
 import { assessReportMemberIdentity } from "./report-member-identity.service";
 import {
   defaultOcrPdfRenderScale,
@@ -77,7 +85,7 @@ import {
   startJobRunner,
   stopJobRunner,
 } from "./job-runner.service";
-import { enqueueFileGarbage } from "./file-gc.service";
+import { enqueueFileGarbage, collectReportFileGarbage, type FileGarbageCandidate } from "./file-gc.service";
 import { reportNoteFiles } from './report-note.service';
 import {
   captureRestoringAdministratorCredential,
@@ -1059,17 +1067,22 @@ export function listMembers(user: RequestUser) {
   return getDatabase()
     .prepare(
       `
-    SELECT hm.id, hm.display_name AS displayName, hm.relationship, hm.birth_date AS birthDate,
+    SELECT hm.id, hm.display_name AS displayName,
+      CASE WHEN ap.self_member_id=hm.id THEN 'self' WHEN hm.created_by=? AND hm.relationship<>'self' THEN hm.relationship ELSE 'shared' END AS relationship,
+      ap.self_member_id=hm.id AS isSelf, mup.hidden_at IS NOT NULL AS hidden,
+      mp.can_manage_sharing AS canManageSharing, hm.birth_date AS birthDate,
       hm.sex, hm.blood_type_abo AS bloodTypeAbo, hm.blood_type_rh AS bloodTypeRh,
       hm.blood_type_source_report_id AS bloodTypeSourceReportId,
       hm.avatar_path AS avatarPath, mp.permission
     FROM health_members hm
     JOIN member_permissions mp ON mp.member_id = hm.id AND mp.user_id = ?
+    LEFT JOIN account_preferences ap ON ap.user_id=mp.user_id
+    LEFT JOIN member_user_preferences mup ON mup.user_id=mp.user_id AND mup.member_id=hm.id
     WHERE hm.deleted_at IS NULL
-    ORDER BY CASE hm.relationship WHEN 'self' THEN 0 ELSE 1 END, hm.created_at
+    ORDER BY CASE WHEN ap.self_member_id=hm.id THEN 0 ELSE 1 END, hm.created_at
   `,
     )
-    .all(user.id);
+    .all(user.id,user.id);
 }
 
 export function listReports(
@@ -1158,6 +1171,8 @@ export function listReports(
     .prepare(
       `
     SELECT r.id, r.member_id AS memberId, r.title, r.report_type AS reportType, r.status,
+      strftime('%Y-%m-%dT%H:%M:%fZ', r.deleted_at) AS deletedAt,
+      strftime('%Y-%m-%dT%H:%M:%fZ', r.purge_after) AS purgeAfter,
       r.hospital_name_raw AS hospitalName, r.hospital_branch AS hospitalBranch,
       ${displayDepartmentSql} AS departmentName,
       json_extract(r.body_parts_json, '$[0].name') AS bodyPart,
@@ -2068,6 +2083,12 @@ export function getReportDetail(
     manualFieldKeys: [...listManualReportFieldKeys(reportId)],
     duplicateCandidates: findDuplicateCandidates(row),
     memberIdentityAssessment: assessReportMemberIdentity(user, reportId),
+    pageAppend: (() => {
+      const batch = getDatabase().prepare(`SELECT base_version AS originalRevision,result_version AS recognizedRevision,state,job_id AS jobId FROM report_page_appends WHERE report_id=? AND published=1 ORDER BY rowid DESC LIMIT 1`).get(reportId) as {originalRevision:number;recognizedRevision:number|null;state:string;jobId:string|null}|undefined;
+      if (!batch) return undefined;
+      const { jobId, ...summary } = batch;
+      return {...summary,reviewWarnings:batch.state === 'complete' ? appendReviewWarnings(jobId) : []};
+    })(),
   };
 }
 
@@ -2099,6 +2120,15 @@ export function getReportPageFile(
   if (!row)
     throw createError({ statusCode: 404, statusMessage: "报告原件不存在" });
   assertMemberAccess(user, row.memberId);
+  if (variant === "original" && row.mimeType === "application/pdf") {
+    const sourcePages = reportOriginalPages(user,reportId).pages.filter(page=>page.storagePath===row.storagePath);
+    if (!canReturnSourcePdf(sourcePages)) {
+      const page=sourcePages.find(page=>page.id===pageId)!;
+      const path=reportOriginalExportPath(reportId,singlePageExportKey(page));
+      if (!existsSync(path)) throw createError({statusCode:409,statusMessage:'此 PDF 仅公开已选择的页面，请生成单页原件后查看'});
+      return {path,mimeType:'application/pdf',filename:reportDownloadFilename(page.originalName.replace(/\.[^.]+$/,''), '报告页')};
+    }
+  }
   const relativePath =
     variant === "thumbnail" ? row.thumbnailPath : row.storagePath;
   if (!relativePath)
@@ -2163,13 +2193,42 @@ function reportOriginalPages(user: RequestUser, reportId: string) {
   return { report, pages };
 }
 
+type OriginalSourcePage = ReturnType<typeof reportOriginalPages>['pages'][number];
+function canReturnSourcePdf(pages: OriginalSourcePage[]) {
+  if (!pages.length || pages.some(page=>page.mimeType!=='application/pdf' || page.storagePath!==pages[0].storagePath || page.rotation)) return false;
+  if (!pages.every((page,index)=>page.sourcePageNumber===index+1)) return false;
+  const count=Number(pages[0].sourcePageCount || 0);
+  // Preserve legacy whole-source uploads. Append paths with unknown metadata must
+  // always be rendered from their explicitly published source page numbers.
+  return count ? pages.length===count && pages.every(page=>page.sourcePageCount===count) : !pages[0].storagePath.includes('/appends/');
+}
+function singlePageExportKey(page: OriginalSourcePage) {
+  return createHash('sha256').update(JSON.stringify(['selected-page',page.id,page.sha256,page.sourcePageNumber,page.rotation])).digest('hex').slice(0,32);
+}
+export async function getReportPageOriginalDownload(user: RequestUser,reportId:string,pageId:string,worker:typeof requestWorker=requestWorker) {
+  const {pages}=reportOriginalPages(user,reportId);
+  const page=pages.find(page=>page.id===pageId);
+  if (!page) throw createError({statusCode:404,statusMessage:'报告页面不存在'});
+  if(page.mimeType!=='application/pdf'||canReturnSourcePdf(pages.filter(item=>item.storagePath===page.storagePath))) return getReportPageFile(user,reportId,pageId,'original');
+  const output=reportOriginalExportPath(reportId,singlePageExportKey(page));
+  if(!existsSync(output)) {
+    const temporary=reportOriginalExportPath(reportId,createHash('sha256').update(createId('export')).digest('hex').slice(0,32));
+    try {
+      const path=storagePath(page.storagePath);
+      const result=await worker({action:'assemble_pdf',imagePath:path,mimeType:page.mimeType,outputPath:temporary,pages:[{path,mimeType:page.mimeType,sourcePageNumber:page.sourcePageNumber,rotation:page.rotation}]});
+      const latest=reportOriginalPages(user,reportId).pages.find(item=>item.id===pageId);
+      if(!latest||singlePageExportKey(latest)!==singlePageExportKey(page)) throw createError({statusCode:409,statusMessage:'报告页面已改变，请重新打开'});
+      if(!result.ok || !existsSync(temporary)) throw createError({statusCode:502,statusMessage:'PDF 单页导出失败，请重试'});
+      renameSync(temporary,output);
+    } finally {rmSync(temporary,{force:true});}
+  }
+  return getReportPageFile(user,reportId,pageId,'original');
+}
+
 export async function getReportOriginalDownload(user: RequestUser, reportId: string): Promise<ReportOriginalDownload> {
   const { report, pages } = reportOriginalPages(user, reportId);
   const filename = reportDownloadFilename(report.title, pages[0].originalName.replace(/\.[^.]+$/, ""));
-  const pdfPages = pages.filter((page) => page.mimeType === "application/pdf");
-  const isSinglePdfSource = pdfPages.length === pages.length
-    && new Set(pages.map((page) => page.storagePath)).size === 1
-    && pages.every((page) => page.sourcePageNumber !== null);
+  const isSinglePdfSource = canReturnSourcePdf(pages);
   if (isSinglePdfSource) {
     const path = storagePath(pages[0].storagePath);
     if (!existsSync(path)) throw createError({ statusCode: 404, statusMessage: "报告原件文件不存在" });
@@ -2207,8 +2266,7 @@ async function generateReportOriginalExport(user: RequestUser, reportId: string)
 export function getReportOriginalExportStatus(user: RequestUser, reportId: string) {
   const { report, pages } = reportOriginalPages(user, reportId);
   const filename = reportDownloadFilename(report.title, pages[0].originalName.replace(/\.[^.]+$/, ""));
-  const isPdf = pages.every((page) => page.mimeType === "application/pdf")
-    && new Set(pages.map((page) => page.storagePath)).size === 1;
+  const isPdf = canReturnSourcePdf(pages);
   if (isPdf) return { status: "ready" as const, filename };
   const key = reportOriginalExportKey(pages);
   const outputPath = reportOriginalExportPath(reportId, key);
@@ -2232,8 +2290,7 @@ export function queueReportOriginalExport(user: RequestUser, reportId: string) {
 
 export function getReportOriginalDownloadInfo(user: RequestUser, reportId: string) {
   const { report, pages } = reportOriginalPages(user, reportId);
-  const sourceIsPdf = pages.length && pages.every((page) => page.mimeType === "application/pdf")
-    && new Set(pages.map((page) => page.storagePath)).size === 1;
+  const sourceIsPdf = canReturnSourcePdf(pages);
   const cachedPath = reportOriginalExportPath(reportId, reportOriginalExportKey(pages));
   return {
     filename: reportDownloadFilename(report.title, pages[0].originalName.replace(/\.[^.]+$/, "")),
@@ -2698,6 +2755,7 @@ export function confirmReportReady(user: RequestUser, reportId: string) {
   if (!report)
     throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   assertMemberManage(user, report.memberId);
+  assertNoPageAppend(reportId);
   if (report.status === "ready") return { id: reportId, status: "ready" };
   if (report.status !== "needs_review") {
     throw createError({
@@ -2738,38 +2796,50 @@ export function trashReport(user: RequestUser, reportId: string) {
     throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   assertMemberManage(user, report.memberId);
   const db = getDatabase();
-  db.prepare(
-    `
-    UPDATE reports
-    SET status = 'trashed',
-      deleted_at = CURRENT_TIMESTAMP,
-      purge_after = datetime('now', '+30 days'),
-      updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `,
-  ).run(reportId);
-  db.prepare(
-    `
-    UPDATE processing_jobs
-    SET status = 'cancelled',
-      finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP)
-    WHERE report_id = ? AND status IN ('queued', 'processing')
-  `,
-  ).run(reportId);
-  db.prepare(
-    `
-    INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
-    VALUES (?, ?, 'report.trash', 'report', ?, ?)
-  `,
-  ).run(
-    createId("audit"),
-    user.id,
-    reportId,
-    JSON.stringify({
-      memberId: report.memberId,
-      previousStatus: report.status,
-    }),
-  );
+  runInTransaction(db, () => {
+    // Stop append work before changing report status; the existing lease checks fence late results.
+    db.prepare(`UPDATE processing_jobs SET status='cancelled',lease_expires_at=NULL,
+      next_retry_at=NULL,finished_at=COALESCE(finished_at,CURRENT_TIMESTAMP)
+      WHERE id IN (SELECT job_id FROM report_page_appends WHERE report_id=?
+        AND state NOT IN ('complete','ocr_only','noop','cancelled'))
+      AND status IN ('queued','processing','failed')`).run(reportId);
+    db.prepare(`UPDATE report_page_appends SET state=CASE WHEN published=1 THEN 'ocr_only' ELSE 'cancelled' END,
+      error_message='报告已移入回收站，补页处理已停止',updated_at=CURRENT_TIMESTAMP
+      WHERE report_id=? AND state NOT IN ('complete','ocr_only','noop','cancelled')`).run(reportId);
+    db.prepare(
+      `
+      UPDATE reports
+      SET status = 'trashed',
+        deleted_at = CURRENT_TIMESTAMP,
+        purge_after = datetime('now', '+30 days'),
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `,
+    ).run(reportId);
+    db.prepare(
+      `
+      UPDATE processing_jobs
+      SET status = 'cancelled',
+        finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP),
+        lease_expires_at = NULL, next_retry_at = NULL
+      WHERE report_id = ? AND status IN ('queued', 'processing')
+    `,
+    ).run(reportId);
+    db.prepare(
+      `
+      INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
+      VALUES (?, ?, 'report.trash', 'report', ?, ?)
+    `,
+    ).run(
+      createId("audit"),
+      user.id,
+      reportId,
+      JSON.stringify({
+        memberId: report.memberId,
+        previousStatus: report.status,
+      }),
+    );
+  });
   return { id: reportId, status: "trashed" as const, purgeAfterDays: 30 };
 }
 
@@ -2848,6 +2918,17 @@ function purgeTrashedReport(
     });
   }
   const pages = reportPageRows(reportId);
+  // Only known derivatives for this report; no global scan or eager deletion.
+  const derivedFiles = pages.flatMap(page => [
+    pdfPreviewRelativePath(reportId, page.id),
+    ...[0, 90, 180, 270].map(rotation => join("previews", "vision", reportId, `${page.id}.r${rotation}.jpg`))
+  ]).filter(path => existsSync(join(getAppConfig().storageDir, path)));
+  const exportDirectory = join(getAppConfig().storageDir, "report-exports");
+  if (existsSync(exportDirectory)) {
+    for (const name of readdirSync(exportDirectory)) {
+      if (name.startsWith(`${reportId}-`) && /^[a-f0-9]{32}\.pdf$/.test(name.slice(reportId.length + 1))) derivedFiles.push(join("report-exports", name));
+    }
+  }
   const db = getDatabase();
   const governanceSnapshot = db
     .prepare(
@@ -2877,6 +2958,8 @@ function purgeTrashedReport(
   const reportFingerprint = createHash("sha256")
     .update(`${report.memberId}\u0000${reportId}\u0000${report.title}`)
     .digest("base64url");
+  let pendingFileCount: number | null = 0;
+  let purgeFiles: FileGarbageCandidate[] = [];
   db.exec("BEGIN IMMEDIATE");
   try {
     db.prepare(
@@ -2904,22 +2987,31 @@ function purgeTrashedReport(
       }),
     );
     const noteFiles = reportNoteFiles(reportId);
+    const appendFiles = db.prepare(`SELECT f.storage_path AS storagePath,p.thumbnail_path AS thumbnailPath FROM report_page_append_files f JOIN report_page_appends b ON b.id=f.batch_id LEFT JOIN report_page_append_pages p ON p.file_id=f.id WHERE b.report_id=?`).all(reportId) as Array<{storagePath:string;thumbnailPath:string|null}>;
     db.prepare("DELETE FROM reports WHERE id = ?").run(reportId);
-    enqueueFileGarbage(noteFiles, 'report_note_purge', db);
-    enqueueFileGarbage(
-      pages.flatMap((page) => [
+    purgeFiles = [...noteFiles, ...appendFiles.flatMap(file=>[{storagePath:file.storagePath,fileKind:"original" as const},{storagePath:file.thumbnailPath,fileKind:"thumbnail" as const}]), ...derivedFiles.map(storagePath => ({storagePath,fileKind:"other" as const})), ...pages.flatMap((page) => [
         { storagePath: page.storagePath, fileKind: "original" as const },
         { storagePath: page.thumbnailPath, fileKind: "thumbnail" as const },
-      ]),
+      ])];
+    pendingFileCount = enqueueFileGarbage(purgeFiles,
       automatic ? "recycle_bin_expired" : "report_purge",
-      db,
+      db, automatic ? 10 : 0, report.memberId,
     );
     db.exec("COMMIT");
   } catch (error) {
     rollbackAfterError(db);
     throw error;
   }
-  return { id: reportId, deleted: true };
+  if (!automatic) {
+    try {
+      pendingFileCount = collectReportFileGarbage(purgeFiles, db).failed;
+    } catch {
+      // The report deletion has committed. Queue entries remain durable; never
+      // misreport a successful purge as failed or claim an unknown cleanup count.
+      pendingFileCount = null;
+    }
+  }
+  return { id: reportId, deleted: true, pendingFileCount };
 }
 
 export function purgeExpiredReports(limit = 50) {
@@ -3736,6 +3828,8 @@ export function mergeDuplicateReport(
       statusMessage: "只能合并同一成员的报告",
     });
   assertMemberManage(user, source.memberId);
+  assertNoPageAppend(source.id);
+  assertNoPageAppend(target.id);
   const active = getDatabase()
     .prepare(
       `
@@ -3860,6 +3954,7 @@ export function updateReportFields(
   if (!report)
     throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   assertMemberManage(user, report.memberId);
+  assertNoPageAppend(reportId);
   const reportType = textInput(input.reportType, 40);
   if (reportType && !allowedReportTypes.has(reportType))
     throw createError({ statusCode: 400, statusMessage: "报告类型无效" });
@@ -4311,6 +4406,7 @@ export function updateReportPages(
   if (!report)
     throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   assertMemberManage(user, report.memberId);
+  assertNoPageAppend(reportId);
   const pages = Array.isArray(input.pages)
     ? (input.pages as Array<Record<string, unknown>>)
     : [];
@@ -4400,6 +4496,7 @@ export function deleteReportPage(
   if (!report)
     throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   assertMemberManage(user, report.memberId);
+  assertNoPageAppend(reportId);
   const pages = reportPageRows(reportId);
   if (pages.length <= 1)
     throw createError({
@@ -6305,11 +6402,12 @@ export function listAuditLogs(user: RequestUser, limit = 80) {
       u.display_name AS actorName, a.detail_json AS detailJson, a.created_at AS createdAt
     FROM audit_logs a
     LEFT JOIN users u ON u.id = a.actor_user_id
+    WHERE a.actor_user_id = ?
     ORDER BY a.created_at DESC, a.id DESC
     LIMIT ?
   `,
     )
-    .all(Math.min(200, Math.max(1, Math.round(limit)))) as Array<{
+    .all(user.id,Math.min(200, Math.max(1, Math.round(limit)))) as Array<{
     id: string;
     action: string;
     targetType: string | null;
@@ -6660,7 +6758,7 @@ export function listUserOperationAuditLogs(
       u.display_name AS actorName, a.detail_json AS detailJson, a.created_at AS createdAt
     FROM audit_logs a
     LEFT JOIN users u ON u.id = a.actor_user_id
-    WHERE (
+    WHERE a.actor_user_id = ? AND (
       ? IS NULL
       OR a.created_at < ?
       OR (a.created_at = ? AND a.id < ?)
@@ -6670,6 +6768,7 @@ export function listUserOperationAuditLogs(
   `,
     )
     .all(
+      user.id,
       cursor?.id ?? null,
       cursor?.createdAt ?? null,
       cursor?.createdAt ?? null,
@@ -6873,11 +6972,11 @@ export function getAiAuditSummary(
         e.prompt_tokens AS promptTokens, e.completion_tokens AS completionTokens, e.elapsed_ms AS elapsedMs
       FROM processing_jobs j
       LEFT JOIN report_extractions e ON e.job_id = j.id
-      WHERE j.job_type = 'ai_extract'
+      WHERE j.job_type = 'ai_extract' AND EXISTS(SELECT 1 FROM reports scoped_report WHERE scoped_report.id=j.report_id AND ${memberAccessSql(user,'scoped_report.member_id')})
       UNION ALL
       SELECT a.id, a.source, a.status, a.attempts,
         a.prompt_tokens AS promptTokens, a.completion_tokens AS completionTokens, a.elapsed_ms AS elapsedMs
-      FROM ai_audit_events a
+      FROM ai_audit_events a WHERE a.report_id IN(SELECT scoped_report.id FROM reports scoped_report WHERE ${memberAccessSql(user,'scoped_report.member_id')})
     )
     SELECT
       COUNT(*) AS jobCount,
@@ -6931,7 +7030,7 @@ export function getAiAuditSummary(
       FROM processing_jobs j
       JOIN reports r ON r.id = j.report_id
       LEFT JOIN report_extractions e ON e.job_id = j.id
-      WHERE j.job_type = 'ai_extract'
+      WHERE j.job_type = 'ai_extract' AND EXISTS(SELECT 1 FROM reports scoped_report WHERE scoped_report.id=j.report_id AND ${memberAccessSql(user,'scoped_report.member_id')})
       UNION ALL
       SELECT a.id, a.source, a.report_id AS reportId, COALESCE(r.title, a.target_title) AS reportTitle, r.member_id AS memberId,
         a.status, a.attempts, a.error_code AS errorCode, a.error_message AS errorMessage,
@@ -6940,7 +7039,7 @@ export function getAiAuditSummary(
         a.elapsed_ms AS elapsedMs, a.input_characters AS inputCharacters,
         NULL AS documentContentType, NULL AS routedContentTypes
       FROM ai_audit_events a
-      LEFT JOIN reports r ON r.id = a.report_id
+      JOIN reports r ON r.id = a.report_id WHERE ${memberAccessSql(user,'r.member_id')}
     )
     SELECT * FROM ai_rows
     WHERE (
@@ -7053,7 +7152,7 @@ export async function regeneratePdfPagePreviews(user: RequestUser) {
     FROM report_pages p
     JOIN reports r ON r.id = p.report_id
     JOIN member_permissions mp ON mp.member_id = r.member_id AND mp.user_id = ?
-    WHERE p.mime_type = 'application/pdf' AND r.status <> 'trashed'
+    WHERE mp.permission = 'manager' AND p.mime_type = 'application/pdf' AND r.status <> 'trashed'
     ORDER BY r.updated_at DESC, p.report_id, p.page_number
     LIMIT 1000
   `,
@@ -7162,6 +7261,7 @@ export type BackupManifestFile = {
 };
 
 type BackupManifest = {
+  identity?: ReturnType<typeof getDeploymentIdentity>;
   formatVersion: number;
   id?: string;
   appName?: string;
@@ -7474,6 +7574,7 @@ export function createFullBackup(
     const manifestFiles = createBackupFileManifest(stagingRoot);
     const manifest: BackupManifest = {
       formatVersion: backupFormatVersion,
+      identity: getDeploymentIdentity(),
       id,
       appName: config.appName,
       appTitle: config.appTitle,
@@ -7985,58 +8086,103 @@ function insertRestoreAudit(
   );
 }
 
-function restoreBackupFromArchive(
-  user: RequestUser,
-  archivePath: string,
-  backupId: string,
-) {
-  assertGatewayAdmin(user, "恢复备份");
-  if (!existsSync(archivePath))
-    throw createError({ statusCode: 404, statusMessage: "备份不存在" });
-  const runnerStatus = getJobRunnerStatus();
-  if (runnerStatus.busy) {
-    throw createError({
-      statusCode: 409,
-      statusMessage: "后台识别任务正在执行，请稍后再恢复备份",
-    });
-  }
-  const extractRoot = mkdtempSync(join(backupStagingBaseDirectory(), ".restore-"));
-  let shouldRestartRunner = false;
-  const localCredential = captureRestoringAdministratorCredential(user);
-
+type RestorePlan = { token:string; digest:string; actorId:string; deployment:string; strategy:'same'|'cross'; expires:number; warning:string; identitySubject?:string; accountFingerprint:string };
+const restorePlans=new Map<string,RestorePlan>();
+function restoreAccountFingerprint() {
+ const db=getDatabase();
+ return createHash('sha256').update(JSON.stringify([db.prepare('SELECT * FROM user_identities ORDER BY id').all(),db.prepare('SELECT id,is_gateway_admin FROM users ORDER BY id').all(),db.prepare('SELECT * FROM local_accounts ORDER BY id').all(),db.prepare('SELECT * FROM member_permissions ORDER BY member_id,user_id').all(),db.prepare('SELECT * FROM identity_recovery_pending ORDER BY user_id').all()])).digest('hex');
+}
+export function preflightRestore(user:RequestUser,archivePath:string) {
+ assertGatewayAdmin(user,'恢复预检');
+ const root=mkdtempSync(join(backupStagingBaseDirectory(),'.check-'));
+ try {
+  extractTarArchive(archivePath,root);
+  const validation=validateExtractedBackup(root); ensureBackupValidationPassed(validation);
+  const manifest=JSON.parse(readFileSync(join(root,'manifest.json'),'utf8')) as BackupManifest;
+  const target=getDeploymentIdentity();
+  const sourceDb=new DatabaseSync(join(root,'db','health-records.sqlite'),{readOnly:true});
+  let verified=false;
+  let absent=false;
+  const identity=getDatabase().prepare('SELECT id,subject FROM user_identities WHERE user_id=? AND provider=?').get(user.id,user.provider) as {id:string,subject:string}|undefined;
   try {
-    extractTarArchive(archivePath, extractRoot);
-    const validation = validateExtractedBackup(extractRoot);
-    ensureBackupValidationPassed(validation);
-    shouldRestartRunner = runnerStatus.started;
-    stopJobRunner();
-    const safetyBackup = createFullBackup(user, "pre_restore");
+   absent=!sourceDb.prepare('SELECT 1 FROM users WHERE id=?').get(user.id);
+   if(user.provider==='local') {
+    const credential=captureRestoringAdministratorCredential(user)!;
+    verified=Boolean(sourceDb.prepare('SELECT 1 FROM local_accounts WHERE id=? AND user_id=?').get(credential.accountId,user.id));
+   } else if(identity) verified=Boolean(sourceDb.prepare('SELECT 1 FROM user_identities WHERE id=? AND user_id=? AND subject=?').get(identity.id,user.id,identity.subject));
+  } finally {sourceDb.close();}
+  const same=manifest.identity?.id===target.id && manifest.identity.authMode===target.authMode && manifest.identity.identityDomain===target.identityDomain;
+  // Legacy local archives need matching random internal account identity, never username alone.
+  const legacyVerified=!manifest.identity && user.provider==='local' && verified;
+  const strategy=(same && (verified || absent))||legacyVerified?'same':'cross';
+  for(const [key,plan] of restorePlans) if(plan.expires<Date.now()) restorePlans.delete(key);
+  const plan:RestorePlan={token:createId('restore'),digest:sha256File(archivePath),actorId:user.id,deployment:target.identityDomain,strategy,expires:Date.now()+15*60000,
+   identitySubject:identity?.subject,accountFingerprint:restoreAccountFingerprint(),
+   warning:strategy==='same'?'账号、授权和档案将回到备份时间点，之后新增的账号及授权可能不再存在；所有账号需要重新登录。':'来源身份无法与当前部署确认一致。源账号全部待映射，当前管理员仅保留系统维护权限，须使用受控映射工具逐项确认。'};
+  restorePlans.set(plan.token,plan);
+  return {token:plan.token,strategy,warning:plan.warning,expiresAt:new Date(plan.expires).toISOString(),validation};
+ } finally {rmSync(root,{recursive:true,force:true});}
+}
+export function preflightStoredBackup(user:RequestUser,id:string) { return preflightRestore(user,backupArchivePath(id)); }
+function restoreBackupFromArchive(user:RequestUser,archivePath:string,backupId:string,token?:string) {
+ assertGatewayAdmin(user,'恢复备份');
+ const plan=token?restorePlans.get(token):undefined;
+ if(!plan || plan.actorId!==user.id || plan.expires<Date.now() || plan.deployment!==getDeploymentIdentity().identityDomain || plan.digest!==sha256File(archivePath) || plan.accountFingerprint!==restoreAccountFingerprint())
+ throw createError({statusCode:409,statusMessage:'恢复预检已失效，请重新预检并确认',data:{code:'RESTORE_PLAN_EXPIRED'}});
+ const runnerStatus=getJobRunnerStatus();
+ if(runnerStatus.busy || isStorageMaintenanceActive() || isStorageNormalizationActive() || isStorageExportActive() || activeStorageRequests()>1)
+ throw createError({statusCode:409,statusMessage:'仍有请求或后台任务正在执行，请稍后重试恢复'});
+ const root=mkdtempSync(join(backupStagingBaseDirectory(),'.restore-'));
+ const rollbackRoot=mkdtempSync(join(backupStagingBaseDirectory(),'.rollback-'));
+ const journal=join(getAppConfig().runtimeDir,'restore-maintenance.json');
+ let switched=false; let completed=false; let safetyBackup:CreatedBackup|undefined;
+ const credential=captureRestoringAdministratorCredential(user);
+ try {
+  extractTarArchive(archivePath,root);
+  const validation=validateExtractedBackup(root);ensureBackupValidationPassed(validation);
+  stopJobRunner();
+  safetyBackup=createFullBackup(user,'pre_restore');
+  extractTarArchive(safetyBackup.path,rollbackRoot);
+  ensureBackupValidationPassed(validateExtractedBackup(rollbackRoot));
+  const staged=prepareRestoredDatabase(join(root,'db','health-records.sqlite'));
+  let identityRebind:ReturnType<typeof rebindRestoredAdministrator>;
+  try {identityRebind=rebindRestoredAdministrator(user,credential,plan.strategy,plan.identitySubject,staged);} finally {staged.close();}
+  atomicStorageJson(journal,{version:1,safetyBackupId:safetyBackup.id,rollbackRoot,phase:'switching'});
+  restorePlans.delete(plan.token);
+  closeDatabase(); switched=true;
+  for(const directory of backupIncludedDirectories) replaceStorageDirectory(directory,root);
+  replaceDatabaseFromBackup(root);
+  getDatabase();
+  const db=getDatabase();
+  if((db.prepare('PRAGMA integrity_check').get() as {integrity_check:string}).integrity_check!=='ok' || db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('恢复完整性校验失败');
+  insertRestoreAudit(identityRebind.userId,backupId,safetyBackup.id);
+  rmSync(join(getAppConfig().storageDir,'upload-staging'),{recursive:true,force:true});
+  mkdirSync(join(getAppConfig().storageDir,'upload-staging'),{recursive:true,mode:0o700});
+  rmSync(journal,{force:true});completed=true;
+  return {restored:true,backupId,safetyBackupId:safetyBackup.id,identityRebind,validation};
+ } catch(error) {
+  if(switched) {
+   try {
     closeDatabase();
-    for (const directoryName of backupIncludedDirectories)
-      replaceStorageDirectory(directoryName, extractRoot);
-    replaceDatabaseFromBackup(extractRoot);
-    getDatabase();
-    const identityRebind = rebindRestoredAdministrator(user, localCredential);
-    insertRestoreAudit(user.id, backupId, safetyBackup.id);
-    return {
-      restored: true,
-      backupId,
-      safetyBackupId: safetyBackup.id,
-      identityRebind,
-      validation,
-    };
-  } finally {
-    rmSync(extractRoot, { recursive: true, force: true });
-    if (shouldRestartRunner) startJobRunner();
+    for(const directory of backupIncludedDirectories) replaceStorageDirectory(directory,rollbackRoot);
+    replaceDatabaseFromBackup(rollbackRoot);getDatabase();
+    rmSync(journal,{force:true});completed=true;
+   } catch {throw createError({statusCode:503,statusMessage:'恢复和回滚未完成，已保持维护状态。请使用恢复维护工具及安全备份恢复，勿删除维护记录'});}
   }
+  throw error;
+ } finally {
+  rmSync(root,{recursive:true,force:true});
+  if(completed || !switched) rmSync(rollbackRoot,{recursive:true,force:true});
+  if(!existsSync(journal) && runnerStatus.started) startJobRunner();
+ }
 }
 
-export function restoreBackup(user: RequestUser, id: string) {
+export function restoreBackup(user: RequestUser, id: string, token?:string) {
   const archivePath = backupArchivePath(id);
-  return restoreBackupFromArchive(user, archivePath, id);
+  return restoreBackupFromArchive(user, archivePath, id,token);
 }
 
-export function restoreUploadedBackup(user: RequestUser, archivePath: string) {
+export function restoreUploadedBackup(user: RequestUser, archivePath: string,token?:string) {
   const validation = validateBackupArchivePath(archivePath);
   ensureBackupValidationPassed(validation);
   const manifestId =
@@ -8044,5 +8190,5 @@ export function restoreUploadedBackup(user: RequestUser, archivePath: string) {
     /^backup_[a-f0-9]{32}$/.test(validation.manifest.id)
       ? validation.manifest.id
       : createId("backup");
-  return restoreBackupFromArchive(user, archivePath, manifestId);
+  return restoreBackupFromArchive(user, archivePath, manifestId,token);
 }

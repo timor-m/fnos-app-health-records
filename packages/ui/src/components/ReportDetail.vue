@@ -7,6 +7,8 @@ import {
 } from "@lucide/vue";
 import ClinicalFactEditor from "./ClinicalFactEditor.vue";
 import ReportNotesPanel from './ReportNotesPanel.vue';
+import ReportScrollingTitle from "./ReportScrollingTitle.vue";
+import ReportPageAppend from './ReportPageAppend.vue';
 import DateTimePicker from "./DateTimePicker.vue";
 import OcrTextOverlay from "./OcrTextOverlay.vue";
 import OriginalOrientation from "./OriginalOrientation.vue";
@@ -59,6 +61,7 @@ const deploymentCopy = computed(() => getDeploymentCopy(app.session.value?.authM
 const toast = useToast();
 const confirmDialog = useConfirm();
 const detail = ref<ReportDetail | null>(null);
+const canManageReport=computed(()=>app.allMembers.value.some(member=>member.id===detail.value?.memberId && member.permission==='manager'));
 const detailLoading = ref(false);
 const detailError = ref("");
 const selectedJobs = ref<ProcessingJob[]>([]);
@@ -1353,7 +1356,7 @@ async function confirmReady() {
 function askTrash() {
   confirmDialog.ask({
     title: "移入回收站",
-    message: `确认将「${source.value?.title || "当前报告"}」移入回收站？原件会保留 30 天，不会立刻删除。`,
+    message: `确认将「${source.value?.title || "当前报告"}」移入回收站？未完成的识别和补页任务会同时停止。原件会保留 30 天，不会立刻删除。`,
     confirmText: "移入回收站",
     danger: true,
     run: trashCurrentReport
@@ -1645,6 +1648,23 @@ function startEventPolling(jobId: string) {
   eventTimer = setInterval(() => { void loadJobEvents(jobId, true); }, 2000);
 }
 
+const appendProcessingState = ref("");
+const appendProcessingLabel = computed(() => ({
+  complete_review: "补页完成，部分内容待核对，请对照原件核对指标",
+  uploading: "等待上传补充文件", preparing: "正在读取补充文件并生成预览", ready: "补充页面待选择提交",
+  ocr: "正在识别补充页面（OCR）", review: "补充页面需要核对，请打开补充报告页确认",
+  ai: "正在结合整份报告进行 AI 整理", normalizing: "正在更新识别结果和指标索引",
+  failed: "补页处理失败，旧结果已保留，请打开补充报告页重试",
+  ocr_only: "补充原件与 OCR 已保存，尚未完成 AI 整理",
+}[appendProcessingState.value] || ""));
+const appendProcessingActive = computed(() => ["preparing", "ocr", "ai", "normalizing"].includes(appendProcessingState.value));
+watch(() => props.reportId, () => { appendProcessingState.value = ""; });
+async function syncAppendProcessing(state: string) {
+  appendProcessingState.value = state;
+  const reportId = props.reportId;
+  await Promise.all([refreshJobs(true), loadDetail(reportId, true)]);
+}
+
 function maybeStartJobsPolling() {
   stopJobsPolling();
   if (hasRunningJobs.value || source.value?.status === "queued" || source.value?.status === "processing") {
@@ -1865,7 +1885,7 @@ onActivated(() => {
 <template>
   <template v-if="!reviewObservationId">
   <header v-if="variant === 'floating'" class="sheet-header report-detail-floating-header">
-    <h3>{{ source?.title || "报告详情" }}</h3>
+    <ReportScrollingTitle :text="source?.title || '报告详情'" />
     <button class="plain-icon-button" type="button" title="关闭" @click="emit('close')"><X :size="18" /></button>
   </header>
   <div v-if="!source" class="mini-loading report-detail-loading"><LoaderCircle class="spin-icon" :size="16" />正在读取报告详情</div>
@@ -1876,12 +1896,12 @@ onActivated(() => {
         <span v-if="statusMeta[source.status]" class="chip" :class="statusMeta[source.status].chip">
           {{ statusMeta[source.status].label }}
         </span>
-        <button class="preview-trash-button" type="button" title="移入回收站" :disabled="trashingReport" @click="askTrash">
+        <button v-if="canManageReport" class="preview-trash-button" type="button" title="移入回收站" :disabled="trashingReport" @click="askTrash">
           <LoaderCircle v-if="trashingReport" class="spin-icon" :size="16" />
           <Trash2 v-else :size="16" />
         </button>
       </div>
-      <h3>{{ source.title }}</h3>
+      <h3 class="report-card-title">{{ source.title }}</h3>
       <p v-if="detailError" class="inline-panel-error">{{ detailError }}</p>
       <div v-if="ocrEmptyNotice" class="runtime-warning compact">
         <CircleAlert :size="18" />
@@ -1898,12 +1918,12 @@ onActivated(() => {
       </dl>
       <div v-if="detailLoading" class="mini-loading"><LoaderCircle class="spin-icon" :size="16" />正在读取报告详情</div>
       <div class="report-action-row">
-        <button v-if="source.status === 'needs_review'" class="primary-button compact-primary" type="button" :disabled="confirming" @click="confirmReady">
+        <button v-if="canManageReport && (source.status === 'needs_review')" class="primary-button compact-primary" type="button" :disabled="confirming" @click="confirmReady">
           <LoaderCircle v-if="confirming" class="spin-icon" :size="17" />
           <CheckCircle2 v-else :size="17" />
           {{ confirming ? "确认中" : "确认归档" }}
         </button>
-        <button class="soft-action-button" type="button" @click="openEditReport"><Pencil :size="17" />校对字段</button>
+        <button v-if="canManageReport" class="soft-action-button" type="button" @click="openEditReport"><Pencil :size="17" />校对字段</button>
         <button class="soft-action-button" type="button" @click="openOcrText"><ScrollText :size="17" />查看 OCR</button>
         <button v-if="firstPdfPage" class="soft-action-button" type="button" @click="openPdfOriginalViewer(firstPdfPage)"><FileText :size="17" />查看 PDF</button>
       </div>
@@ -1915,7 +1935,7 @@ onActivated(() => {
           <p>{{ reprocessNotice.message }}</p>
         </div>
         <button
-          v-if="reprocessNotice.action"
+          v-if="canManageReport && (reprocessNotice.action)"
           type="button"
           :disabled="reprocessingReport || triggeringAi || hasRunningJobs"
           @click="runReprocessNoticeAction"
@@ -1941,7 +1961,7 @@ onActivated(() => {
             <span>{{ candidate.reason }} · {{ candidate.matchedFields.join("、") }}</span>
           </button>
           <div v-if="source.status === 'needs_review'" class="duplicate-actions">
-            <button class="duplicate-confirm-button" type="button" :disabled="confirming" @click="confirmReady">
+            <button v-if="canManageReport" class="duplicate-confirm-button" type="button" :disabled="confirming" @click="confirmReady">
               <CheckCircle2 :size="15" />仍然确认归档
             </button>
           </div>
@@ -1953,7 +1973,7 @@ onActivated(() => {
           <strong>这份报告可能不属于当前成员</strong>
           <p>报告患者信息（{{ memberPatientInfo }}）与当前成员资料的{{ memberMismatchFieldLabels }}不一致，可能上传时选错了成员。核对后可以一键归属，或创建新成员并归属。</p>
           <div class="duplicate-actions member-mismatch-actions">
-            <button
+            <button v-if="canManageReport"
               v-for="candidate in memberIdentityAssessment.candidates"
               :key="candidate.id"
               class="duplicate-confirm-button"
@@ -1965,10 +1985,10 @@ onActivated(() => {
               <CheckCircle2 v-else :size="15" />
               归属到「{{ candidate.displayName }}」（{{ mismatchRelationshipLabels[candidate.relationship] || "其他" }}）
             </button>
-            <button class="duplicate-confirm-button" type="button" :disabled="assigningMember" @click="openMemberCreate">
+            <button v-if="canManageReport" class="duplicate-confirm-button" type="button" :disabled="assigningMember" @click="openMemberCreate">
               <Plus :size="15" />创建新成员并归属
             </button>
-            <button class="soft-action-button" type="button" :disabled="dismissingMismatch" @click="dismissMemberMismatch">
+            <button v-if="canManageReport" class="soft-action-button" type="button" :disabled="dismissingMismatch" @click="dismissMemberMismatch">
               {{ dismissingMismatch ? "处理中" : "忽略提醒" }}
             </button>
           </div>
@@ -1992,7 +2012,7 @@ onActivated(() => {
       <div class="section-title-row">
         <div><h4>AI 整理结果</h4><p>{{ hasAiContent ? "以下内容来自 OCR 后的结构化整理，确认前请核对原件。" : "AI 尚未整理出结构化内容。" }}</p></div>
         <div class="section-title-actions">
-          <button v-if="canTriggerAi" class="soft-action-button ai-trigger-button" type="button" :disabled="aiTriggerState.disabled" @click="triggerAiExtraction">
+          <button v-if="canManageReport && (canTriggerAi)" class="soft-action-button ai-trigger-button" type="button" :disabled="aiTriggerState.disabled" @click="triggerAiExtraction">
             <LoaderCircle v-if="aiTriggerState.loading" class="spin-icon" :size="16" />
             <Sparkles v-else :size="16" />
             {{ aiTriggerState.label }}
@@ -2015,7 +2035,7 @@ onActivated(() => {
         <section v-if="clinicalFactAddTypes.length" class="clinical-fact-add-strip">
           <span>补充分类信息</span>
           <div>
-            <button v-for="type in clinicalFactAddTypes" :key="type" type="button" @click="editClinicalFact(type)">
+            <button v-if="canManageReport" v-for="type in clinicalFactAddTypes" :key="type" type="button" @click="editClinicalFact(type)">
               <Plus :size="15" />{{ clinicalFactTypeLabels[type] }}
             </button>
           </div>
@@ -2026,7 +2046,7 @@ onActivated(() => {
         >
           <span>报告专属内容</span>
           <div>
-            <button type="button" @click="structuredSectionEditor = 'create'">
+            <button v-if="canManageReport" type="button" @click="structuredSectionEditor = 'create'">
               <Plus :size="15" />补充内容
             </button>
           </div>
@@ -2042,8 +2062,8 @@ onActivated(() => {
                 </strong>
                 <div class="clinical-fact-actions">
                   <button v-if="item.evidence.length" type="button" :title="savingPages ? '页面正在更新' : '查看原页'" :disabled="savingPages" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
-                  <button type="button" title="校对专属内容" @click="structuredSectionEditor = item"><Pencil :size="15" /></button>
-                  <button type="button" title="删除专属内容" @click="removeStructuredSection(item)"><Trash2 :size="15" /></button>
+                  <button v-if="canManageReport" type="button" title="校对专属内容" @click="structuredSectionEditor = item"><Pencil :size="15" /></button>
+                  <button v-if="canManageReport" type="button" title="删除专属内容" @click="removeStructuredSection(item)"><Trash2 :size="15" /></button>
                 </div>
               </div>
               <p>{{ item.content }}</p>
@@ -2058,8 +2078,8 @@ onActivated(() => {
                 <strong>{{ item.diagnosisText }}<em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
                 <div class="clinical-fact-actions">
                   <button v-if="item.evidence.length" type="button" :title="savingPages ? '页面正在更新' : '查看原页'" :disabled="savingPages" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
-                  <button type="button" title="校对诊断" @click="editClinicalFact('diagnosis', item)"><Pencil :size="15" /></button>
-                  <button type="button" title="删除诊断" @click="removeClinicalFact('diagnosis', item)"><Trash2 :size="15" /></button>
+                  <button v-if="canManageReport" type="button" title="校对诊断" @click="editClinicalFact('diagnosis', item)"><Pencil :size="15" /></button>
+                  <button v-if="canManageReport" type="button" title="删除诊断" @click="removeClinicalFact('diagnosis', item)"><Trash2 :size="15" /></button>
                 </div>
               </div>
               <p>{{ [item.sectionName, item.diagnosisCode, item.codeSystem].filter(Boolean).join(" · ") || "原报告诊断" }}</p>
@@ -2074,8 +2094,8 @@ onActivated(() => {
                 <strong>{{ item.medicationName }}<em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
                 <div class="clinical-fact-actions">
                   <button v-if="item.evidence.length" type="button" :title="savingPages ? '页面正在更新' : '查看原页'" :disabled="savingPages" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
-                  <button type="button" title="校对用药" @click="editClinicalFact('medication', item)"><Pencil :size="15" /></button>
-                  <button type="button" title="删除用药" @click="removeClinicalFact('medication', item)"><Trash2 :size="15" /></button>
+                  <button v-if="canManageReport" type="button" title="校对用药" @click="editClinicalFact('medication', item)"><Pencil :size="15" /></button>
+                  <button v-if="canManageReport" type="button" title="删除用药" @click="removeClinicalFact('medication', item)"><Trash2 :size="15" /></button>
                 </div>
               </div>
               <p>{{ medicationDetail(item) || item.instructions || "原报告未注明详细用法" }}</p>
@@ -2091,8 +2111,8 @@ onActivated(() => {
                 <strong>{{ item.procedureName }}<em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
                 <div class="clinical-fact-actions">
                   <button v-if="item.evidence.length" type="button" :title="savingPages ? '页面正在更新' : '查看原页'" :disabled="savingPages" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
-                  <button type="button" title="校对操作" @click="editClinicalFact('procedure', item)"><Pencil :size="15" /></button>
-                  <button type="button" title="删除操作" @click="removeClinicalFact('procedure', item)"><Trash2 :size="15" /></button>
+                  <button v-if="canManageReport" type="button" title="校对操作" @click="editClinicalFact('procedure', item)"><Pencil :size="15" /></button>
+                  <button v-if="canManageReport" type="button" title="删除操作" @click="removeClinicalFact('procedure', item)"><Trash2 :size="15" /></button>
                 </div>
               </div>
               <p>{{ procedureDetail(item) || item.sectionName || "原报告诊疗记录" }}</p>
@@ -2107,8 +2127,8 @@ onActivated(() => {
                 <strong>{{ item.vaccineName }}<template v-if="item.doseNumber"> · {{ item.doseNumber }}</template><em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
                 <div class="clinical-fact-actions">
                   <button v-if="item.evidence.length" type="button" :title="savingPages ? '页面正在更新' : '查看原页'" :disabled="savingPages" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
-                  <button type="button" title="校对疫苗" @click="editClinicalFact('vaccination', item)"><Pencil :size="15" /></button>
-                  <button type="button" title="删除疫苗" @click="removeClinicalFact('vaccination', item)"><Trash2 :size="15" /></button>
+                  <button v-if="canManageReport" type="button" title="校对疫苗" @click="editClinicalFact('vaccination', item)"><Pencil :size="15" /></button>
+                  <button v-if="canManageReport" type="button" title="删除疫苗" @click="removeClinicalFact('vaccination', item)"><Trash2 :size="15" /></button>
                 </div>
               </div>
               <p>{{ [item.administeredAt, item.manufacturer, item.lotNumber ? `批号 ${item.lotNumber}` : null, item.administrationSite].filter(Boolean).join(" · ") || "原报告接种记录" }}</p>
@@ -2126,8 +2146,8 @@ onActivated(() => {
             </div>
             <div class="clinical-fact-actions">
               <button v-if="detail.billingSummary.evidence.length" type="button" :title="savingPages ? '页面正在更新' : '查看原页'" :disabled="savingPages" @click="openClinicalEvidence(detail.billingSummary.evidence)"><FileImage :size="15" /></button>
-              <button type="button" title="校对费用汇总" @click="editClinicalFact('billingSummary', detail.billingSummary)"><Pencil :size="15" /></button>
-              <button type="button" title="删除费用汇总" @click="removeClinicalFact('billingSummary', detail.billingSummary)"><Trash2 :size="15" /></button>
+              <button v-if="canManageReport" type="button" title="校对费用汇总" @click="editClinicalFact('billingSummary', detail.billingSummary)"><Pencil :size="15" /></button>
+              <button v-if="canManageReport" type="button" title="删除费用汇总" @click="removeClinicalFact('billingSummary', detail.billingSummary)"><Trash2 :size="15" /></button>
             </div>
           </div>
           <div v-if="detail.billingItems.length" class="clinical-fact-list">
@@ -2136,8 +2156,8 @@ onActivated(() => {
                 <strong>{{ item.itemName }}<em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
                 <div class="clinical-fact-actions">
                   <button v-if="item.evidence.length" type="button" :title="savingPages ? '页面正在更新' : '查看原页'" :disabled="savingPages" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
-                  <button type="button" title="校对费用明细" @click="editClinicalFact('billingItem', item)"><Pencil :size="15" /></button>
-                  <button type="button" title="删除费用明细" @click="removeClinicalFact('billingItem', item)"><Trash2 :size="15" /></button>
+                  <button v-if="canManageReport" type="button" title="校对费用明细" @click="editClinicalFact('billingItem', item)"><Pencil :size="15" /></button>
+                  <button v-if="canManageReport" type="button" title="删除费用明细" @click="removeClinicalFact('billingItem', item)"><Trash2 :size="15" /></button>
                 </div>
               </div>
               <p>{{ [item.category, billingMoney(item.amount, detail.billingSummary?.currency || 'CNY')].filter(Boolean).join(" · ") }}</p>
@@ -2160,7 +2180,7 @@ onActivated(() => {
                   <em v-if="item.presence !== 'present'" :class="`morphology-presence morphology-presence--${item.presence}`">
                     {{ item.presence === "absent" ? "未见" : "待确认" }}
                   </em>
-                  <button class="plain-icon-button" type="button" title="校对形态字段" @click="morphologyEditItem = item"><Pencil :size="16" /></button>
+                  <button v-if="canManageReport" class="plain-icon-button" type="button" title="校对形态字段" @click="morphologyEditItem = item"><Pencil :size="16" /></button>
                 </div>
               </div>
               <div v-if="morphologySizeLine(item) || morphologyClassificationLine(item)" class="morphology-facts">
@@ -2270,7 +2290,7 @@ onActivated(() => {
         </div>
         <div class="section-title-actions">
           <button
-            v-if="hasRunningJobs"
+            v-if="canManageReport && (hasRunningJobs)"
             class="soft-action-button cancel-processing-button"
             type="button"
             :disabled="cancellingJobs"
@@ -2280,7 +2300,7 @@ onActivated(() => {
             <CircleStop v-else :size="16" />
             {{ cancellingJobs ? "中断中" : "中断" }}
           </button>
-          <button class="soft-action-button reprocess-action-button" type="button" :disabled="processingRecoveryState.reprocessDisabled" @click="reprocessCurrentReport">
+          <button v-if="canManageReport" class="soft-action-button reprocess-action-button" type="button" :disabled="processingRecoveryState.reprocessDisabled" @click="reprocessCurrentReport">
             <LoaderCircle v-if="reprocessingReport || jobsLoading" class="spin-icon" :size="16" />
             <RefreshCw v-else :size="16" />
             {{ processingRecoveryState.reprocessLabel }}
@@ -2300,6 +2320,7 @@ onActivated(() => {
           </button>
         </div>
       </div>
+      <p v-if="appendProcessingLabel" class="report-append-notice" role="status"><LoaderCircle v-if="appendProcessingActive" :size="16" class="spin-icon" /><CircleAlert v-else :size="16" /><span>{{ appendProcessingLabel }}</span></p>
       <div v-if="currentJobs.length" class="job-progress-compact">
         <div class="job-progress-bar" role="progressbar" :aria-valuenow="progressPercent" aria-valuemin="0" aria-valuemax="100">
           <span :style="{ width: `${progressPercent}%` }"></span>
@@ -2357,7 +2378,7 @@ onActivated(() => {
               </div>
               <div class="job-log-actions">
                 <button type="button" @click="openJobEvents(job)"><ScrollText :size="16" />日志</button>
-                <button v-if="job.status === 'failed'" class="retry-action" type="button" @click="retryJob(job)"><RefreshCw :size="16" />重试</button>
+                <button v-if="canManageReport && (job.status === 'failed')" class="retry-action" type="button" @click="retryJob(job)"><RefreshCw :size="16" />重试</button>
               </div>
             </article>
           </div>
@@ -2401,14 +2422,17 @@ onActivated(() => {
     </article>
 
     <article class="preview-card originals-card">
-      <div class="section-title-row">
+      <div class="section-title-row originals-toolbar">
         <div><h4>报告原件</h4><p>点击打开原图或 PDF 原件</p></div>
         <button class="soft-action-button" type="button" :disabled="exportingOriginal || !detail?.pages.length" @click="downloadReportOriginal">
           <LoaderCircle v-if="exportingOriginal || originalExportStatus === 'generating'" class="spin-icon" :size="15" />
           <Download v-else :size="15" />
           {{ originalExportStatus === 'ready' ? '下载 PDF' : originalExportStatus === 'generating' ? '正在生成 PDF' : '生成 PDF' }}
         </button>
+        <ReportPageAppend v-if="app.session.value?.authenticated && canManageReport && detail && detail.status !== 'trashed'" :key="reportId" :report-id="reportId" :old-page-count="detail.pages.length" :report-title="detail.title" :member-name="app.allMembers.value.find(member => member.id === detail?.memberId)?.displayName" :busy="detail.status === 'processing'" @state-changed="syncAppendProcessing" @updated="emit('updated')" />
       </div>
+      <p v-if="detail?.pageAppend && detail.pageAppend.recognizedRevision !== detail.pageAppend.originalRevision" class="report-append-notice" role="status"><LoaderCircle v-if="detail.pageAppend.state === 'ai'" :size="16" class="spin-icon" /><CircleAlert v-else :size="16" /><span>{{ detail.pageAppend.state === 'ai' ? '正在结合新增页面重新识别，当前显示上一版指标。' : '原件已补充，当前显示上一版指标，尚未完成新的 AI 整理。' }}</span></p>
+      <div v-if="detail?.pageAppend?.reviewWarnings?.length" class="report-append-notice" role="status"><CircleAlert :size="16" /><div><strong>补页完成，部分内容待核对</strong><ul><li v-for="warning in detail.pageAppend.reviewWarnings" :key="warning">{{ warning }}</li></ul></div></div>
       <div v-if="detail?.pages.length" class="original-grid">
         <div v-for="(page, index) in detail.pages" :key="page.id" class="original-tile-card">
           <button type="button" class="original-tile" :disabled="savingPages" @click="openOriginalViewer(index)">
@@ -2419,10 +2443,10 @@ onActivated(() => {
             <Maximize2 :size="15" />
           </button>
           <div class="page-edit-actions">
-            <button type="button" :disabled="savingPages || index === 0" title="上移" @click="moveSavedPage(page, -1)"><ArrowUp :size="15" /></button>
-            <button type="button" :disabled="savingPages || index === detail.pages.length - 1" title="下移" @click="moveSavedPage(page, 1)"><ArrowDown :size="15" /></button>
-            <button type="button" :disabled="savingPages" title="旋转" @click="rotateSavedPage(page)"><RotateCw :size="15" /></button>
-            <button type="button" :disabled="savingPages || detail.pages.length <= 1" title="删除" @click="deleteSavedPage(page)"><Trash2 :size="15" /></button>
+            <button v-if="canManageReport" type="button" :disabled="savingPages || index === 0" title="上移" @click="moveSavedPage(page, -1)"><ArrowUp :size="15" /></button>
+            <button v-if="canManageReport" type="button" :disabled="savingPages || index === detail.pages.length - 1" title="下移" @click="moveSavedPage(page, 1)"><ArrowDown :size="15" /></button>
+            <button v-if="canManageReport" type="button" :disabled="savingPages" title="旋转" @click="rotateSavedPage(page)"><RotateCw :size="15" /></button>
+            <button v-if="canManageReport" type="button" :disabled="savingPages || detail.pages.length <= 1" title="删除" @click="deleteSavedPage(page)"><Trash2 :size="15" /></button>
           </div>
         </div>
       </div>
@@ -2449,7 +2473,7 @@ onActivated(() => {
             </div>
           </div>
           <div class="observation-all-actions">
-            <button class="soft-action-button observation-add-button" type="button" @click="openObservationEditor()"><Plus :size="15" />补充</button>
+            <button v-if="canManageReport" class="soft-action-button observation-add-button" type="button" @click="openObservationEditor()"><Plus :size="15" />补充</button>
             <button class="plain-icon-button" type="button" title="关闭" @click="closeAllObservations"><X :size="18" /></button>
           </div>
         </header>
@@ -2781,7 +2805,7 @@ onActivated(() => {
               <p>
                 {{ diagnosticRepairDescription(diagnosticReviewItem) }}新结果成功前继续显示当前结果，失败不会覆盖旧结果，人工校对字段也不会被覆盖。
               </p>
-              <button
+              <button v-if="canManageReport"
                 class="soft-action-button"
                 type="button"
                 :disabled="diagnosticRepairMode(diagnosticReviewItem) === 'ocr_ai'

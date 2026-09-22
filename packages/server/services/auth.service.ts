@@ -1,3 +1,4 @@
+import { assertAccountCanLoseAccess } from "./member.service";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { createError, getRequestIP, setCookie, deleteCookie, type H3Event } from "h3";
 import { rollbackAfterError, getDatabase } from "../database/client";
@@ -83,15 +84,6 @@ export function bootstrapLocalAdministrator() {
       INSERT INTO local_accounts (id, user_id, username, password_hash, password_salt, must_change_password)
       VALUES (?, ?, ?, ?, ?, 1)
     `).run(createId("account"), userId, username, passwordValue.hash, passwordValue.salt);
-    const memberId = createId("member");
-    db.prepare(`
-      INSERT INTO health_members (id, display_name, relationship, created_by)
-      VALUES (?, ?, 'self', ?)
-    `).run(memberId, displayName, userId);
-    db.prepare(`
-      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
-      VALUES (?, ?, 'manager', ?)
-    `).run(memberId, userId, userId);
     db.prepare(`
       INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
       VALUES (?, ?, 'auth.local_admin_bootstrap', 'user', ?, ?)
@@ -116,7 +108,7 @@ export function getLocalSessionUser(event: H3Event): RequestUser | null {
       s.last_seen_at < datetime('now', '-5 minutes') AS needsTouch
     FROM auth_sessions s
     JOIN users u ON u.id = s.user_id
-    JOIN local_accounts la ON la.user_id = u.id AND la.disabled_at IS NULL
+    JOIN local_accounts la ON la.user_id = u.id AND la.disabled_at IS NULL AND NOT EXISTS(SELECT 1 FROM identity_recovery_pending p WHERE p.user_id=u.id)
     WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > CURRENT_TIMESTAMP
   `).get(hash) as { id: string; displayName: string; isAdmin: number; mustChangePassword: number; needsTouch: number } | undefined;
   if (!row) return null;
@@ -183,7 +175,7 @@ export function login(event: H3Event, body: Record<string, unknown>) {
   const account = db.prepare(`
     SELECT la.user_id AS userId, la.password_hash AS passwordHash, la.password_salt AS passwordSalt,
       la.must_change_password AS mustChangePassword
-    FROM local_accounts la WHERE la.username = ? AND la.disabled_at IS NULL
+    FROM local_accounts la WHERE la.username = ? AND la.disabled_at IS NULL AND NOT EXISTS(SELECT 1 FROM identity_recovery_pending p WHERE p.user_id=la.user_id)
   `).get(username) as { userId: string; passwordHash: string; passwordSalt: string; mustChangePassword: number } | undefined;
   const succeeded = Boolean(account && verifyPassword(password, account.passwordSalt, account.passwordHash));
   db.prepare("INSERT INTO login_attempts (username, ip_address, succeeded) VALUES (?, ?, ?)")
@@ -325,7 +317,6 @@ export function createLocalAccount(actor: RequestUser, body: Record<string, unkn
   }
   const userId = createId("user");
   const passwordValue = hashPassword(defaultLocalAdminPassword);
-  const memberId = createId("member");
   db.exec("BEGIN IMMEDIATE");
   try {
     db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 0)").run(userId, displayName);
@@ -334,8 +325,6 @@ export function createLocalAccount(actor: RequestUser, body: Record<string, unkn
       INSERT INTO local_accounts (id, user_id, username, password_hash, password_salt, must_change_password)
       VALUES (?, ?, ?, ?, ?, 1)
     `).run(createId("account"), userId, username, passwordValue.hash, passwordValue.salt);
-    db.prepare("INSERT INTO health_members (id, display_name, relationship, created_by) VALUES (?, ?, 'self', ?)").run(memberId, displayName, userId);
-    db.prepare("INSERT INTO member_permissions (member_id, user_id, permission, granted_by) VALUES (?, ?, 'manager', ?)").run(memberId, userId, userId);
     db.prepare(`
       INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
       VALUES (?, ?, 'auth.local_account_created', 'user', ?, ?)
@@ -494,6 +483,7 @@ export function setLocalAccountDisabled(actor: RequestUser, body: Record<string,
   db.exec("BEGIN IMMEDIATE");
   try {
     if (disabled) {
+      assertAccountCanLoseAccess(userId);
       db.prepare("UPDATE local_accounts SET disabled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(account.id);
       db.prepare("UPDATE auth_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND revoked_at IS NULL").run(userId);
       db.prepare("DELETE FROM login_attempts WHERE username = ?").run(account.username);
@@ -545,6 +535,7 @@ export function deleteLocalAccount(actor: RequestUser, body: Record<string, unkn
   /* 仅移除登录身份与会话，保留 users/成员档案与健康数据，避免误删医疗资料 */
   db.exec("BEGIN IMMEDIATE");
   try {
+    assertAccountCanLoseAccess(userId);
     db.prepare("DELETE FROM local_accounts WHERE user_id = ?").run(userId);
     db.prepare("DELETE FROM user_identities WHERE user_id = ? AND provider = 'local'").run(userId);
     db.prepare("DELETE FROM auth_sessions WHERE user_id = ?").run(userId);

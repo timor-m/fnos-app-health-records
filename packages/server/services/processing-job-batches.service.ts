@@ -1,6 +1,6 @@
 import { getDatabase } from "../database/client";
 
-export type ProcessingJobBatchKind = "initial_upload" | "manual_reprocess" | "manual_ai";
+export type ProcessingJobBatchKind = "initial_upload" | "manual_reprocess" | "manual_ai" | "page_append";
 
 export type ProcessingJobBatchSource = {
   id: string;
@@ -64,6 +64,10 @@ export function deriveProcessingJobBatches(
       source: null,
       previousReportStatus: null
     };
+    if (detail.source === "page_append" || job.pipelineVersion === "page-append-v1") {
+      assignments.set(job.id, { batchId: detail.batchId || job.id, batchKind: "page_append" });
+      continue;
+    }
     if (detail.source === "manual" || job.deduplicationKey.includes(":ai_extract:manual:")) {
       assignments.set(job.id, {
         batchId: detail.batchId || `manual-ai:${job.id}`,

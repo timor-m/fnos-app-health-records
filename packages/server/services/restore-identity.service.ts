@@ -1,100 +1,52 @@
-import { rollbackAfterError, getDatabase } from "../database/client";
-import { isAdministrator, type RequestUser } from "../domain/request-user";
-import { createId } from "../utils/identifier";
+import type {DatabaseSync} from "node:sqlite";
+import { getDatabase, runInTransaction } from '../database/client';
+import { isAdministrator, type RequestUser } from '../domain/request-user';
+import { createId } from '../utils/identifier';
 
 export type RestoredLocalCredential = {
-  username: string;
-  passwordHash: string;
-  passwordSalt: string;
+ username:string; passwordHash:string; passwordSalt:string; mustChangePassword:number;
+ accountId:string;
 };
-
-export function captureRestoringAdministratorCredential(user: RequestUser): RestoredLocalCredential | null {
-  if (user.provider !== "local") return null;
-  const credential = getDatabase().prepare(`
-    SELECT username, password_hash AS passwordHash, password_salt AS passwordSalt
-    FROM local_accounts WHERE user_id = ? AND disabled_at IS NULL
-  `).get(user.id) as RestoredLocalCredential | undefined;
-  if (!credential) throw new Error("当前本地管理员凭据不存在，无法安全恢复备份");
-  return credential;
+export function captureRestoringAdministratorCredential(user:RequestUser):RestoredLocalCredential|null {
+ if(user.provider!=='local') return null;
+ const row=getDatabase().prepare(`SELECT id AS accountId,username,password_hash AS passwordHash,password_salt AS passwordSalt,must_change_password AS mustChangePassword
+ FROM local_accounts WHERE user_id=? AND disabled_at IS NULL`).get(user.id) as RestoredLocalCredential|undefined;
+ if(!row) throw new Error('当前管理员凭据不可用');
+ return row;
 }
-
-export function rebindRestoredAdministrator(
-  user: RequestUser,
-  localCredential: RestoredLocalCredential | null = null
-) {
-  if (!user.authenticated || !isAdministrator(user) || !["fnos_gateway", "local", "development"].includes(user.provider)) {
-    throw new Error("恢复后的身份接管需要当前部署的系统管理员");
+export function rebindRestoredAdministrator(user:RequestUser,credential:RestoredLocalCredential|null=null,strategy:'same'|'cross'='cross',identitySubject?:string,database?:DatabaseSync) {
+ if(!user.authenticated||!isAdministrator(user)) throw new Error('恢复需要已验证的管理员');
+ if(user.provider==='local'&&!credential) throw new Error('缺少管理员凭据');
+ const db=database || getDatabase();
+ let targetId=user.id;
+ runInTransaction(db,()=>{
+  if(strategy==='cross') {
+   for(const row of db.prepare('SELECT id FROM users').all() as Array<{id:string}>) {
+    const identities=db.prepare('SELECT provider,subject FROM user_identities WHERE user_id=?').all(row.id);
+    const local=db.prepare('SELECT username,disabled_at FROM local_accounts WHERE user_id=?').get(row.id);
+    db.prepare('INSERT OR IGNORE INTO identity_recovery_pending(user_id,source_json) VALUES (?,?)').run(row.id,JSON.stringify({identities,local}));
+   }
+   // Retain source credentials and status as source metadata; prevent them authenticating here.
+   db.exec("UPDATE local_accounts SET disabled_at=COALESCE(disabled_at,CURRENT_TIMESTAMP),username='pending-'||id; UPDATE user_identities SET subject='pending:'||id");
+   targetId=createId('user');
+  } else if(credential) {
+   const restored=db.prepare('SELECT id FROM local_accounts WHERE user_id=?').get(user.id) as {id:string}|undefined;
+   if(restored && restored.id!==credential.accountId) throw new Error('备份管理员身份不一致，必须重新预检');
+   if(!restored && db.prepare('SELECT 1 FROM users WHERE id=?').get(user.id)) throw new Error('无法确认备份中的管理员身份');
   }
-  if (user.provider === "local" && !localCredential) {
-    throw new Error("恢复本地部署备份时缺少当前管理员凭据");
+  db.prepare(`INSERT INTO users(id,display_name,is_gateway_admin) VALUES(?,?,1) ON CONFLICT(id) DO UPDATE SET is_gateway_admin=1`).run(targetId,user.displayName);
+  if(credential) {
+   const conflict=db.prepare('SELECT user_id FROM local_accounts WHERE username=? AND user_id<>?').get(credential.username,targetId);
+   if(conflict) throw new Error('管理员登录名冲突，请先处理身份映射');
+   db.prepare(`INSERT INTO local_accounts(id,user_id,username,password_hash,password_salt,must_change_password) VALUES(?,?,?,?,?,?)
+    ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,password_hash=excluded.password_hash,password_salt=excluded.password_salt,must_change_password=excluded.must_change_password,disabled_at=NULL`).run(strategy==='same'?credential.accountId:createId('account'),targetId,credential.username,credential.passwordHash,credential.passwordSalt,credential.mustChangePassword);
   }
-  const db = getDatabase();
-  const previousAdmins = db.prepare(`
-    SELECT id FROM users WHERE is_gateway_admin = 1 AND id <> ?
-  `).all(user.id) as Array<{ id: string }>;
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.prepare("UPDATE users SET is_gateway_admin = 0, updated_at = CURRENT_TIMESTAMP WHERE is_gateway_admin <> 0").run();
-    db.prepare(`
-      INSERT INTO users (id, display_name, is_gateway_admin)
-      VALUES (?, ?, 1)
-      ON CONFLICT(id) DO UPDATE SET
-        display_name = excluded.display_name,
-        is_gateway_admin = 1,
-        updated_at = CURRENT_TIMESTAMP
-    `).run(user.id, user.displayName);
-    const identitySubject = localCredential?.username || user.id;
-    db.prepare(`
-      INSERT INTO user_identities (id, user_id, provider, subject)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(provider, subject) DO UPDATE SET user_id = excluded.user_id
-    `).run(createId("identity"), user.id, user.provider, identitySubject);
-    let disabledLocalAccountCount = 0;
-    if (localCredential) {
-      disabledLocalAccountCount = Number(db.prepare(`
-        UPDATE local_accounts SET disabled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-        WHERE disabled_at IS NULL AND user_id <> ?
-      `).run(user.id).changes);
-      db.prepare("DELETE FROM local_accounts WHERE user_id = ? OR username = ?")
-        .run(user.id, localCredential.username);
-      db.prepare(`
-        INSERT INTO local_accounts (id, user_id, username, password_hash, password_salt)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(
-        createId("account"),
-        user.id,
-        localCredential.username,
-        localCredential.passwordHash,
-        localCredential.passwordSalt
-      );
-    }
-    const permissionResult = db.prepare(`
-      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
-      SELECT id, ?, 'manager', ? FROM health_members WHERE deleted_at IS NULL
-      ON CONFLICT(member_id, user_id) DO UPDATE SET
-        permission = 'manager',
-        granted_by = excluded.granted_by,
-        granted_at = CURRENT_TIMESTAMP
-    `).run(user.id, user.id);
-    db.prepare(`
-      INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
-      VALUES (?, ?, 'backup.identity_rebind', 'user', ?, ?)
-    `).run(createId("audit"), user.id, user.id, JSON.stringify({
-      previousAdminCount: previousAdmins.length,
-      memberPermissionCount: Number(permissionResult.changes),
-      disabledLocalAccountCount
-    }));
-    db.exec("COMMIT");
-    return {
-      userId: user.id,
-      previousAdminCount: previousAdmins.length,
-      memberPermissionCount: Number(permissionResult.changes),
-      disabledLocalAccountCount
-    };
-  } catch (error) {
-    rollbackAfterError(db);
-    throw error;
-  }
+  if(credential) db.prepare("DELETE FROM user_identities WHERE user_id=? AND provider='local'").run(targetId);
+  const subject=credential?.username||identitySubject;
+  if(subject) db.prepare(`INSERT INTO user_identities(id,user_id,provider,subject) VALUES(?,?,?,?) ON CONFLICT(provider,subject) DO UPDATE SET user_id=excluded.user_id`).run(createId('identity'),targetId,user.provider,subject);
+  db.exec('DELETE FROM auth_sessions; DELETE FROM login_attempts');
+  db.prepare(`INSERT INTO audit_logs(id,actor_user_id,action,target_type,target_id,detail_json) VALUES(?,?,'backup.identity_restore','user',?,?)`).run(createId('audit'),targetId,targetId,JSON.stringify({strategy,memberPermissionCount:0}));
+ });
+ return {userId:targetId,memberPermissionCount:0,disabledLocalAccountCount:0,previousAdminCount:0,strategy};
 }
-
-export const rebindRestoredGatewayAdministrator = rebindRestoredAdministrator;
+export const rebindRestoredGatewayAdministrator=rebindRestoredAdministrator;

@@ -1,3 +1,5 @@
+import { processPageAppendJob } from "./page-append.service";
+import { assertNoPageAppend } from "./page-append-lock.service";
 import {
   existsSync,
   lstatSync,
@@ -50,6 +52,7 @@ type JobRow = {
   pageNumber: number | null;
   sourcePageNumber: number | null;
   rotation: number | null;
+  pipelineVersion: string;
 };
 
 export type WorkerExecutor = (
@@ -287,6 +290,7 @@ export function claimNextJob() {
       });
       reportsToReconcile.add(expired.reportId);
     }
+    db.prepare(`UPDATE report_page_appends SET state='failed',error_message='任务中断，请重试未完成的阶段' WHERE job_id IN (SELECT id FROM processing_jobs WHERE status='failed') AND state IN ('preparing','ocr','ai','normalizing')`).run();
     const orphanedReports = db
       .prepare(
         `
@@ -353,14 +357,14 @@ export function claimNextJob() {
       .prepare(
         `
       SELECT j.id, j.report_id AS reportId, j.page_id AS pageId, j.job_type AS jobType,
-        j.attempts, p.storage_path AS storagePath, p.file_size AS fileSize,
+        j.attempts, j.pipeline_version AS pipelineVersion, p.storage_path AS storagePath, p.file_size AS fileSize,
         p.thumbnail_path AS thumbnailPath, p.mime_type AS mimeType,
         p.page_number AS pageNumber, p.source_page_number AS sourcePageNumber, p.rotation
       FROM processing_jobs j LEFT JOIN report_pages p ON p.id = j.page_id WHERE j.id = ?
     `,
       )
       .get(candidate.id) as JobRow;
-    db.prepare(
+    if (job.pipelineVersion !== "page-append-v1") db.prepare(
       "UPDATE reports SET status = 'processing', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status <> 'trashed'",
     ).run(job.reportId);
     appendJobEvent({
@@ -958,6 +962,7 @@ export function reconcileReportProcessingStatus(reportId: string) {
     return previous?.status || null;
 
   const context = loadReportProcessingBatchContext(reportId);
+  if (context.currentBatch?.kind === "page_append") return previous.status;
   const currentJobs = context.currentBatch?.jobs || [];
   const hasActive = currentJobs.some((job) =>
     ["queued", "processing"].includes(job.status),
@@ -1208,10 +1213,10 @@ export async function processNextJob(
       .prepare(
         `
       UPDATE processing_jobs SET lease_expires_at = datetime('now', '+5 minutes')
-      WHERE id = ? AND status = 'processing'
+      WHERE id = ? AND status = 'processing' AND attempts = ?
     `,
       )
-      .run(job.id);
+      .run(job.id, job.attempts);
   };
   // Every processing job can outlive the five-minute lease on slower household
   // NAS devices. Renew local OCR/PDF jobs as well as AI jobs so another runner
@@ -1229,6 +1234,13 @@ export async function processNextJob(
   }, leaseHeartbeatIntervalMs());
   leaseHeartbeat.unref();
   try {
+    if (job.pipelineVersion === "page-append-v1") {
+      await processPageAppendJob(job.id, executor, aiExecutor);
+      const outcome = getDatabase().prepare('SELECT status,error_message AS message,error_code AS code FROM processing_jobs WHERE id=?').get(job.id) as {status:string;message:string|null;code:string|null}|undefined;
+      rebuildMorphology = job.jobType === 'ai_extract' && outcome?.status === 'completed';
+      if (outcome && ['completed','failed','cancelled'].includes(outcome.status)) appendJobEvent({jobId:job.id,reportId:job.reportId,eventType:outcome.status as 'completed'|'failed'|'cancelled',status:outcome.status,attempt:job.attempts,message:outcome.message,detail:{jobType:job.jobType,source:'page_append',code:outcome.code}});
+      return true;
+    }
     if (job.jobType === "ai_extract") {
       const persisted = getDatabase()
         .prepare("SELECT 1 AS found FROM report_extractions WHERE job_id = ?")
@@ -1305,6 +1317,7 @@ export async function processNextJob(
         const indicatorNormalization = normalizeReportObservations(
           job.reportId,
         );
+        getDatabase().prepare("UPDATE report_page_appends SET state='complete' WHERE report_id=? AND result_version IS NOT NULL AND state IN ('normalizing','ocr_only')").run(job.reportId);
         appendJobEvent({
           jobId: job.id,
           reportId: job.reportId,
@@ -1461,6 +1474,8 @@ export function retryProcessingJob(user: RequestUser, jobId: string) {
   if (!job)
     throw createError({ statusCode: 404, statusMessage: "处理任务不存在" });
   assertMemberManage(user, job.memberId);
+  if (getDatabase().prepare("SELECT 1 FROM processing_jobs WHERE id=? AND pipeline_version='page-append-v1'").get(jobId)) throw createError({statusCode:409,statusMessage:'请在补充报告页面板重试该批次'});
+  assertNoPageAppend(job.reportId);
   if (job.status !== "failed")
     throw createError({
       statusCode: 409,
@@ -1500,6 +1515,7 @@ export function queueManualAiExtraction(user: RequestUser, reportId: string) {
   if (!report)
     throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   assertMemberManage(user, report.memberId);
+  assertNoPageAppend(reportId);
   if (!isAiExtractionConfigured()) {
     throw createError({
       statusCode: 409,
@@ -1604,6 +1620,7 @@ export function cancelReportProcessing(user: RequestUser, reportId: string) {
   if (!report)
     throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   assertMemberManage(user, report.memberId);
+  assertNoPageAppend(reportId);
   const active = db
     .prepare(
       `
@@ -1669,6 +1686,7 @@ export function reprocessReportOcrAndAi(user: RequestUser, reportId: string) {
   if (!report)
     throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   assertMemberManage(user, report.memberId);
+  assertNoPageAppend(reportId);
   const pages = db
     .prepare(
       `

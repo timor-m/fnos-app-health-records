@@ -58,6 +58,7 @@ export function classifySystemError(error: unknown): ApiErrorPayload | null {
     seen.add(current);
     const item = current as { code?: string; errcode?: number; message?: string; cause?: unknown; upstreamStatus?: number };
     const code = typeof item.code === 'string' ? item.code : '';
+    if (code === 'ERR_SQLITE_ERROR' && item.message === 'PAGE_APPEND_BUSY') return result(409, 'UPLOAD_CONFLICT', '补充报告页尚未结束，请先完成或放弃该批次');
     // node:sqlite uses ERR_SQLITE_ERROR + numeric errcode, including extended result codes.
     const sqlite = sqliteCodes[code.replace(/^(SQLITE_[A-Z]+)_.+$/, '$1')]
       || (code === 'ERR_SQLITE_ERROR' && typeof item.errcode === 'number' ? item.errcode & 255 : 0)

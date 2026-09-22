@@ -1054,7 +1054,7 @@ test("accepts an exact deterministic preprocessed OCR row as persisted evidence"
       WHERE o.report_id = ?
     `).get(reportId) as { evidenceJson: string; quality: string };
     assert.equal(stored.quality, "high");
-    assert.deepEqual(JSON.parse(stored.evidenceJson), [{ pageNumber: 1, quote: plannedLine }]);
+    assert.deepEqual(JSON.parse(stored.evidenceJson), [{ pageNumber: 1, quote: plannedLine, pageId: "page-1" }]);
   });
 });
 

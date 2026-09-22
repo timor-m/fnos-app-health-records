@@ -4,8 +4,9 @@ import { ref } from "vue";
 
 vi.mock("../src/composables/useAppContext", () => ({
   useAppContext: () => ({
-    session: ref({ id: "user-admin", displayName: "管理员", isAdmin: false }),
+    session: ref({ authenticated: true, id: "user-admin", displayName: "管理员", isAdmin: false }),
     selectedMemberId: ref(null),
+    allMembers: ref([{id:"m1",permission:"manager"}]),
     refreshReminderCount: vi.fn()
   })
 }));
@@ -42,6 +43,7 @@ const observation = {
 
 const detailPayload = {
   id: "r1",
+  memberId:"m1",
   reportType: "checkup",
   status: "ready",
   title: "年度体检",
@@ -118,4 +120,23 @@ describe("ReportDetail 核对指标模式", () => {
     expect(wrapper.find(".observation-edit-panel.is-open").exists()).toBe(false);
     wrapper.unmount();
   });
+});
+
+
+it("refreshes jobs and report details when the append component announces a processing phase", async () => {
+  const wrapper = mount(ReportDetail, {
+    props: { reportId: "r1", variant: "panel" },
+    global: { stubs: { teleport: true, RouterLink: true, ReportPageAppend: {
+      emits: ["stateChanged"], template: `<button data-append-state @click="$emit('stateChanged', 'ocr')">补页阶段</button>`
+    } } }
+  });
+  try {
+    await flushPromises();await flushPromises();
+    const jobsBefore=callsTo('jobs?reportId=r1').length;
+    const detailsBefore=fetchMock.mock.calls.filter(([input])=>String(input).endsWith('/api/reports/r1')).length;
+    await wrapper.get('[data-append-state]').trigger('click');await flushPromises();await flushPromises();
+    expect(wrapper.get('#report-processing-section').text()).toContain('正在识别补充页面（OCR）');
+    expect(callsTo('jobs?reportId=r1').length).toBeGreaterThan(jobsBefore);
+    expect(fetchMock.mock.calls.filter(([input])=>String(input).endsWith('/api/reports/r1')).length).toBeGreaterThan(detailsBefore);
+  } finally { wrapper.unmount(); }
 });

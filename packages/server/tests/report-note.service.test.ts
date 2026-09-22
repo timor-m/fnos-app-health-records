@@ -1,3 +1,4 @@
+import {preflightStoredBackup} from "../services/records.service";
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
@@ -31,6 +32,7 @@ async function fixture(run: (root: string) => Promise<void> | void) {
   try {
     const db = getDatabase();
     db.exec(`INSERT INTO users(id, display_name, is_gateway_admin) VALUES ('manager','fixture',1),('viewer','fixture',0),('other','fixture',0);
+      INSERT INTO user_identities(id,user_id,provider,subject) VALUES('note-manager','manager','fnos_gateway','manager');
       INSERT INTO health_members(id, display_name, created_by) VALUES ('member','fixture','manager');
       INSERT INTO member_permissions(member_id, user_id, permission, granted_by) VALUES ('member','manager','manager','manager'),('member','viewer','viewer','manager');
       INSERT INTO reports(id, member_id, created_by, report_type, title, status) VALUES ('report','member','manager','other','fixture','ready'),('other-report','member','manager','other','fixture','ready');`);
@@ -136,7 +138,7 @@ test('asset removal, report recycle/restore, permanent deletion, backup round tr
   getDatabase().exec("UPDATE file_gc_queue SET not_before=datetime('now','-1 minute')");
   assert.ok(runFileGarbageCollection().deleted >= 2);
   assert.equal(existsSync(original), false);
-  restoreBackup(manager, backup.id);
+  restoreBackup(manager, backup.id,preflightStoredBackup(manager,backup.id).token);
   note = listReportNotes(manager, 'report').notes[0];
   assert.equal(note.assets.length, 1);
   assert.deepEqual(readFileSync(getReportNoteImage(viewer, 'report', note.id, note.assets[0].id, 'original').path), png);

@@ -1,3 +1,4 @@
+import {createMember} from "../services/member.service";
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
@@ -42,7 +43,7 @@ test('unchanged gateway identity works on a read-only database; new requests ref
   const changed = getRequestUser(gateway(false, '更新账号'));
   assert.equal(changed.isAdmin, false);
   assert.equal((db.prepare('SELECT is_gateway_admin AS admin FROM users WHERE id=?').get(user.id) as {admin:number}).admin, 0);
-  assert.equal((db.prepare("SELECT display_name AS name FROM health_members WHERE relationship='self'").get() as {name:string}).name, '更新账号');
+  assert.equal(db.prepare("SELECT count(*) AS n FROM health_members").get()!.n,0);
 }));
 
 test('local session last-seen failures do not block reads; revocation and expiry still take effect', () => withStorage(() => {
@@ -91,7 +92,7 @@ test('notification and reminder reject null or non-object request bodies', async
 
 test('upload receipts can be retried without writing report storage, while verifying content and permissions', () => withStorage(dir => {
   const user=getRequestUser(gateway()); const db=getDatabase();
-  const {id:memberId}=db.prepare('SELECT id FROM health_members').get() as {id:string};
+  const {id:memberId}=createMember(user,{displayName:'合成测试',createSelf:true});
   const file={originalName:'test.pdf',data:Buffer.from('%PDF-1.4\n%%EOF')};
   const key='request-retry-0001'; const first=createUpload(user,memberId,[file],key);
   const path=join(dir,'source.pdf'); writeFileSync(path,file.data);
@@ -104,7 +105,7 @@ test('upload receipts can be retried without writing report storage, while verif
     writeFileSync(path,Buffer.from('%PDF-1.4\nchanged'));
     assert.throws(() => createUploadFromStagedFiles(user,memberId,[{originalName:file.originalName,sourcePath:path}],key), e => toApiErrorPayload(e).status===409);
   } finally { chmodSync(memberDir,0o700); db.exec('PRAGMA query_only=OFF'); }
-  db.prepare("UPDATE member_permissions SET permission='viewer' WHERE user_id=?").run(user.id);
+  db.prepare("UPDATE member_permissions SET permission='viewer',can_manage_sharing=0 WHERE user_id=?").run(user.id);
   assert.throws(() => createUpload({...user,isAdmin:false,isGatewayAdmin:false},memberId,[file],key), e => toApiErrorPayload(e).status===403);
   db.prepare("UPDATE member_permissions SET permission='manager' WHERE user_id=?").run(user.id);
   db.prepare('UPDATE upload_receipts SET report_id=NULL').run();

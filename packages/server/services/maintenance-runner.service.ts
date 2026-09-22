@@ -1,3 +1,4 @@
+import { scheduleMaintenance, maintenanceTick, maintenanceRunning, maintenanceGcFinished, maintenanceFailed } from "../utils/maintenance-state";
 import { rollbackAfterError, getDatabase } from "../database/client";
 import { getAppConfig } from '../utils/runtime-config';
 import { storageMigrationPaused } from '../utils/storage-migration-state';
@@ -177,8 +178,11 @@ function duplicateOperationTimeoutMinutes() {
 }
 
 export async function runMaintenanceCycle() {
-  if (running || getAppConfig().storageError || storageMigrationPaused()) return { skipped: true as const };
+  if (running) return { skipped: true as const };
+  if (getAppConfig().storageError || storageMigrationPaused()) { maintenanceFailed(); return { skipped: true as const }; }
   running = true;
+  maintenanceRunning(true);
+  let gcFinished = false;
   try {
     const indicatorNormalization = runIndicatorDictionaryBackfillIfNeeded();
     const observationDisplayFlags = runObservationDisplayFlagBackfillIfNeeded();
@@ -190,6 +194,8 @@ export async function runMaintenanceCycle() {
       markOrphanScan();
     }
     const fileGc = runFileGarbageCollection();
+    gcFinished = true;
+    maintenanceGcFinished(Date.now());
     if (indicatorNormalization || observationDisplayFlags || duplicateOperations.recovered || recycleBin.deleted || recycleBin.failed || fileGc.deleted || fileGc.failed || orphanScan?.queued) {
       await writeLog(recycleBin.failed || fileGc.failed ? "warn" : "info", "maintenance cycle completed", {
         indicatorNormalization,
@@ -201,15 +207,21 @@ export async function runMaintenanceCycle() {
       });
     }
     return { skipped: false as const, indicatorNormalization, observationDisplayFlags, duplicateOperations, recycleBin, fileGc, orphanScan };
+  } catch (error) {
+    if (!gcFinished) maintenanceFailed();
+    throw error;
   } finally {
     running = false;
+    maintenanceRunning(false);
   }
 }
 
 export function startMaintenanceRunner() {
   startIndicatorNormalizationTaskRunner();
   if (startTimer || intervalTimer) return;
+  scheduleMaintenance(Date.now(), 15_000, maintenanceIntervalMs);
   startTimer = setTimeout(() => {
+    maintenanceTick(true);
     startTimer = null;
     void runMaintenanceCycle().catch((error) => {
       void writeLog("error", "maintenance cycle failed", {
@@ -219,6 +231,7 @@ export function startMaintenanceRunner() {
   }, 15_000);
   startTimer.unref?.();
   intervalTimer = setInterval(() => {
+    maintenanceTick(false);
     void runMaintenanceCycle().catch((error) => {
       void writeLog("error", "maintenance cycle failed", {
         error: error instanceof Error ? error.message : String(error)

@@ -1,3 +1,4 @@
+import {preflightStoredBackup} from "../services/records.service";
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, renameSync } from 'node:fs';
@@ -203,7 +204,7 @@ test('business backup excludes machine migration state and restore preserves the
     const listing = execFileSync('tar', ['-tzf', backup.path], { encoding: 'utf8' });
     assert.doesNotMatch(listing, /archive-migration\.json/);
     writeFileSync(journal, 'current machine-local state');
-    restoreBackup(user, backup.id);
+    restoreBackup(user, backup.id,preflightStoredBackup(user,backup.id).token);
     assert.equal(readFileSync(journal, 'utf8'), 'current machine-local state');
   });
 });
@@ -322,4 +323,22 @@ test('cleanup cannot follow a replaced source folder or run without explicit API
     assert.equal(existsSync(join(source, 'reports-retained/synthetic.txt')), true);
     assert.equal(existsSync(target), true);
   });
+});
+
+import { startPageAppend,storePageAppendFile,getPageAppend,pageAppendPreview } from '../services/page-append.service';
+import { processNextJob } from '../services/job-runner.service';
+test('storage migration preserves unfinished append batch, actor binding and protected previews',async()=>{
+ await fixture(async(_source,_target,rootId)=>{
+  const db=getDatabase();db.exec(`INSERT INTO users(id,display_name) VALUES('append-migration','Synthetic');
+   INSERT INTO health_members(id,display_name,relationship,created_by) VALUES('append-member','Synthetic','other','append-migration');
+   INSERT INTO member_permissions(member_id,user_id,permission,granted_by) VALUES('append-member','append-migration','manager','append-migration');
+   INSERT INTO reports(id,member_id,created_by,title,report_type,status) VALUES('append-report','append-member','append-migration','Synthetic','other','ready');`);
+  const user={id:'append-migration',displayName:'Synthetic',authenticated:true,provider:'development' as const,isGatewayAdmin:true};
+  const data=Buffer.from([137,80,78,71,13,10,26,10,1]);
+  const batch=startPageAppend(user,'append-report',{requestKey:'migration-append-0001',files:[{name:'synthetic.png',size:data.length}]});
+  storePageAppendFile(user,'append-report',batch.id,batch.files[0]!.id,data);
+  await processNextJob(async request=>{if(request.outputPath)writeFileSync(request.outputPath,'preview');return {ok:true};});
+  await startStorageMigration(rootId);await waitForStorageMigration();assert.equal(getStorageMigration()?.phase,'completed');
+  const restored=getPageAppend(user,'append-report',batch.id);assert.equal(restored.state,'ready');assert.ok(existsSync(pageAppendPreview(user,'append-report',batch.id,restored.pages[0]!.id)));
+ });
 });

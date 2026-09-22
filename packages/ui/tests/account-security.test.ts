@@ -13,6 +13,7 @@ vi.mock("vue-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("../src/composables/useAppContext", () => ({
   useAppContext: () => ({
     session: ref({ id: "user-admin", displayName: "管理员", isAdmin: true }),
+    preferences: ref({}),
     load: appLoad
   })
 }));
@@ -212,7 +213,7 @@ describe("AccountSecuritySettingsPage", () => {
     expect(toastShow).toHaveBeenCalledWith("账号已删除，其成员档案保留", 4200);
   });
 
-  it("asks a second force confirmation when delete is blocked by orphaned data", async () => {
+  it("keeps account deletion blocked without offering a force bypass", async () => {
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = String(init?.method || "GET");
@@ -238,18 +239,9 @@ describe("AccountSecuritySettingsPage", () => {
     const first = confirmAsk.mock.calls[0][0] as { run: () => Promise<void> };
     await first.run();
 
-    expect(confirmAsk).toHaveBeenCalledTimes(2);
-    const second = confirmAsk.mock.calls[1][0] as { title: string; confirmText: string; danger: boolean; message: string; run: () => Promise<void> };
-    expect(second.title).toBe("确认强制删除");
-    expect(second.confirmText).toBe("仍要删除");
-    expect(second.danger).toBe(true);
-    expect(second.message).toContain("共 2 份报告");
-
-    fetchMock.mockClear();
-    await second.run();
-    const forceCall = callTo("/api/auth/accounts", "DELETE");
-    expect(forceCall).toBeTruthy();
-    expect(JSON.parse(String(forceCall![1].body))).toEqual({ userId: "user-1", force: true });
-    expect(toastShow).toHaveBeenCalledWith("账号已删除；其名下报告已无人可访问，存储仍被占用", 4200);
+    expect(confirmAsk).toHaveBeenCalledTimes(1);
+    await flushPromises();
+    expect(wrapper.text()).toContain("共 2 份报告");
+    expect(toastShow).not.toHaveBeenCalled();
   });
 });

@@ -144,7 +144,8 @@ test("keeps trend data reversible in trash and removes the complete report graph
     trashReport(manager, upload.reportId);
     assert.deepEqual(permanentlyDeleteReport(manager, upload.reportId), {
       id: upload.reportId,
-      deleted: true
+      deleted: true,
+      pendingFileCount: 0
     });
     const afterDelete = db.prepare(`
       SELECT

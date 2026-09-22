@@ -1,3 +1,4 @@
+import { getDeploymentIdentity } from "./deployment-identity";
 import type { H3Event } from "h3";
 import { getDatabase, runInTransaction } from "../database/client";
 import { isAdministrator, type RequestUser } from "../domain/request-user";
@@ -12,18 +13,20 @@ function requestAccessMode(event: H3Event) {
 }
 
 function ensureUser(user: RequestUser) {
+  const externalSubject = user.id;
+  const subject = `${getDeploymentIdentity().identityDomain}:${externalSubject}`;
   const db = getDatabase();
+  const mapped = db.prepare(`SELECT i.user_id AS id FROM user_identities i WHERE i.provider=? AND i.subject IN (?,?)
+    AND NOT EXISTS(SELECT 1 FROM identity_recovery_pending r WHERE r.user_id=i.user_id)
+    ORDER BY CASE WHEN i.subject=? THEN 0 ELSE 1 END LIMIT 1`).get(user.provider,subject,externalSubject,subject) as {id:string}|undefined;
+  user.id = mapped?.id || createId('user');
   const previous = db.prepare(`
     SELECT display_name AS displayName, is_gateway_admin AS isAdmin FROM users WHERE id = ?
   `).get(user.id) as { displayName: string; isAdmin: number } | undefined;
   const identity = db.prepare(`SELECT user_id AS userId FROM user_identities WHERE provider = ? AND subject = ?`)
-    .get(user.provider, user.id) as { userId: string } | undefined;
-  const selfMember = db.prepare(`
-    SELECT 1 FROM health_members hm JOIN member_permissions mp ON mp.member_id = hm.id
-    WHERE mp.user_id = ? AND hm.relationship = 'self' AND hm.deleted_at IS NULL
-  `).get(user.id);
+    .get(user.provider, subject) as { userId: string } | undefined;
   const changed = !previous || previous.displayName !== user.displayName || previous.isAdmin !== Number(isAdministrator(user));
-  if (!changed && identity?.userId === user.id && selfMember) return;
+  if (!changed && identity?.userId === user.id) return;
 
   // Identity and initial member permissions must either all persist or all roll back.
   runInTransaction(db, () => {
@@ -35,20 +38,8 @@ function ensureUser(user: RequestUser) {
     if (identity?.userId !== user.id) db.prepare(`
       INSERT INTO user_identities (id, user_id, provider, subject) VALUES (?, ?, ?, ?)
       ON CONFLICT(provider, subject) DO UPDATE SET user_id = excluded.user_id
-    `).run(createId("identity"), user.id, user.provider, user.id);
-    if (previous && previous.displayName !== user.displayName) {
-      // Heal the old gateway name, preserving manually renamed self members.
-      db.prepare(`UPDATE health_members SET display_name = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE relationship = 'self' AND created_by = ? AND display_name = ? AND deleted_at IS NULL
-      `).run(user.displayName, user.id, previous.displayName);
-    }
-    if (!selfMember) {
-      const memberId = createId("member");
-      db.prepare(`INSERT INTO health_members (id, display_name, relationship, created_by)
-        VALUES (?, ?, 'self', ?)`).run(memberId, user.displayName, user.id);
-      db.prepare(`INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
-        VALUES (?, ?, 'manager', ?)`).run(memberId, user.id, user.id);
-    }
+    `).run(createId("identity"), user.id, user.provider, subject);
+
   });
 }
 

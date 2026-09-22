@@ -1,3 +1,6 @@
+import { pageAppendSchemaSql } from "./page-append-draft";
+import { memberSharingSchemaSql } from "./member-sharing-draft";
+import { fileGcMembersSchemaSql } from "./file-gc-members-draft";
 import {
   uploadReceiptSchemaSql,
   institutionTrendRuleSchemaSql,
@@ -18,6 +21,7 @@ import { trendGroupsSchemaSql } from "./trend-groups-draft";
 export const schemaVersion = latestSchemaVersion;
 
 export const schemaSql = `
+${memberSharingSchemaSql}
 ${reportNotesSchemaSql}
 ${trendGroupsSchemaSql}
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -65,6 +69,7 @@ CREATE TABLE IF NOT EXISTS member_permissions (
   member_id TEXT NOT NULL REFERENCES health_members(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   permission TEXT NOT NULL CHECK (permission IN ('viewer', 'manager')),
+  can_manage_sharing INTEGER NOT NULL DEFAULT 0 CHECK(can_manage_sharing IN (0,1) AND (can_manage_sharing = 0 OR permission = 'manager')),
   granted_by TEXT NOT NULL REFERENCES users(id),
   granted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY(member_id, user_id)
@@ -556,6 +561,8 @@ CREATE TABLE IF NOT EXISTS file_gc_queue (
   completed_at TEXT
 );
 
+${fileGcMembersSchemaSql}
+
 CREATE INDEX IF NOT EXISTS file_gc_queue_pending_idx
   ON file_gc_queue(completed_at, not_before, created_at);
 
@@ -577,4 +584,5 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ${uploadReceiptSchemaSql}
+${pageAppendSchemaSql}
 `;

@@ -17,6 +17,7 @@ test("POST cancellation route enforces member permissions and cancels only the s
     const db = getDatabase();
     db.exec(`
       INSERT INTO users (id, display_name) VALUES ('manager', 'Test'), ('viewer', 'Test');
+      INSERT INTO user_identities(id,user_id,provider,subject) VALUES('mi','manager','fnos_gateway','manager'),('vi','viewer','fnos_gateway','viewer');
       INSERT INTO health_members (id, display_name, created_by) VALUES ('member', 'Test', 'manager');
       INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
       VALUES ('member', 'manager', 'manager', 'manager'), ('member', 'viewer', 'viewer', 'manager');

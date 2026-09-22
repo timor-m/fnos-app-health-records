@@ -25,19 +25,17 @@ const checkingId = ref("");
 const downloadingId = ref("");
 const uploadingRestore = ref(false);
 const validationById = ref<Record<string, BackupValidationResult>>({});
-const isLocalAuth = app.session.value?.provider === "local";
 
 type RestoreResult = {
   restored: boolean;
   backupId: string;
   safetyBackupId: string;
   filename?: string;
-  identityRebind?: { disabledLocalAccountCount?: number };
+  identityRebind?: { strategy?: 'same'|'cross' };
 };
 
 function restoreAccountNotice(result: RestoreResult) {
-  const count = Number(result.identityRebind?.disabledLocalAccountCount || 0);
-  return count > 0 ? `已停用 ${count} 个其他本地账号，可前往「我的 → 账号安全」重新启用。` : "";
+ return result.identityRebind?.strategy==='cross'?'源账号处于待映射状态，请按备份恢复文档运行受控身份映射工具。':'授权已回到备份时点，请重新登录。';
 }
 
 function formatBytes(value?: number | null) {
@@ -132,9 +130,12 @@ async function checkBackup(backup: BackupSummary) {
 }
 
 async function restoreBackup(backup: BackupSummary) {
+  let plan:{token:string;warning:string};
+  try {plan=await request(`backups/${encodeURIComponent(backup.id)}/preflight`,{method:'POST'});}
+  catch(cause){error.value=cause instanceof Error?cause.message:'恢复预检失败';return;}
   confirmDialog.ask({
     title: "从备份恢复",
-    message: `确定从备份“${backup.filename}”恢复吗？\n\n恢复会覆盖当前数据库、报告原件、缩略图、配置和 AI 密钥。系统会先自动创建一份恢复前安全备份。${isLocalAuth ? "恢复后其他本地账号将被停用（当前管理员账号保持不变），之后可在「账号安全」中重新启用。" : ""}`,
+    message: `${plan.warning}\n恢复会覆盖数据库、原件、配置和密钥，并先创建安全备份。`,
     confirmText: "恢复",
     danger: true,
     run: async () => {
@@ -144,11 +145,11 @@ async function restoreBackup(backup: BackupSummary) {
       try {
         const result = await request<RestoreResult>(
           `backups/${encodeURIComponent(backup.id)}/restore`,
-          { method: "POST" }
+          { method: "POST",body:JSON.stringify({token:plan.token}) }
         );
         message.value = `恢复完成，恢复前安全备份：${result.safetyBackupId}。建议刷新页面或重新打开应用确认数据状态。${restoreAccountNotice(result)}`;
         toast.show("备份已恢复");
-        await Promise.all([loadBackups(), app.load()]);
+        await app.load();
       } catch (cause) {
         error.value = cause instanceof Error ? cause.message : "备份恢复失败";
       } finally {
@@ -163,9 +164,14 @@ async function restoreUploadedBackup(event: Event) {
   const file = input.files?.[0];
   input.value = "";
   if (!file) return;
+  let plan:{token:string;warning:string};
+  uploadingRestore.value=true;
+  try { const body=new FormData();body.append('backup',file);plan=await requestUpload('backups/restore-upload',body); }
+  catch(cause){error.value=cause instanceof Error?cause.message:'恢复预检失败';return;}
+  finally {uploadingRestore.value=false;}
   confirmDialog.ask({
     title: "从外部备份恢复",
-    message: `确定从外部备份“${file.name}”恢复吗？\n\n恢复会覆盖当前数据库、报告原件、分页图、运行配置和 AI 密钥。系统会先自动创建一份恢复前安全备份。${isLocalAuth ? "恢复后其他本地账号将被停用（当前管理员账号保持不变），之后可在「账号安全」中重新启用。" : ""}`,
+    message: `${plan.warning}\n恢复前会创建安全备份。`,
     confirmText: "恢复",
     danger: true,
     run: async () => {
@@ -175,13 +181,14 @@ async function restoreUploadedBackup(event: Event) {
       try {
         const body = new FormData();
         body.append("backup", file);
+        body.append("token",plan.token);
         const result = await requestUpload<RestoreResult>(
           "backups/restore-upload",
           body
         );
         message.value = `外部备份已恢复：${result.filename}。恢复前安全备份：${result.safetyBackupId}。建议刷新页面或重新打开应用确认数据状态。${restoreAccountNotice(result)}`;
         toast.show("外部备份已恢复");
-        await Promise.all([loadBackups(), app.load()]);
+        await app.load();
       } catch (cause) {
         error.value = cause instanceof Error ? cause.message : "外部备份恢复失败";
       } finally {

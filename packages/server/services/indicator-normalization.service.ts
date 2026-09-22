@@ -1,3 +1,4 @@
+import { memberAccessSql } from "./member.service";
 import { rollbackAfterError, getDatabase } from "../database/client";
 import { createHash } from "node:crypto";
 import { createId } from "../utils/identifier";
@@ -2170,7 +2171,7 @@ export function normalizeAllObservations(user: RequestUser): IndicatorNormalizat
   if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可维护指标归一化" });
   ensureBuiltinIndicatorCatalog();
   const reportIds = getDatabase().prepare(`
-    SELECT DISTINCT report_id AS reportId FROM observations ORDER BY report_id
+    SELECT DISTINCT o.report_id AS reportId FROM observations o JOIN reports r ON r.id=o.report_id WHERE ${memberAccessSql(user,'r.member_id',true)} ORDER BY o.report_id
   `).all() as Array<{ reportId: string }>;
   const total = createEmptyMaintenanceResult();
   for (const row of reportIds) {
@@ -2256,7 +2257,7 @@ export function previewIndicatorNormalization(user: RequestUser) {
   const db = getDatabase();
   const reports = db.prepare(`SELECT DISTINCT r.id FROM reports r
     JOIN observations o ON o.report_id = r.id
-    WHERE r.status <> 'trashed' AND r.deleted_at IS NULL ORDER BY r.id`).all() as Array<{ id: string }>;
+    WHERE ${memberAccessSql(user,'r.member_id',true)} AND r.status <> 'trashed' AND r.deleted_at IS NULL ORDER BY r.id`).all() as Array<{ id: string }>;
   const existing = new Map((db.prepare(`SELECT observation_id AS id, canonical_key AS canonicalKey,
     canonical_name AS canonicalName, matched_by AS matchedBy, excluded_reason AS excludedReason,
     quality FROM observation_normalizations`).all() as Array<{
@@ -2312,7 +2313,7 @@ export async function normalizeAllObservationsFromDictionary(
         SELECT observation.id
         FROM observations observation
         JOIN reports report ON report.id = observation.report_id
-        WHERE report.status <> 'trashed' AND report.deleted_at IS NULL
+        WHERE ${memberAccessSql(user,'report.member_id',true)} AND report.status <> 'trashed' AND report.deleted_at IS NULL
       )
     `).run();
   }
@@ -2322,7 +2323,7 @@ export async function normalizeAllObservationsFromDictionary(
     JOIN reports report ON report.id = observation.report_id
     LEFT JOIN observation_normalizations normalization
       ON normalization.observation_id = observation.id
-    WHERE report.status <> 'trashed'
+    WHERE ${memberAccessSql(user,'report.member_id',true)} AND report.status <> 'trashed'
       AND report.deleted_at IS NULL
       AND (normalization.observation_id IS NULL OR normalization.canonical_key IS NULL)
     ORDER BY observation.report_id
@@ -2393,14 +2394,14 @@ export function getIndicatorNormalizationMetrics(user: RequestUser): IndicatorNo
     FROM reports report
     JOIN observations observation ON observation.report_id = report.id
     LEFT JOIN observation_normalizations normalization ON normalization.observation_id = observation.id
-    WHERE report.status <> 'trashed' AND report.deleted_at IS NULL
+    WHERE ${memberAccessSql(user,'report.member_id')} AND report.status <> 'trashed' AND report.deleted_at IS NULL
   `).get() as Record<string, number | null>;
   const issueGroups = db.prepare(`
     SELECT COUNT(DISTINCT unmatched.fingerprint) AS count
     FROM indicator_unmatched_names unmatched
     JOIN indicator_unmatched_occurrences occurrence ON occurrence.fingerprint = unmatched.fingerprint
     JOIN reports report ON report.id = occurrence.report_id
-    WHERE unmatched.status = 'open' AND report.status <> 'trashed' AND report.deleted_at IS NULL
+    WHERE ${memberAccessSql(user,'report.member_id')} AND unmatched.status = 'open' AND report.status <> 'trashed' AND report.deleted_at IS NULL
   `).get() as { count: number };
   const decisions = db.prepare("SELECT COUNT(*) AS count FROM indicator_governance_decisions").get() as { count: number };
   const userAliases = db.prepare(`
@@ -2416,7 +2417,7 @@ export function getIndicatorNormalizationMetrics(user: RequestUser): IndicatorNo
     FROM observation_normalizations normalization
     JOIN observations observation ON observation.id = normalization.observation_id
     JOIN reports report ON report.id = observation.report_id
-    WHERE report.status <> 'trashed' AND report.deleted_at IS NULL
+    WHERE ${memberAccessSql(user,'report.member_id')} AND report.status <> 'trashed' AND report.deleted_at IS NULL
     GROUP BY normalization.source_origin
     ORDER BY count DESC, normalization.source_origin
   `).all() as Array<{ sourceOrigin: NormalizationSourceOrigin; count: number; trendEligible: number }>;
@@ -2444,7 +2445,7 @@ export function getIndicatorNormalizationMetrics(user: RequestUser): IndicatorNo
     FROM reports report
     JOIN observations observation ON observation.report_id = report.id
     LEFT JOIN observation_normalizations normalization ON normalization.observation_id = observation.id
-    WHERE report.status <> 'trashed' AND report.deleted_at IS NULL
+    WHERE ${memberAccessSql(user,'report.member_id')} AND report.status <> 'trashed' AND report.deleted_at IS NULL
     GROUP BY report.report_type
     ORDER BY observations DESC, report.report_type
   `).all() as Array<{
@@ -2522,7 +2523,7 @@ export function listIndicatorNormalizationIssues(user: RequestUser): IndicatorNo
     JOIN observations observation ON observation.id = occurrence.observation_id
     LEFT JOIN observation_normalizations normalization ON normalization.observation_id = occurrence.observation_id
     LEFT JOIN indicator_catalog catalog ON catalog.id = normalization.indicator_id
-    WHERE pool.status = 'open'
+    WHERE ${memberAccessSql(user,'report.member_id')} AND pool.status = 'open'
     ORDER BY pool.last_seen_at DESC, report.report_issued_at DESC, occurrence.observation_id
   `).all(user.id) as Array<{
     fingerprint: string;
@@ -2716,6 +2717,12 @@ function observationRowsForAlias(alias: AliasRow) {
   );
 }
 
+function assertObservationManagement(user:RequestUser,rows:ObservationRow[]) {
+ for(const id of new Set(rows.map(row=>row.reportId))) {
+  const report=getDatabase().prepare('SELECT member_id AS memberId FROM reports WHERE id=?').get(id) as {memberId:string}|undefined;
+  if(report) assertMemberManage(user,report.memberId);
+ }
+}
 function renormalizeRows(rows: ObservationRow[]) {
   let normalized = 0;
   let reopenedIssues = 0;
@@ -2744,6 +2751,8 @@ export function resolveIndicatorNormalizationIssue(
   if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可治理指标" });
   ensureBuiltinIndicatorCatalog();
   const fingerprint = input.fingerprint?.trim();
+  const affected=getDatabase().prepare(`SELECT DISTINCT r.member_id AS memberId FROM indicator_unmatched_occurrences o JOIN reports r ON r.id=o.report_id WHERE o.fingerprint=?`).all(fingerprint || '') as Array<{memberId:string}>;
+  for(const member of affected) assertMemberManage(user,member.memberId);
   if (!/^[a-f0-9]{64}$/i.test(fingerprint || "")) {
     throw createError({ statusCode: 400, statusMessage: "指标问题标识无效" });
   }
@@ -2998,6 +3007,7 @@ export function listIndicatorGovernanceHistory(user: RequestUser, limit = 100, o
     LEFT JOIN indicator_unmatched_names pool ON pool.fingerprint = history.fingerprint
     LEFT JOIN indicator_catalog catalog ON catalog.id = history.indicator_id
     LEFT JOIN users ON users.id = history.created_by
+    WHERE history.created_by = '${user.id.replaceAll("'","''")}'
     ORDER BY history.rowid DESC
     LIMIT ? OFFSET ?
   `).all(safeLimit, safeOffset) as Array<Omit<IndicatorGovernanceHistoryItem, "canUndo"> & { canUndo: number }>;
@@ -3006,7 +3016,7 @@ export function listIndicatorGovernanceHistory(user: RequestUser, limit = 100, o
 
 export function countIndicatorGovernanceHistory(user: RequestUser): number {
   if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可查看治理历史" });
-  const row = getDatabase().prepare(`SELECT COUNT(*) AS total FROM indicator_governance_history`).get() as { total: number };
+  const row = getDatabase().prepare(`SELECT COUNT(*) AS total FROM indicator_governance_history WHERE created_by=?`).get(user.id) as { total: number };
   return row.total;
 }
 
@@ -3018,6 +3028,8 @@ export function undoIndicatorGovernanceDecision(
   if (!isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: "仅管理员可撤销指标治理" });
   ensureBuiltinIndicatorCatalog();
   const fingerprint = fingerprintInput.trim();
+  const affected=getDatabase().prepare(`SELECT DISTINCT r.member_id AS memberId FROM indicator_unmatched_occurrences o JOIN reports r ON r.id=o.report_id WHERE o.fingerprint=?`).all(fingerprint || '') as Array<{memberId:string}>;
+  for(const member of affected) assertMemberManage(user,member.memberId);
   if (!/^[a-f0-9]{64}$/i.test(fingerprint)) {
     throw createError({ statusCode: 400, statusMessage: "指标问题标识无效" });
   }
@@ -3062,6 +3074,7 @@ export function undoIndicatorGovernanceDecision(
     for (const row of observationRowsForAlias(alias)) rowsById.set(row.id, row);
   }
   const rows = [...rowsById.values()];
+  assertObservationManagement(user,rows);
   const undoReason = reason?.trim().slice(0, 300) || null;
   let aliasDisabled = false;
   db.exec("BEGIN IMMEDIATE");
@@ -3253,6 +3266,7 @@ export function setIndicatorAliasEnabled(
   }
 
   const rows = observationRowsForAlias(alias);
+  assertObservationManagement(user,rows);
   const updateReason = reason?.trim().slice(0, 300) || null;
   db.exec("BEGIN IMMEDIATE");
   try {

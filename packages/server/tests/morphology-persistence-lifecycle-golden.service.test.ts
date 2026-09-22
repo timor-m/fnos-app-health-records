@@ -453,6 +453,7 @@ test("keeps the real ultrasound morphology golden idempotent across persistence,
     assert.deepEqual(permanentlyDeleteReport(manager, reportId), {
       id: reportId,
       deleted: true,
+      pendingFileCount: 0,
     });
     const afterPurge = db
       .prepare(

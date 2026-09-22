@@ -1,3 +1,4 @@
+import {preflightStoredBackup} from "../services/records.service";
 import assert from "node:assert/strict";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -1144,7 +1145,7 @@ test("permanent deletion keeps a redacted duplicate-governance snapshot without 
     });
     assert.ok(decision);
     trashReport(manager, source.reportId);
-    assert.deepEqual(permanentlyDeleteReport(manager, source.reportId), { id: source.reportId, deleted: true });
+    assert.deepEqual(permanentlyDeleteReport(manager, source.reportId), { id: source.reportId, deleted: true, pendingFileCount: 0 });
 
     const reportCount = db.prepare("SELECT COUNT(*) AS count FROM reports WHERE id = ?")
       .get(source.reportId) as { count: number };
@@ -1524,7 +1525,7 @@ test("creates, lists, downloads and restores a full app backup", () => {
     rmSync(join(storageDir, "reports"), { recursive: true, force: true });
     assert.equal(existsSync(originalBefore.path), false);
 
-    const restored = restoreFullBackup(restoredAdmin, backup.id);
+    const restored = restoreFullBackup(restoredAdmin, backup.id,preflightStoredBackup(restoredAdmin,backup.id).token);
     assert.equal(restored.restored, true);
     assert.ok(restored.safetyBackupId);
     assert.equal(restored.identityRebind.userId, restoredAdmin.id);
@@ -1532,18 +1533,19 @@ test("creates, lists, downloads and restores a full app backup", () => {
     const adminRows = restoredDb.prepare("SELECT id, is_gateway_admin AS isAdmin FROM users ORDER BY id")
       .all() as Array<{ id: string; isAdmin: number }>;
     assert.equal(adminRows.find((row) => row.id === restoredAdmin.id)?.isAdmin, 1);
-    assert.equal(adminRows.find((row) => row.id === manager.id)?.isAdmin, 0);
+    assert.equal(adminRows.find((row) => row.id === manager.id)?.isAdmin, 1);
     const restoredPermission = restoredDb.prepare(`
       SELECT permission FROM member_permissions WHERE member_id = 'records-member' AND user_id = ?
     `).get(restoredAdmin.id) as { permission: string } | undefined;
-    assert.equal(restoredPermission?.permission, "manager");
-    const detailAfter = getReportDetail(restoredAdmin, upload.reportId);
+    assert.equal(restoredPermission, undefined);
+    assert.throws(()=>getReportDetail(restoredAdmin,upload.reportId));
+    const detailAfter = getReportDetail(manager, upload.reportId);
     assert.equal(detailAfter.title, "备份前报告");
-    const originalAfter = getReportPageFile(restoredAdmin, upload.reportId, detailAfter.pages[0].id, "original");
+    const originalAfter = getReportPageFile(manager, upload.reportId, detailAfter.pages[0].id, "original");
     assert.equal(existsSync(originalAfter.path), true);
     assert.equal(listBackups(restoredAdmin).some((item) => item.id === restored.safetyBackupId && item.reason === "pre_restore"), true);
     assert.equal((listAuditLogs(restoredAdmin, 20) as Array<{ action: string }>).some((item) => item.action === "backup.restore"), true);
-    assert.equal((listAuditLogs(restoredAdmin, 20) as Array<{ action: string }>).some((item) => item.action === "backup.identity_rebind"), true);
+    assert.equal((listAuditLogs(restoredAdmin, 20) as Array<{ action: string }>).some((item) => item.action === "backup.identity_restore"), true);
     const safetyBackup = getBackupDownload(restoredAdmin, restored.safetyBackupId);
     assert.equal(existsSync(safetyBackup.path), true);
     assert.deepEqual(deleteBackup(restoredAdmin, restored.safetyBackupId), { id: restored.safetyBackupId, deleted: true });
@@ -1610,10 +1612,10 @@ test("preserves the current Docker administrator credential when restoring anoth
       VALUES ('current-local-account', ?, 'current-admin', ?, ?)
     `).run(restoringAdmin.id, currentPassword.hash, currentPassword.salt);
 
-    const restored = restoreFullBackup(restoringAdmin, backup.id);
+    const restored = restoreFullBackup(restoringAdmin, backup.id,preflightStoredBackup(restoringAdmin,backup.id).token);
     assert.equal(restored.restored, true);
     assert.equal(restored.identityRebind.userId, restoringAdmin.id);
-    assert.equal(restored.identityRebind.disabledLocalAccountCount, 1);
+    assert.equal(restored.identityRebind.disabledLocalAccountCount, 0);
 
     const restoredDb = getDatabase();
     const currentAccount = restoredDb.prepare(`
@@ -1634,11 +1636,11 @@ test("preserves the current Docker administrator credential when restoring anoth
     const oldAccount = restoredDb.prepare(`
       SELECT disabled_at AS disabledAt FROM local_accounts WHERE user_id = ?
     `).get(backupOwner.id) as { disabledAt: string | null };
-    assert.ok(oldAccount.disabledAt);
+    assert.equal(oldAccount.disabledAt,null);
     assert.equal(Number((restoredDb.prepare(`
       SELECT COUNT(*) AS count FROM member_permissions
       WHERE user_id = ? AND permission = 'manager'
-    `).get(restoringAdmin.id) as { count: number }).count), 1);
+    `).get(restoringAdmin.id) as { count: number }).count), 0);
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;

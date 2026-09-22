@@ -66,7 +66,7 @@ test("manages a family member and viewer access with audit records", () => {
     assert.equal(updated.displayName, "小明同学");
     assert.equal(updated.sex, "unknown");
 
-    setMemberPermission(admin, created.id, { userId: viewer.id, permission: "viewer" });
+    setMemberPermission(admin, created.id, { userId: viewer.id, permission: "viewer", version:0 });
     assert.equal(assertMemberAccess(viewer, created.id), "viewer");
     assert.equal(listMembers(viewer)[0]?.displayName, "小明同学");
 
@@ -93,8 +93,8 @@ test("rejects non-admin member changes and protects self records", () => {
       VALUES ('member-self', '管理员', 'self', ?)
     `).run(admin.id);
     getDatabase().prepare(`
-      INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
-      VALUES ('member-self', ?, 'manager', ?)
+      INSERT INTO member_permissions (member_id, user_id, permission, granted_by,can_manage_sharing)
+      VALUES ('member-self', ?, 'manager', ?,1)
     `).run(admin.id, admin.id);
     assert.throws(
       () => deleteMember(admin, "member-self"),
@@ -106,7 +106,7 @@ test("rejects non-admin member changes and protects self records", () => {
 test("prevents viewer-only users from editing member profiles or permissions", () => {
   withDatabase(() => {
     const created = createMember(admin, { displayName: "父亲", relationship: "parent" });
-    setMemberPermission(admin, created.id, { userId: viewer.id, permission: "viewer" });
+    setMemberPermission(admin, created.id, { userId: viewer.id, permission: "viewer", version:0 });
     assert.throws(
       () => updateMember(viewer, created.id, { displayName: "不能改" }),
       (error: unknown) => (error as { statusCode?: number }).statusCode === 403
