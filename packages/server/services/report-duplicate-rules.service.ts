@@ -1,13 +1,6 @@
-export const familyReportDuplicateRuleVersion = "family-v1";
+export const familyReportDuplicateRuleVersion = "family-v2";
 
 export type ReportDuplicateRuleVersion = string;
-
-export type ReportDuplicateRuleConfig = {
-  version: ReportDuplicateRuleVersion;
-  label: string;
-  allowEquivalentHospitalNames: boolean;
-  enableQualityDownweight: false;
-};
 
 export type ReportDuplicateRuleSelection = {
   version: ReportDuplicateRuleVersion;
@@ -21,13 +14,6 @@ export type ReportDuplicateRuleSnapshot = {
   ruleId: string;
   signals: string[];
   signalProfileKey: string;
-};
-
-const familyReportDuplicateRule: ReportDuplicateRuleConfig = {
-  version: familyReportDuplicateRuleVersion,
-  label: "家庭版重复报告识别规则",
-  allowEquivalentHospitalNames: true,
-  enableQualityDownweight: false
 };
 
 export const stableReportDuplicateRuleVersion = familyReportDuplicateRuleVersion;
@@ -44,10 +30,6 @@ export function resolveReportDuplicateRuleSelection(): ReportDuplicateRuleSelect
     candidateVersion: familyReportDuplicateRuleVersion,
     source: "fixed"
   };
-}
-
-export function reportDuplicateRuleConfig(): ReportDuplicateRuleConfig {
-  return familyReportDuplicateRule;
 }
 
 export function normalizeReportDuplicateRuleSnapshot(

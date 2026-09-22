@@ -1,3 +1,4 @@
+import { ensureReportDuplicateDraft } from "./report-duplicate-draft";
 import { ensurePageAppendDraft } from "./page-append-draft";
 import { ensureMemberSharingDraft } from "./member-sharing-draft";
 import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
@@ -237,6 +238,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
     ensureLocalAccountColumns(db);
     ensureMemberSharingDraft(db);
     ensurePageAppendDraft(db);
+    ensureReportDuplicateDraft(db);
     ensureObservationFieldOverrideSchema(db);
     ensureOcrCoordSpaceColumns(db);
     ensureReportDuplicateGovernanceSchema(db);
@@ -265,7 +267,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
 
   const pendingMigrations = databaseMigrations.filter((migration) => migration.version > currentVersion);
   // Complete older v17 test drafts without renumbering their existing records.
-  if (!tableExists(db, "report_page_appends") || !tableColumnNames(db,"report_page_appends").has("confirmation_hash") || !tableColumnNames(db,"report_page_appends").has("input_hash") || !tableColumnNames(db,"report_page_append_files").has("error_message") || !tableExists(db, "file_gc_members") || !tableColumnNames(db, "member_permissions").has("can_manage_sharing") || pendingMigrations.length || !tableExists(db, "indicator_groups") || !tableExists(db, "indicator_group_members") || !tableExists(db, "report_notes") || !tableExists(db, "report_note_assets") || !tableExists(db, "upload_receipts")
+  if (!tableExists(db, "report_duplicate_runtime") || !tableColumnNames(db,"report_duplicate_runtime").has("continue_job_id") || !tableExists(db, "report_page_appends") || !tableColumnNames(db,"report_page_appends").has("confirmation_hash") || !tableColumnNames(db,"report_page_appends").has("input_hash") || !tableColumnNames(db,"report_page_append_files").has("error_message") || !tableExists(db, "file_gc_members") || !tableColumnNames(db, "member_permissions").has("can_manage_sharing") || pendingMigrations.length || !tableExists(db, "indicator_groups") || !tableExists(db, "indicator_group_members") || !tableExists(db, "report_notes") || !tableExists(db, "report_note_assets") || !tableExists(db, "upload_receipts")
     || !tableExists(db, "institution_trend_auto_rules") || !tableExists(db, "institution_trend_auto_decisions")) {
     backupDatabaseBeforeMigration(db, storageDir, databasePath, currentVersion, schemaVersion);
   }
@@ -299,6 +301,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
     ensureLocalAccountColumns(db);
     ensureMemberSharingDraft(db);
     ensurePageAppendDraft(db);
+    ensureReportDuplicateDraft(db);
     ensureObservationFieldOverrideSchema(db);
     ensureOcrCoordSpaceColumns(db);
     ensureReportDuplicateGovernanceSchema(db);

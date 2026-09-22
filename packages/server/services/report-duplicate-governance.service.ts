@@ -1,3 +1,4 @@
+import { completeSourceSignature } from "./report-duplicate-snapshot.service";
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { createError } from "h3";
@@ -23,6 +24,7 @@ export type ReportDuplicateDecisionRecord = {
   rightTitle: string;
   rightStatus: string;
   decision: ReportDuplicateDecision;
+  appliesToCurrentSource?: boolean;
   reason: string | null;
   evidence: Record<string, unknown>;
   ruleVersion: string;
@@ -61,22 +63,15 @@ export function reportDuplicatePairKey(leftReportId: string, rightReportId: stri
     .digest("base64url");
 }
 
-export function reportFileSignature(reportId: string) {
-  const pages = getDatabase().prepare(`
-    SELECT sha256, source_page_number AS sourcePageNumber, source_page_count AS sourcePageCount
-    FROM report_pages
-    WHERE report_id = ?
-    ORDER BY page_number, id
-  `).all(reportId) as Array<{
-    sha256: string;
-    sourcePageNumber: number | null;
-    sourcePageCount: number | null;
-  }>;
-  if (!pages.length || pages.some((page) => !page.sha256)) return null;
-  return pages
-    .map((page) => `${page.sha256}:${page.sourcePageNumber || 0}:${page.sourcePageCount || 0}`)
-    .sort()
-    .join("|");
+export function reportFileSignature(reportId: string) { return completeSourceSignature(reportId); }
+
+export function duplicateDecisionApplies(leftId:string,rightId:string,evidenceJson:string) {
+  try {
+    const evidence=JSON.parse(evidenceJson);
+    const sources=evidence.sourceSignatures;
+    if (!sources) return false; // Unbound legacy confirmations remain in history, require review before folding.
+    return sources[leftId]===completeSourceSignature(leftId)&&sources[rightId]===completeSourceSignature(rightId);
+  } catch { return false; }
 }
 
 export function getReportDuplicateDecision(leftReportId: string, rightReportId: string) {
@@ -95,7 +90,7 @@ export function getReportDuplicateDecision(leftReportId: string, rightReportId: 
 export function shouldCollapseReportPair(leftReportId: string, rightReportId: string) {
   const decision = getReportDuplicateDecision(leftReportId, rightReportId);
   if (decision?.decision === "distinct") return false;
-  if (decision?.decision === "duplicate") return true;
+  if (decision?.decision === "duplicate" && duplicateDecisionApplies(leftReportId,rightReportId,decision.evidenceJson)) return true;
   const leftSignature = reportFileSignature(leftReportId);
   return Boolean(leftSignature && leftSignature === reportFileSignature(rightReportId));
 }
@@ -113,8 +108,8 @@ function decisionRecord(pairKey: string) {
     JOIN reports left_report ON left_report.id = decision.left_report_id
     JOIN reports right_report ON right_report.id = decision.right_report_id
     LEFT JOIN users actor ON actor.id = decision.decided_by
-    WHERE decision.pair_key = ?
-  `).get(pairKey) as Omit<ReportDuplicateDecisionRecord, "evidence" | "ruleSnapshot"> & {
+    WHERE decision.pair_key = ? AND left_report.member_id = decision.member_id AND right_report.member_id = decision.member_id
+  `).get(pairKey) as Omit<ReportDuplicateDecisionRecord, "evidence" | "ruleSnapshot" | "appliesToCurrentSource"> & {
     evidenceJson: string;
     ruleSnapshotJson: string;
   } | undefined;
@@ -122,6 +117,7 @@ function decisionRecord(pairKey: string) {
   const { evidenceJson, ruleSnapshotJson, ...record } = row;
   return {
     ...record,
+    appliesToCurrentSource: record.decision === "distinct" || duplicateDecisionApplies(record.leftReportId,record.rightReportId,evidenceJson),
     evidence: parseJsonRecord(evidenceJson),
     ruleSnapshot: normalizeReportDuplicateRuleSnapshot(parseJsonRecord(ruleSnapshotJson))
   };
@@ -142,9 +138,9 @@ export function listReportDuplicateDecisions(user: RequestUser, memberId: string
     JOIN reports left_report ON left_report.id = decision.left_report_id
     JOIN reports right_report ON right_report.id = decision.right_report_id
     LEFT JOIN users actor ON actor.id = decision.decided_by
-    WHERE decision.member_id = ?
+    WHERE decision.member_id = ? AND left_report.member_id = decision.member_id AND right_report.member_id = decision.member_id
     ORDER BY decision.updated_at DESC, decision.rowid DESC
-  `).all(memberId) as Array<Omit<ReportDuplicateDecisionRecord, "evidence" | "ruleSnapshot"> & {
+  `).all(memberId) as Array<Omit<ReportDuplicateDecisionRecord, "evidence" | "ruleSnapshot" | "appliesToCurrentSource"> & {
     evidenceJson: string;
     ruleSnapshotJson: string;
   }>;
@@ -152,6 +148,7 @@ export function listReportDuplicateDecisions(user: RequestUser, memberId: string
     const { evidenceJson, ruleSnapshotJson, ...record } = row;
     return {
       ...record,
+      appliesToCurrentSource: record.decision === "distinct" || duplicateDecisionApplies(record.leftReportId,record.rightReportId,evidenceJson),
       evidence: parseJsonRecord(evidenceJson),
       ruleSnapshot: normalizeReportDuplicateRuleSnapshot(parseJsonRecord(ruleSnapshotJson))
     };
@@ -173,7 +170,7 @@ function persistReportDuplicateDecision(db: DatabaseSync, input: PersistReportDu
   const pair = orderedReportPair(input.leftReportId, input.rightReportId);
   const pairKey = reportDuplicatePairKey(pair.leftReportId, pair.rightReportId);
   const ruleSnapshot = normalizeReportDuplicateRuleSnapshot(input.evidence.ruleSnapshot);
-  const evidence = { ...input.evidence, ruleSnapshot };
+  const evidence = { ...input.evidence, ruleSnapshot, sourceSignatures: { [input.leftReportId]: completeSourceSignature(input.leftReportId), [input.rightReportId]: completeSourceSignature(input.rightReportId) } };
   const evidenceJson = JSON.stringify(evidence);
   const ruleSnapshotJson = JSON.stringify(ruleSnapshot);
   db.prepare(`
@@ -296,7 +293,8 @@ export function setReportDuplicateDecision(user: RequestUser, input: {
   const reason = String(input.reason || "").trim().slice(0, 500) || null;
   const evidence = input.evidence && typeof input.evidence === "object" ? input.evidence : {};
   const db = getDatabase();
-  db.exec("BEGIN IMMEDIATE");
+  const ownsTransaction = !db.isTransaction;
+  if (ownsTransaction) db.exec("BEGIN IMMEDIATE");
   try {
     persistReportDuplicateDecision(db, {
       memberId,
@@ -308,9 +306,9 @@ export function setReportDuplicateDecision(user: RequestUser, input: {
       decidedBy: user.id,
       auditAction: "report.duplicate_decision"
     });
-    db.exec("COMMIT");
+    if (ownsTransaction) db.exec("COMMIT");
   } catch (error) {
-    rollbackAfterError(db);
+    if (ownsTransaction) rollbackAfterError(db);
     throw error;
   }
   return decisionRecord(pairKey);

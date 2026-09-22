@@ -2879,8 +2879,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
   .overview-row { min-height: 50px; padding: 9px 13px; }
 
   .filter-row { position: sticky; top: calc(58px + var(--safe-top)); z-index: 10; padding: 8px 0; }
-  .records-filter-row { display: flex; align-items: center; }
-  .filter-row .records-filter-row .records-sort-select { display: block; width: 100%; flex: 1 1 100%; }
+  .records-filter-row { display: none; }
   .filter-row .search-field { width: 100%; min-width: 0; max-width: none; }
   .filter-row .advanced-filter { display: none; }
   .page-search-field { display: none; }

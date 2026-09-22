@@ -1,225 +1,165 @@
-import { createHash } from "node:crypto";
-import { getDatabase } from "../database/client";
-
+import { getDatabase, rollbackAfterError } from '../database/client';
+import { evaluateDuplicatePair, type DuplicateEvaluation, type DuplicateEvidenceSnapshot } from './report-duplicate-evidence';
+import { buildDuplicateSnapshot, completeSourceSignature, markDuplicateResultCurrent } from './report-duplicate-snapshot.service';
+import { getReportDuplicateDecision } from './report-duplicate-governance.service';
 export type LocalDuplicateEvidence = {
-  reportId: string;
-  confidence: "high" | "medium";
-  matchedFields: string[];
-  reason: string;
-  textSimilarity: number | null;
+    reportId: string;
+    confidence: 'high' | 'medium';
+    matchedFields: string[];
+    reason: string;
+    textSimilarity: number | null;
+    evaluation: DuplicateEvaluation;
+    pauseEligible: boolean;
 };
-
-type LocalReportSnapshot = {
-  reportId: string;
-  memberId: string;
-  fileSignature: string | null;
-  identifiers: Map<string, string>;
-  text: string;
-  lines: Set<string>;
-  shingles: Set<string>;
-};
-
-const businessIdentifierPattern =
-  /(报告号|门诊号|住院号|体检号|检查号|标本号|条码号)\s*[:：]\s*([A-Z0-9][A-Z0-9./_-]{2,})/gi;
-const directIdentityPattern =
-  /(?:患者)?姓名|受检者|身份证|证件号码?|联系电话|手机号码?|手机号|家庭住址|通讯地址|现住址|联系地址|出生日期|出生年月|电子邮箱|邮箱|E-?mail/i;
-const pageNoisePattern =
-  /^(?:第?\d+页(?:共\d+页)?|\d+[/／]\d+页?|本报告仅供.*|仅供临床参考|打印时间.*|打印日期.*)$/i;
-
-function normalizeComparableText(value: string) {
-  return value.normalize("NFKC").toLocaleLowerCase("zh-CN")
-    .replace(/\[(?:患者个资已过滤|已过滤身份证号|已过滤手机号|已过滤邮箱)\]/g, "")
-    .replace(/[（）()[\]【】{}<>《》:：,，.。;；、/\\|_\-\s]/g, "")
-    .trim();
+export function compareDuplicateReports(a: DuplicateEvidenceSnapshot, b: DuplicateEvidenceSnapshot): LocalDuplicateEvidence | null {
+    if (getReportDuplicateDecision(a.reportId, b.reportId)?.decision === 'distinct')
+        return null;
+    const evaluation = evaluateDuplicatePair(a, b, a.extractionId && b.extractionId ? 'ai_post' : 'ocr_pre');
+    if (['insufficient', 'different'].includes(evaluation.classification))
+        return null;
+    return { reportId: b.reportId, confidence: ['exact_duplicate', 'strong_duplicate'].includes(evaluation.classification) ? 'high' : 'medium', matchedFields: evaluation.support, reason: evaluation.reason, textSimilarity: null, evaluation, pauseEligible: evaluation.preGateEligible && b.usable };
 }
-
-function fileSignature(reportId: string) {
-  const pages = getDatabase().prepare(`
-    SELECT sha256, source_page_number AS sourcePageNumber, source_page_count AS sourcePageCount
-    FROM report_pages
-    WHERE report_id = ?
-    ORDER BY page_number, id
-  `).all(reportId) as Array<{
-    sha256: string;
-    sourcePageNumber: number | null;
-    sourcePageCount: number | null;
-  }>;
-  if (!pages.length || pages.some((page) => !page.sha256)) return null;
-  return pages
-    .map((page) => `${page.sha256}:${page.sourcePageNumber || 0}:${page.sourcePageCount || 0}`)
-    .sort()
-    .join("|");
+export function findLocalDuplicateEvidence(reportId: string, limit = 80, cache = new Map<string, DuplicateEvidenceSnapshot | null>()) {
+    const read = (id: string) => {
+        if (!cache.has(id))
+            cache.set(id, buildDuplicateSnapshot(id));
+        return cache.get(id)!;
+    };
+    const a = read(reportId);
+    if (!a)
+        return [];
+    const recalled = recallDuplicateCandidates(a, limit);
+    return recalled.ids.flatMap(id => { const b = read(id); const match = b ? compareDuplicateReports(a, b) : null; return match ? [match] : []; });
 }
-
-function extractIdentifiers(lines: string[]) {
-  const identifiers = new Map<string, string>();
-  for (const line of lines) {
-    for (const match of line.matchAll(businessIdentifierPattern)) {
-      const key = match[1].toLocaleLowerCase("zh-CN");
-      const value = normalizeComparableText(match[2]);
-      if (value.length >= 3) identifiers.set(key, value);
+export function recallDuplicateCandidates(a: DuplicateEvidenceSnapshot, limit = 80) {
+    const reportId = a.reportId;
+    const db = getDatabase();
+    const ids = new Set((db.prepare("SELECT id FROM reports WHERE member_id=? AND id<>? AND status<>'trashed' ORDER BY updated_at DESC,id LIMIT ?").all(a.memberId, reportId, Math.max(1, Math.min(300, Math.round(limit)))) as {
+        id: string;
+    }[]).map(x => x.id));
+    // Indexed source recall and database text filtering escape the recency window.
+    const strong = db.prepare(`SELECT DISTINCT r.id FROM reports r JOIN report_pages p ON p.report_id=r.id WHERE r.member_id=? AND r.id<>? AND r.status<>'trashed' AND p.sha256 IN (SELECT sha256 FROM report_pages WHERE report_id=?) LIMIT 301`).all(a.memberId, reportId, reportId) as {
+        id: string;
+    }[];
+    for (const id of a.identifiers.filter(x => x.type === 'report').slice(0, 8)) {
+        strong.push(...db.prepare(`SELECT r.id FROM reports r WHERE r.member_id=? AND r.id<>? AND r.status<>'trashed' AND (instr(lower(r.identifiers_json),?)>0 OR EXISTS(SELECT 1 FROM report_pages p JOIN ocr_results o ON o.page_id=p.id WHERE p.report_id=r.id AND instr(lower(o.lines_json),?)>0)) LIMIT 301`).all(a.memberId, reportId, id.value, id.value) as {
+            id: string;
+        }[]);
     }
-  }
-  return identifiers;
+    for (const value of [a.times.sampled, a.times.examined].filter((x): x is string => !!x && x.length >= 16)) {
+        const prefix = value.slice(0, 16);
+        strong.push(...db.prepare(`SELECT r.id FROM reports r WHERE r.member_id=? AND r.id<>? AND r.status<>'trashed' AND (substr(replace(r.sampled_at,'T',' '),1,16)=? OR substr(replace(r.examined_at,'T',' '),1,16)=? OR EXISTS(SELECT 1 FROM report_pages p JOIN ocr_results o ON o.page_id=p.id WHERE p.report_id=r.id AND instr(o.lines_json,?)>0)) LIMIT 301`).all(a.memberId, reportId, prefix, prefix, prefix) as {
+            id: string;
+        }[]);
+    }
+    for (const row of strong)
+        ids.add(row.id);
+    // A capped strong recall must never claim that the whole history was covered.
+    const total = (db.prepare("SELECT COUNT(*) AS n FROM reports WHERE member_id=? AND id<>? AND status<>'trashed'").get(a.memberId, reportId) as {
+        n: number;
+    }).n;
+    return { ids: [...ids].slice(0, 600), truncated: ids.size > 600 || new Set(strong.map(row => row.id)).size > 300, ordinaryWindowLimited: total > limit, ordinaryWindowLimit: limit };
 }
-
-function buildShingles(text: string, width = 7) {
-  const values = new Set<string>();
-  if (text.length < width) return values;
-  const step = text.length > 30_000 ? 4 : text.length > 12_000 ? 2 : 1;
-  for (let index = 0; index <= text.length - width; index += step) {
-    values.add(createHash("sha1").update(text.slice(index, index + width)).digest("base64url").slice(0, 10));
-  }
-  return values;
+export function hasHighConfidenceLocalDuplicate(reportId: string) { return findLocalDuplicateEvidence(reportId).some(x => x.pauseEligible); }
+export function getDuplicatePause(reportId: string) {
+    const db = getDatabase();
+    const row = db.prepare('SELECT pause_json AS pauseJson,continue_signature AS continued FROM report_duplicate_runtime WHERE report_id=?').get(reportId) as {
+        pauseJson: string | null;
+        continued: string | null;
+    } | undefined;
+    if (!row?.pauseJson)
+        return null;
+    try {
+        const pause = JSON.parse(row.pauseJson) as {
+            targetId: string;
+            leftVersion: string;
+            rightVersion: string;
+            reason: string;
+            ruleId: string;
+            ruleVersion: string;
+            sourceSignature: string;
+        };
+        const a = buildDuplicateSnapshot(reportId), b = buildDuplicateSnapshot(pause.targetId);
+        const valid = !!a && !!b && a.version === pause.leftVersion && b.version === pause.rightVersion && b.usable && row.continued !== a.sourceSignature && getReportDuplicateDecision(reportId, b.reportId)?.decision !== 'distinct';
+        return { ...pause, valid, state: valid ? 'paused' : 'expired' };
+    }
+    catch {
+        return null;
+    }
 }
-
-function snapshot(reportId: string): LocalReportSnapshot | null {
-  const report = getDatabase().prepare(`
-    SELECT member_id AS memberId FROM reports WHERE id = ? AND status <> 'trashed'
-  `).get(reportId) as { memberId: string } | undefined;
-  if (!report) return null;
-  try {
-    const pages = getDatabase().prepare(`
-      SELECT p.id, (
-        SELECT o.lines_json FROM ocr_results o
-        WHERE o.page_id = p.id
-        ORDER BY o.created_at DESC, o.id DESC
-        LIMIT 1
-      ) AS linesJson
-      FROM report_pages p
-      WHERE p.report_id = ?
-      ORDER BY p.page_number, p.id
-    `).all(reportId) as Array<{ id: string; linesJson: string | null }>;
-    if (!pages.length || pages.some((page) => page.linesJson === null)) return null;
-    const rawLines = pages.flatMap((page) => {
-      const parsed = JSON.parse(page.linesJson || "[]") as Array<{ text?: unknown }>;
-      return parsed.flatMap((line) => {
-        const text = typeof line.text === "string" ? line.text.trim() : "";
-        return text ? [text] : [];
-      });
-    });
-    if (!rawLines.length) return null;
-    const identifiers = extractIdentifiers(rawLines);
-    const comparableLines = rawLines.flatMap((line) => {
-      if (directIdentityPattern.test(line) || pageNoisePattern.test(line)) return [];
-      const normalized = normalizeComparableText(line);
-      return normalized.length >= 5 ? [normalized] : [];
-    });
-    const text = comparableLines.join("");
-    return {
-      reportId,
-      memberId: report.memberId,
-      fileSignature: fileSignature(reportId),
-      identifiers,
-      text,
-      lines: new Set(comparableLines),
-      shingles: buildShingles(text)
-    };
-  } catch {
-    return null;
-  }
+export function pauseDuplicateIfEligible(reportId: string, explicitContinue = false, batchId?: string) {
+    const db = getDatabase();
+    buildDuplicateSnapshot(reportId); // Materialize the existing dictionary before acquiring the decision transaction.
+    // Synchronous transaction only: target result and source versions cannot race with deletion/publication.
+    db.exec('BEGIN IMMEDIATE');
+    try {
+        const a = buildDuplicateSnapshot(reportId);
+        const runtime = db.prepare('SELECT continue_signature AS signature FROM report_duplicate_runtime WHERE report_id=?').get(reportId) as {
+            signature: string | null;
+        } | undefined;
+        if (!a || explicitContinue || runtime?.signature === a.sourceSignature) {
+            db.exec('COMMIT');
+            return [];
+        }
+        const candidates = findLocalDuplicateEvidence(reportId).filter(x => x.pauseEligible);
+        if (candidates.length) {
+            const c = candidates[0];
+            const pause = { batchId: batchId || a.version, sourceVersion: a.sourceVersion, reasonCode: c.evaluation.ruleId === 'R0' ? 'duplicate_original' : 'duplicate_evidence', targetId: c.reportId, leftVersion: c.evaluation.leftVersion, rightVersion: c.evaluation.rightVersion, sourceSignature: a.sourceSignature, ruleVersion: c.evaluation.ruleVersion, ruleId: c.evaluation.ruleId, reason: c.evaluation.ruleId === 'R0' ? '与已有报告的完整原件一致，已暂缓 AI 整理。' : '检测到高度重复候选，已暂缓 AI 整理。', support: c.evaluation.support };
+            db.prepare(`INSERT INTO report_duplicate_runtime(report_id,source_signature,pause_json) VALUES(?,?,?) ON CONFLICT(report_id) DO UPDATE SET source_signature=excluded.source_signature,pause_json=excluded.pause_json,updated_at=CURRENT_TIMESTAMP`).run(reportId, a.sourceSignature, JSON.stringify(pause));
+        }
+        else
+            db.prepare('UPDATE report_duplicate_runtime SET pause_json=NULL WHERE report_id=?').run(reportId);
+        db.exec('COMMIT');
+        return candidates;
+    }
+    catch (error) {
+        rollbackAfterError(db);
+        throw error;
+    }
 }
-
-function overlap<T>(left: Set<T>, right: Set<T>) {
-  if (!left.size || !right.size) return { shared: 0, smallerRatio: 0, largerRatio: 0 };
-  let shared = 0;
-  for (const value of left.size < right.size ? left : right) {
-    if ((left.size < right.size ? right : left).has(value)) shared += 1;
-  }
-  return {
-    shared,
-    smallerRatio: shared / Math.min(left.size, right.size),
-    largerRatio: shared / Math.max(left.size, right.size)
-  };
+export function recordDuplicateContinue(reportId: string, jobId: string) {
+    const signature = completeSourceSignature(reportId);
+    getDatabase().prepare(`INSERT INTO report_duplicate_runtime(report_id,continue_signature,continue_job_id) VALUES(?,?,?) ON CONFLICT(report_id) DO UPDATE SET continue_signature=excluded.continue_signature,continue_job_id=excluded.continue_job_id,pause_json=NULL,updated_at=CURRENT_TIMESTAMP`).run(reportId, signature, jobId);
 }
-
-function sharedIdentifiers(left: LocalReportSnapshot, right: LocalReportSnapshot) {
-  return [...left.identifiers.entries()].flatMap(([key, value]) =>
-    right.identifiers.get(key) === value ? [key] : []
-  );
+export function runDuplicatePostcheck(reportId: string, publishedNow = true) {
+    const db = getDatabase();
+    try {
+        if (publishedNow)
+            markDuplicateResultCurrent(reportId);
+        const snapshot = buildDuplicateSnapshot(reportId);
+        if (!snapshot?.extractionId)
+            return;
+        const results = findLocalDuplicateEvidence(reportId).map(x => ({ reportId: x.reportId, evaluation: x.evaluation }));
+        db.prepare("UPDATE report_duplicate_runtime SET post_status='complete',post_json=?,updated_at=CURRENT_TIMESTAMP WHERE report_id=?").run(JSON.stringify({ version: snapshot.version, results }), reportId);
+    }
+    catch {
+        // Postcheck is optional bookkeeping; never fail or roll back an already published extraction.
+        try {
+            db.prepare("INSERT INTO report_duplicate_runtime(report_id,post_status) VALUES(?,'failed') ON CONFLICT(report_id) DO UPDATE SET post_status='failed',post_json=NULL").run(reportId);
+        }
+        catch { /* database outage: the successful extraction remains authoritative */ }
+    }
 }
-
-function compareSnapshots(current: LocalReportSnapshot, candidate: LocalReportSnapshot): LocalDuplicateEvidence | null {
-  if (current.memberId !== candidate.memberId) return null;
-  if (current.fileSignature && current.fileSignature === candidate.fileSignature) {
-    return {
-      reportId: candidate.reportId,
-      confidence: "high",
-      matchedFields: ["原始文件"],
-      reason: "上传原件内容完全一致",
-      textSimilarity: null
-    };
-  }
-
-  const identifierMatches = sharedIdentifiers(current, candidate);
-  if (identifierMatches.length) {
-    return {
-      reportId: candidate.reportId,
-      confidence: "high",
-      matchedFields: identifierMatches.map((key) => `OCR编号:${key}`),
-      reason: `OCR 识别出的医疗编号一致（${identifierMatches.join("、")}）`,
-      textSimilarity: null
-    };
-  }
-
-  if (Math.min(current.text.length, candidate.text.length) < 120) return null;
-  const lengthRatio = Math.min(current.text.length, candidate.text.length)
-    / Math.max(current.text.length, candidate.text.length);
-  const textStats = overlap(current.shingles, candidate.shingles);
-  const lineStats = overlap(current.lines, candidate.lines);
-  const textSimilarity = Number(textStats.smallerRatio.toFixed(4));
-  const highTextMatch = lengthRatio >= 0.78
-    && textStats.smallerRatio >= 0.92
-    && textStats.largerRatio >= 0.72
-    && (
-      (lineStats.shared >= 3 && lineStats.smallerRatio >= 0.35)
-      || (textStats.smallerRatio >= 0.985 && textStats.largerRatio >= 0.95)
-    );
-  const highLineMatch = lineStats.shared >= 8
-    && lineStats.smallerRatio >= 0.85
-    && lineStats.largerRatio >= 0.6
-    && textStats.smallerRatio >= 0.78;
-  if (highTextMatch || highLineMatch) {
-    return {
-      reportId: candidate.reportId,
-      confidence: "high",
-      matchedFields: [`OCR内容${lineStats.shared}行`, `文本相似度${Math.round(textSimilarity * 100)}%`],
-      reason: "OCR 去噪后的报告内容高度一致",
-      textSimilarity
-    };
-  }
-
-  const mediumMatch = lengthRatio >= 0.65
-    && textStats.smallerRatio >= 0.82
-    && textStats.largerRatio >= 0.55
-    && lineStats.shared >= 4;
-  if (!mediumMatch) return null;
-  return {
-    reportId: candidate.reportId,
-    confidence: "medium",
-    matchedFields: [`OCR内容${lineStats.shared}行`, `文本相似度${Math.round(textSimilarity * 100)}%`],
-    reason: "OCR 去噪后的报告内容较为相似",
-    textSimilarity
-  };
+export function getDuplicateVerification(reportId: string) {
+    const row = getDatabase().prepare('SELECT post_status AS status,post_json AS detail FROM report_duplicate_runtime WHERE report_id=?').get(reportId) as {
+        status: string | null;
+        detail: string | null;
+    } | undefined;
+    if (!row?.status)
+        return null;
+    if (row.status === 'failed')
+        return { status: 'failed' };
+    try {
+        return { status: JSON.parse(row.detail || '{}').version === buildDuplicateSnapshot(reportId)?.version ? 'complete' : 'stale' };
+    }
+    catch {
+        return { status: 'stale' };
+    }
 }
-
-export function findLocalDuplicateEvidence(reportId: string, limit = 80) {
-  const current = snapshot(reportId);
-  if (!current) return [];
-  const candidates = getDatabase().prepare(`
-    SELECT id FROM reports
-    WHERE member_id = ? AND id <> ? AND status <> 'trashed'
-    ORDER BY updated_at DESC, id
-    LIMIT ?
-  `).all(current.memberId, reportId, Math.max(1, Math.min(300, Math.round(limit)))) as Array<{ id: string }>;
-  return candidates.flatMap((candidate) => {
-    const candidateSnapshot = snapshot(candidate.id);
-    if (!candidateSnapshot) return [];
-    const evidence = compareSnapshots(current, candidateSnapshot);
-    return evidence ? [evidence] : [];
-  });
-}
-
-export function hasHighConfidenceLocalDuplicate(reportId: string) {
-  return findLocalDuplicateEvidence(reportId).some((candidate) => candidate.confidence === "high");
+export function duplicateSearchInfo(reportId: string, matchedCount: number) {
+    const snapshot = buildDuplicateSnapshot(reportId);
+    if (!snapshot)
+        return { status: 'unavailable', candidateCount: 0, ordinaryWindowLimited: false, truncated: false };
+    const recalled = recallDuplicateCandidates(snapshot);
+    return { status: matchedCount ? 'matched' : recalled.ids.length ? 'insufficient' : 'no_candidates', candidateCount: recalled.ids.length, ordinaryWindowLimited: recalled.ordinaryWindowLimited, truncated: recalled.truncated };
 }

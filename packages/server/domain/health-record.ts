@@ -291,6 +291,7 @@ export type ReportSummary = {
 };
 
 export type DuplicateReportCandidate = ReportSummary & {
+  evaluation?: { classification: string; stage: string; sameCount: number; uncertainCount: number; conflictCount: number; missingCount: number; coverage: [number,number]; risks: string[]; support: string[]; ruleId: string; preGateEligible: boolean };
   pairKey: string;
   governanceDecision: "duplicate" | null;
   confidence: "high" | "medium";
@@ -333,6 +334,7 @@ export type ReportDuplicateMetrics = {
 };
 
 export type ReportDuplicateComparison = {
+  evidence?: {classification:string;reason:string;ruleId:string;sameCount:number;uncertainCount:number;conflictCount:number;missingCount:number;risks:string[];support:string[];fields:Array<{key:string;state:string;left?:{value:string;raw?:string;page?:number};right?:{value:string;raw?:string;page?:number}}>};
   left: Pick<ReportSummary, "id" | "title" | "reportType" | "status" | "hospitalName" | "hospitalBranch" | "departmentName" | "bodyPart" | "reportIssuedAt" | "pageCount">;
   right: Pick<ReportSummary, "id" | "title" | "reportType" | "status" | "hospitalName" | "hospitalBranch" | "departmentName" | "bodyPart" | "reportIssuedAt" | "pageCount">;
   fields: Array<{
@@ -393,6 +395,7 @@ export type DuplicateReportOverview = {
 };
 
 export type ReportDuplicateDecisionRecord = {
+  appliesToCurrentSource?: boolean;
   pairKey: string;
   memberId: string;
   leftReportId: string;
@@ -457,6 +460,9 @@ export type ReportDetail = ReportSummary & {
   billingItems: BillingItem[];
   structuredSections: ReportStructuredSection[];
   duplicateCandidates: DuplicateReportCandidate[];
+  duplicateSearch?: {status:string;candidateCount:number;ordinaryWindowLimited:boolean;truncated:boolean};
+  duplicateVerification?: {status:string} | null;
+  duplicatePause?: { valid:boolean; state:string; targetId:string; reason:string; ruleId:string; ruleVersion:string } | null;
   memberIdentityAssessment: {
     patientName: string | null;
     patientSex: "male" | "female" | null;

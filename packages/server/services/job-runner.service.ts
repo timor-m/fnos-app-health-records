@@ -32,7 +32,7 @@ import { executeAiExtractionPlan } from "./ai-extraction-orchestrator.service";
 import { rebuildMorphologyTrackingForReport } from "./morphology-finding.service";
 import { normalizeReportObservations } from "./indicator-normalization.service";
 import { listManualReportFieldKeys } from "./report-field-overrides.service";
-import { findLocalDuplicateEvidence } from "./report-duplicate-precheck.service";
+import { findLocalDuplicateEvidence, pauseDuplicateIfEligible, getDuplicatePause, recordDuplicateContinue, runDuplicatePostcheck } from "./report-duplicate-precheck.service";
 import {
   loadProcessingBatchForJob,
   loadReportProcessingBatchContext,
@@ -159,7 +159,7 @@ function appendJobEvent(input: {
 
 function appendDuplicateDetectedEvent(
   reportId: string,
-  candidates: Array<{ reason: string }>,
+  candidates: ReturnType<typeof findLocalDuplicateEvidence>,
   sourceJobId?: string,
 ) {
   const job = sourceJobId
@@ -175,15 +175,16 @@ function appendDuplicateDetectedEvent(
         )
         .get(reportId) as { id: string } | undefined);
   if (!job) return;
+  const checkKey = candidates.map(c => `${c.reportId}:${c.evaluation.leftVersion}:${c.evaluation.rightVersion}:${c.evaluation.ruleVersion}`).sort().join("|");
   const existing = getDatabase()
     .prepare(
       `
     SELECT 1 AS found FROM processing_job_events
-    WHERE job_id = ? AND detail_json LIKE '%"stage":"duplicate_precheck"%'
+    WHERE job_id = ? AND json_valid(detail_json) AND json_extract(detail_json, '$.stage') = 'duplicate_precheck' AND json_extract(detail_json, '$.checkKey') = ?
     LIMIT 1
   `,
     )
-    .get(job.id);
+    .get(job.id, checkKey);
   if (existing) return;
   appendJobEvent({
     jobId: job.id,
@@ -194,6 +195,9 @@ function appendDuplicateDetectedEvent(
     detail: {
       jobType: "ocr",
       stage: "duplicate_precheck",
+      checkKey,
+      ruleVersion: candidates[0]?.evaluation.ruleVersion,
+      ruleId: candidates[0]?.evaluation.ruleId,
       candidateCount: candidates.length,
       reasons: candidates.map((candidate) => candidate.reason),
     },
@@ -563,9 +567,7 @@ function queueAiJobIfReady(reportId: string, sourceJobId?: string) {
   const batchId = isManualRefresh
     ? readQueuedJobBatchId(reportId, sourceJobId)
     : null;
-  const duplicateCandidates = findLocalDuplicateEvidence(reportId).filter(
-    (candidate) => candidate.confidence === "high",
-  );
+  const duplicateCandidates = pauseDuplicateIfEligible(reportId, isManualRefresh, sourceJobId);
   if (duplicateCandidates.length) {
     appendDuplicateDetectedEvent(reportId, duplicateCandidates, sourceJobId);
     return false;
@@ -586,8 +588,8 @@ function queueAiJobIfReady(reportId: string, sourceJobId?: string) {
   `);
   const jobId = createId("job");
   const deduplicationKey = batchId
-    ? `${reportId}:ai_extract:auto:${batchId}:${jobId}`
-    : `${reportId}:ai_extract:auto:${jobId}`;
+    ? `${reportId}:ai_extract:auto:${batchId}`
+    : `${reportId}:ai_extract:auto:${sourceJobId || "initial"}`;
   const queued = result.run(jobId, reportId, pipelineVersion, deduplicationKey);
   if (Number(queued.changes) > 0) {
     appendJobEvent({
@@ -1014,7 +1016,7 @@ export function reconcileReportProcessingStatus(reportId: string) {
     const duplicateCandidates =
       !hasAiResult && !ocrTextEmpty
         ? findLocalDuplicateEvidence(reportId).filter(
-            (candidate) => candidate.confidence === "high",
+            (candidate) => candidate.pauseEligible && Boolean(getDuplicatePause(reportId)?.valid),
           )
         : [];
     const duplicateDetected = duplicateCandidates.length > 0;
@@ -1238,6 +1240,7 @@ export async function processNextJob(
       await processPageAppendJob(job.id, executor, aiExecutor);
       const outcome = getDatabase().prepare('SELECT status,error_message AS message,error_code AS code FROM processing_jobs WHERE id=?').get(job.id) as {status:string;message:string|null;code:string|null}|undefined;
       rebuildMorphology = job.jobType === 'ai_extract' && outcome?.status === 'completed';
+      if (rebuildMorphology) runDuplicatePostcheck(job.reportId);
       if (outcome && ['completed','failed','cancelled'].includes(outcome.status)) appendJobEvent({jobId:job.id,reportId:job.reportId,eventType:outcome.status as 'completed'|'failed'|'cancelled',status:outcome.status,attempt:job.attempts,message:outcome.message,detail:{jobType:job.jobType,source:'page_append',code:outcome.code}});
       return true;
     }
@@ -1340,6 +1343,7 @@ export async function processNextJob(
       `,
         )
         .run(job.id);
+      runDuplicatePostcheck(job.reportId);
       rebuildMorphology = true;
     } else {
       if (!job.storagePath || !job.pageId)
@@ -1571,9 +1575,10 @@ export function queueManualAiExtraction(user: RequestUser, reportId: string) {
   const failedAi = context.currentBatch?.jobs.find(
     (job) => job.jobType === "ai_extract" && job.status === "failed",
   );
-  if (failedAi) return retryProcessingJob(user, failedAi.id);
+  if (failedAi) { const result = retryProcessingJob(user, failedAi.id); recordDuplicateContinue(reportId, result.id); return result; }
 
   const jobId = createId("job");
+  recordDuplicateContinue(reportId, jobId);
   const batchId = `manual-ai:${jobId}`;
   db.prepare(
     `

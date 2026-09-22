@@ -770,3 +770,17 @@ test("repairs incompatible AI report sections without removing manual content", 
     rmSync(storageDir, { recursive: true, force: true });
   }
 });
+
+test('unreleased duplicate runtime migration backs up old v17 without queueing or deleting history',()=>{
+ const storageDir=mkdtempSync(join(tmpdir(),'health-duplicate-draft-'));process.env.STORAGE_DIR=storageDir;
+ try {
+  let db=getDatabase();db.prepare("INSERT INTO users(id,display_name) VALUES('synthetic-migration','合成用户')").run();
+  const versions=db.prepare('SELECT version FROM schema_migrations ORDER BY version').all();
+  db.exec('DROP TABLE report_duplicate_runtime');closeDatabaseForTests();
+  db=getDatabase();assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='report_duplicate_runtime'").get());
+  assert.ok(db.prepare("SELECT id FROM users WHERE id='synthetic-migration'").get());
+  assert.deepEqual(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),versions);
+  assert.equal((db.prepare('SELECT COUNT(*) AS n FROM processing_jobs').get() as {n:number}).n,0);
+  assert.ok(readdirSync(join(storageDir,'backups','db')).length>=1);
+ }finally{closeDatabaseForTests();delete process.env.STORAGE_DIR;rmSync(storageDir,{recursive:true,force:true});}
+});

@@ -55,7 +55,8 @@
     "prepare:package": "node scripts/prepare-package.mjs",
     "validate:package": "node scripts/validate-package.mjs",
     "pack:app": "npm run build && npm run prepare:package && bash scripts/pack-app.sh && npm run validate:package",
-    "pack:fpk": "npm run pack:app && bash scripts/pack-fpk.sh"
+    "pack:fpk": "npm run pack:app && bash scripts/pack-fpk.sh",
+    "duplicates:evaluate": "tsx scripts/evaluate-report-duplicates.ts"
   },
   "dependencies": {
     "@lucide/vue": "^1.25.0",

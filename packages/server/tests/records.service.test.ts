@@ -606,7 +606,7 @@ test("manual observation edits are prefilled, normalized and retained across ext
   }
 });
 
-test("detects duplicate report candidates from extracted content instead of file hash", () => {
+test("does not infer duplicates from report ID and metadata without result evidence", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-records-duplicates-"));
   process.env.STORAGE_DIR = storageDir;
   try {
@@ -642,10 +642,7 @@ test("detects duplicate report candidates from extracted content instead of file
     assert.notEqual(firstPage.fileSize, secondPage.fileSize);
 
     const detail = getReportDetail(manager, incoming.reportId);
-    assert.equal(detail.duplicateCandidates.length, 1);
-    assert.equal(detail.duplicateCandidates[0].id, existing.reportId);
-    assert.equal(detail.duplicateCandidates[0].confidence, "high");
-    assert.match(detail.duplicateCandidates[0].reason, /reportNo/);
+    assert.equal(detail.duplicateCandidates.length, 0); // Missing source-backed content cannot prove a duplicate.
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;
@@ -713,7 +710,7 @@ test("detects an identical uploaded original despite divergent AI titles and bod
   }
 });
 
-test("detects duplicate candidates without report numbers when core extracted content matches", () => {
+test("does not infer duplicates from a generic imaging conclusion without source evidence", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-records-duplicates-core-"));
   process.env.STORAGE_DIR = storageDir;
   try {
@@ -748,10 +745,7 @@ test("detects duplicate candidates without report numbers when core extracted co
     `).run("甲状腺超声报告", bodyParts, incoming.reportId);
 
     const detail = getReportDetail(manager, incoming.reportId);
-    assert.equal(detail.duplicateCandidates.length, 1);
-    assert.equal(detail.duplicateCandidates[0].id, existing.reportId);
-    assert.equal(detail.duplicateCandidates[0].confidence, "medium");
-    assert.match(detail.duplicateCandidates[0].reason, /核心报告内容一致/);
+    assert.equal(detail.duplicateCandidates.length, 0); // Missing source-backed content cannot prove a duplicate.
   } finally {
     closeDatabaseForTests();
     delete process.env.STORAGE_DIR;
@@ -759,7 +753,7 @@ test("detects duplicate candidates without report numbers when core extracted co
   }
 });
 
-test("detects duplicate checkups across equivalent institution names without merging different panels", () => {
+test("does not infer duplicates from institution aliases and unsubstantiated observations", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-records-duplicates-hospital-alias-"));
   process.env.STORAGE_DIR = storageDir;
   try {
@@ -825,11 +819,7 @@ test("detects duplicate checkups across equivalent institution names without mer
     normalizeAllObservations(manager);
 
     const duplicateDetail = getReportDetail(manager, duplicate.reportId);
-    assert.equal(duplicateDetail.duplicateCandidates.some((candidate) => candidate.id === original.reportId), true);
-    assert.match(
-      duplicateDetail.duplicateCandidates.find((candidate) => candidate.id === original.reportId)?.reason || "",
-      /机构名称近似/
-    );
+    assert.equal(duplicateDetail.duplicateCandidates.some((candidate) => candidate.id === original.reportId), false);
 
     const differentDetail = getReportDetail(manager, different.reportId);
     assert.equal(differentDetail.duplicateCandidates.length, 0);
@@ -885,7 +875,7 @@ test("detects duplicate checkups across equivalent institution names without mer
     assert.equal(
       getReportDetail(manager, duplicate.reportId).duplicateCandidates
         .some((candidate) => candidate.id === original.reportId),
-      true
+      false
     );
   } finally {
     closeDatabaseForTests();
@@ -1055,8 +1045,7 @@ test("scans duplicate groups and merges source pages into the target report", ()
     `).run(source.reportId, target.reportId);
 
     const groups = listDuplicateReportGroups(manager, "records-member");
-    assert.equal(groups.length, 1);
-    assert.equal(groups[0].candidates.length, 1);
+    assert.equal(groups.length, 0); // Manual merge remains possible without a machine conclusion.
 
     const result = mergeDuplicateReport(manager, source.reportId, target.reportId);
     assert.equal(result.movedPages, 1);

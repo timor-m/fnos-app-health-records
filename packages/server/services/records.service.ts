@@ -1,3 +1,5 @@
+import { evaluateDuplicatePair } from "./report-duplicate-evidence";
+import { buildDuplicateSnapshot } from "./report-duplicate-snapshot.service";
 import { appendReviewWarnings } from "./page-append-result-guard.service";
 import { assertNoPageAppend } from "./page-append-lock.service";
 import { getDeploymentIdentity } from '../utils/deployment-identity';
@@ -97,8 +99,9 @@ import {
   upsertManualReportFieldOverrides,
   type ReportFieldKey,
 } from "./report-field-overrides.service";
-import { findLocalDuplicateEvidence } from "./report-duplicate-precheck.service";
+import { findLocalDuplicateEvidence, compareDuplicateReports, getDuplicatePause, getDuplicateVerification, duplicateSearchInfo } from "./report-duplicate-precheck.service";
 import {
+  duplicateDecisionApplies,
   listReportDuplicateDecisions,
   recordReportDuplicateMerge,
   reportDuplicatePairKey,
@@ -123,7 +126,6 @@ import {
 } from "./value-scale.service";
 import { assessTrendAbnormalContinuity } from "./trend-abnormal-continuity.service";
 import {
-  reportDuplicateRuleConfig,
   resolveReportDuplicateRuleSelection,
   type ReportDuplicateRuleSelection,
   type ReportDuplicateRuleSnapshot,
@@ -225,195 +227,8 @@ function normalizeContentKey(value: string | null | undefined) {
     .trim();
 }
 
-function hospitalNamesEquivalent(
-  current: string | null | undefined,
-  candidate: string | null | undefined,
-) {
-  const left = normalizeContentKey(current);
-  const right = normalizeContentKey(candidate);
-  if (!left || !right) return false;
-  if (left === right) return true;
-
-  const shorter = left.length < right.length ? left : right;
-  const longer = left.length < right.length ? right : left;
-  /* 仅识别“地区/院区前缀 + 完整机构名”这类保守包含关系。
-     短品牌名或“人民医院”等泛称不能单独作为同一机构依据。 */
-  return (
-    shorter.length >= 6 &&
-    shorter.length / longer.length >= 0.55 &&
-    longer.includes(shorter)
-  );
-}
-
 function datePart(value: string | null | undefined) {
   return (value || "").slice(0, 10);
-}
-
-function firstBodyPart(value: string | null | undefined) {
-  const parts = parseJson<Array<{ name?: string; raw?: string }>>(value, []);
-  return parts[0]?.name || parts[0]?.raw || null;
-}
-
-function sharedIdentifierMatches(
-  current: Record<string, string>,
-  candidate: Record<string, string>,
-) {
-  return Object.entries(current)
-    .filter(([, value]) => normalizeContentKey(value).length >= 3)
-    .flatMap(([key, value]) => {
-      const candidateValue = candidate[key];
-      if (!candidateValue) return [];
-      return normalizeContentKey(value) === normalizeContentKey(candidateValue)
-        ? [key]
-        : [];
-    });
-}
-
-function textSimilarityMatched(
-  current: string | null | undefined,
-  candidate: string | null | undefined,
-) {
-  const left = normalizeContentKey(current);
-  const right = normalizeContentKey(candidate);
-  if (left.length < 12 || right.length < 12) return false;
-  return (
-    left === right ||
-    left.includes(right.slice(0, Math.min(40, right.length))) ||
-    right.includes(left.slice(0, Math.min(40, left.length)))
-  );
-}
-
-function isInformativeDuplicateTitle(value: string | null | undefined) {
-  const title = (value || "").trim();
-  const normalized = normalizeContentKey(title);
-  if (normalized.length < 6) return false;
-  if (
-    [
-      "待识别报告",
-      "报告",
-      "检查报告",
-      "检查报告单",
-      "检验报告",
-      "检验报告单",
-      "体检报告",
-      "体检报告单",
-    ].includes(title)
-  )
-    return false;
-  return !isGenericReportTitle(title);
-}
-
-function titleSimilarityMatched(
-  current: string | null | undefined,
-  candidate: string | null | undefined,
-) {
-  if (
-    !isInformativeDuplicateTitle(current) ||
-    !isInformativeDuplicateTitle(candidate)
-  )
-    return false;
-  const left = normalizeContentKey(current);
-  const right = normalizeContentKey(candidate);
-  if (left === right) return true;
-  const shorter = left.length < right.length ? left : right;
-  const longer = left.length < right.length ? right : left;
-  return shorter.length >= 8 && longer.includes(shorter);
-}
-
-function observationSignature(
-  reportId: string,
-  cache?: Map<string, Set<string>>,
-) {
-  const cached = cache?.get(reportId);
-  if (cached) return cached;
-  const signature = new Set(
-    getDatabase()
-      .prepare(
-        `
-    SELECT
-      CASE
-        WHEN n.quality IN ('high', 'medium') AND n.canonical_key IS NOT NULL THEN n.canonical_key
-        ELSE COALESCE(NULLIF(TRIM(o.normalized_name), ''), o.item_name)
-      END AS name,
-      o.result_text AS resultText,
-      CASE
-        WHEN n.quality IN ('high', 'medium') THEN COALESCE(n.canonical_value, o.numeric_value)
-        ELSE o.numeric_value
-      END AS numericValue
-    FROM observations o
-    LEFT JOIN observation_normalizations n ON n.observation_id = o.id
-    WHERE o.report_id = ?
-    ORDER BY o.section_name, o.item_name, o.id
-    LIMIT 200
-  `,
-      )
-      .all(reportId)
-      .flatMap((row) => {
-        const item = row as {
-          name: string;
-          resultText: string;
-          numericValue: number | null;
-        };
-        const name = normalizeContentKey(item.name);
-        const parsedNumber =
-          item.numericValue ?? parseNumericResultText(item.resultText);
-        const result =
-          parsedNumber === null
-            ? normalizeContentKey(item.resultText)
-            : String(parsedNumber);
-        if (!name || !result) return [];
-        return [`${name}:${result}`];
-      }),
-  );
-  cache?.set(reportId, signature);
-  return signature;
-}
-
-function sharedObservationStats(
-  currentReportId: string,
-  candidateReportId: string,
-  cache?: Map<string, Set<string>>,
-) {
-  const current = observationSignature(currentReportId, cache);
-  if (!current.size) {
-    return {
-      shared: 0,
-      currentSize: 0,
-      candidateSize: 0,
-      overlapRatio: 0,
-      largerOverlapRatio: 0,
-    };
-  }
-  const candidate = observationSignature(candidateReportId, cache);
-  let count = 0;
-  for (const item of candidate) {
-    if (current.has(item)) count += 1;
-  }
-  return {
-    shared: count,
-    currentSize: current.size,
-    candidateSize: candidate.size,
-    overlapRatio: count / Math.max(1, Math.min(current.size, candidate.size)),
-    largerOverlapRatio:
-      count / Math.max(1, Math.max(current.size, candidate.size)),
-  };
-}
-
-function hasStrongObservationOverlap(
-  stats: ReturnType<typeof sharedObservationStats>,
-) {
-  if (stats.shared >= 10) return true;
-  if (
-    stats.shared >= 6 &&
-    stats.overlapRatio >= 0.75 &&
-    stats.largerOverlapRatio >= 0.3
-  )
-    return true;
-  return (
-    stats.shared >= 3 &&
-    stats.overlapRatio >= 0.9 &&
-    stats.largerOverlapRatio >= 0.5
-  );
 }
 
 type DuplicateSourceRow = ReportSummary & {
@@ -550,9 +365,9 @@ type DuplicateScanStats = {
 };
 
 type DuplicateScanContext = {
+  snapshots?: Map<string, ReturnType<typeof buildDuplicateSnapshot>>;
   stats: DuplicateScanStats;
   fileSignatures: Map<string, string | null>;
-  observationSignatures: Map<string, Set<string>>;
   ruleSelection: ReportDuplicateRuleSelection;
 };
 
@@ -567,6 +382,7 @@ function cachedReportFileSignature(
 }
 
 type AutomaticDuplicateEvaluation = {
+  evaluation?: import("./report-duplicate-evidence").DuplicateEvaluation;
   confidence: "high" | "medium";
   matchedFields: string[];
   reason: string;
@@ -591,188 +407,16 @@ function evaluateAutomaticDuplicatePair(
   current: DuplicateSourceRow,
   candidate: DuplicateSourceRow,
   context: DuplicateScanContext,
-  localMatch: ReturnType<typeof findLocalDuplicateEvidence>[number] | undefined,
-  currentFileSignature: string | null,
 ): AutomaticDuplicateEvaluation {
-  const version = context.ruleSelection.version;
-  const config = reportDuplicateRuleConfig();
-  const currentIdentifiers = parseJson<Record<string, string>>(
-    current.identifiersJson,
-    {},
-  );
-  const candidateIdentifiers = parseJson<Record<string, string>>(
-    candidate.identifiersJson,
-    {},
-  );
-  const identifierMatches = sharedIdentifierMatches(
-    currentIdentifiers,
-    candidateIdentifiers,
-  );
-  const currentHospital = normalizeContentKey(current.hospitalName);
-  const candidateHospital = normalizeContentKey(candidate.hospitalName);
-  const currentBranch = normalizeContentKey(current.hospitalBranch);
-  const candidateBranch = normalizeContentKey(candidate.hospitalBranch);
-  const currentDate = datePart(
-    current.reportIssuedAt ||
-      current.examinedAt ||
-      current.sampledAt ||
-      current.receivedAt ||
-      current.reviewedAt,
-  );
-  const candidateDate = datePart(
-    candidate.reportIssuedAt ||
-      candidate.examinedAt ||
-      candidate.sampledAt ||
-      candidate.receivedAt ||
-      candidate.reviewedAt,
-  );
-  const currentDepartment = normalizeContentKey(
-    current.performingDepartment ||
-      current.departmentName ||
-      current.reportingDepartment ||
-      current.orderingDepartment,
-  );
-  const candidateDepartment = normalizeContentKey(
-    candidate.performingDepartment ||
-      candidate.departmentName ||
-      candidate.reportingDepartment ||
-      candidate.orderingDepartment,
-  );
-  const currentBodyPart = normalizeContentKey(
-    current.bodyPart || firstBodyPart(current.bodyPartsJson),
-  );
-  const candidateBodyPart = normalizeContentKey(
-    candidate.bodyPart || firstBodyPart(candidate.bodyPartsJson),
-  );
-  const matchedFields: string[] = [];
-  const hasSameOriginal = Boolean(
-    currentFileSignature &&
-    currentFileSignature ===
-      cachedReportFileSignature(candidate.id, context.fileSignatures),
-  );
-  if (hasSameOriginal) matchedFields.push("原始文件");
-  if (titleSimilarityMatched(current.title, candidate.title))
-    matchedFields.push("标题");
-  if (current.reportType === candidate.reportType)
-    matchedFields.push("报告类型");
-  const exactHospital = Boolean(
-    currentHospital &&
-    candidateHospital &&
-    currentHospital === candidateHospital,
-  );
-  const equivalentHospital =
-    config.allowEquivalentHospitalNames &&
-    hospitalNamesEquivalent(current.hospitalName, candidate.hospitalName);
-  const hasEquivalentHospital = exactHospital || equivalentHospital;
-  if (exactHospital) matchedFields.push("医院");
-  else if (equivalentHospital) matchedFields.push("医院名称近似");
-  if (currentBranch && candidateBranch && currentBranch === candidateBranch)
-    matchedFields.push("院区");
-  if (currentDate && candidateDate && currentDate === candidateDate)
-    matchedFields.push("报告/检查日期");
-  if (
-    currentDepartment &&
-    candidateDepartment &&
-    currentDepartment === candidateDepartment
-  )
-    matchedFields.push("科室");
-  if (
-    currentBodyPart &&
-    candidateBodyPart &&
-    currentBodyPart === candidateBodyPart
-  )
-    matchedFields.push("检查部位");
-  if (textSimilarityMatched(current.impression, candidate.impression))
-    matchedFields.push("结论");
-  else if (textSimilarityMatched(current.summary, candidate.summary))
-    matchedFields.push("摘要");
-  else if (textSimilarityMatched(current.findings, candidate.findings))
-    matchedFields.push("检查所见");
-  const observationStats = sharedObservationStats(
-    current.id,
-    candidate.id,
-    context.observationSignatures,
-  );
-  if (observationStats.shared > 0)
-    matchedFields.push(`指标${observationStats.shared}项`);
-  if (localMatch) matchedFields.push(...localMatch.matchedFields);
+  const cache = context.snapshots ||= new Map();
+  const read = (id: string) => { if (!cache.has(id)) cache.set(id, buildDuplicateSnapshot(id)); return cache.get(id); };
+  const a = read(current.id), b = read(candidate.id);
+  const match = a && b ? compareDuplicateReports(a, b) : null;
+  if (!match) return null;
+  return { confidence: match.confidence, matchedFields: match.matchedFields, reason: match.reason,
+    evaluation: match.evaluation,
+    ruleSnapshot: duplicateRuleSnapshot(match.evaluation.ruleVersion, match.evaluation.ruleId, match.matchedFields) };
 
-  if (hasSameOriginal) {
-    return {
-      confidence: "high",
-      matchedFields,
-      reason: "上传原件内容完全一致",
-      ruleSnapshot: duplicateRuleSnapshot(
-        version,
-        "original.same-file",
-        matchedFields,
-      ),
-    };
-  }
-  const hasSameHospitalAndDate =
-    hasEquivalentHospital && matchedFields.includes("报告/检查日期");
-  const hasSameCore =
-    matchedFields.includes("报告类型") && hasSameHospitalAndDate;
-  if (
-    identifierMatches.length &&
-    (hasSameHospitalAndDate || matchedFields.includes("报告类型"))
-  ) {
-    const signals = [
-      ...new Set([
-        ...matchedFields,
-        ...identifierMatches.map((key) => `编号:${key}`),
-      ]),
-    ];
-    return {
-      confidence: "high",
-      matchedFields: signals,
-      reason: `医疗编号一致（${identifierMatches.join("、")}）`,
-      ruleSnapshot: duplicateRuleSnapshot(
-        version,
-        "identifier.same-medical-id",
-        signals,
-      ),
-    };
-  }
-  if (localMatch) {
-    const signals = [...new Set(matchedFields)];
-    return {
-      confidence: localMatch.confidence,
-      matchedFields: signals,
-      reason: localMatch.reason,
-      ruleSnapshot: duplicateRuleSnapshot(
-        version,
-        `local-precheck.${localMatch.confidence}`,
-        signals,
-      ),
-    };
-  }
-  const hasStrongTextAnchor = matchedFields.some((field) =>
-    ["结论", "摘要", "检查所见"].includes(field),
-  );
-  const hasStrongObservationAnchor =
-    hasStrongObservationOverlap(observationStats);
-  const hasTitleAndClinicalAnchor =
-    matchedFields.includes("标题") &&
-    (matchedFields.includes("检查部位") || hasStrongObservationAnchor);
-  const hasContentAnchor =
-    hasStrongTextAnchor ||
-    hasStrongObservationAnchor ||
-    hasTitleAndClinicalAnchor;
-  if (!hasSameCore || !hasContentAnchor) return null;
-  return {
-    confidence: "medium",
-    matchedFields,
-    reason:
-      hasStrongTextAnchor || hasStrongObservationAnchor
-        ? `${matchedFields.includes("医院名称近似") ? "机构名称近似，" : ""}医院、日期、类型及核心报告内容一致`
-        : `${matchedFields.includes("医院名称近似") ? "机构名称近似，" : ""}医院、日期、类型、标题及临床字段一致`,
-    ruleSnapshot: duplicateRuleSnapshot(
-      version,
-      "core.same-context-content",
-      matchedFields,
-    ),
-  };
 }
 
 function findDuplicateCandidates(
@@ -787,7 +431,6 @@ function findDuplicateCandidates(
       scanDurationMs: 0,
     },
     fileSignatures: new Map<string, string | null>(),
-    observationSignatures: new Map<string, Set<string>>(),
     ruleSelection: resolveReportDuplicateRuleSelection(),
   };
   const currentIdentifiers = parseJson<Record<string, string>>(
@@ -807,7 +450,7 @@ function findDuplicateCandidates(
     scanContext.fileSignatures,
   );
   const localEvidence = new Map(
-    findLocalDuplicateEvidence(current.id).map((candidate) => [
+    findLocalDuplicateEvidence(current.id, 80, scanContext.snapshots ||= new Map()).map((candidate) => [
       candidate.reportId,
       candidate,
     ]),
@@ -865,7 +508,7 @@ function findDuplicateCandidates(
   const rows = appendGovernedDuplicateRows(
     automaticRows,
     current.memberId,
-    governedPartnerIds,
+    [...new Set([...governedPartnerIds, ...localEvidence.keys()])],
   );
   scanContext.stats.candidateComparisons += rows.length;
   scanContext.stats.governedCandidateOverrides += governedOverrides;
@@ -875,7 +518,7 @@ function findDuplicateCandidates(
     const pairKey = reportDuplicatePairKey(current.id, candidate.id);
     const governanceDecision = governanceDecisions.get(candidate.id);
     if (governanceDecision?.decision === "distinct") continue;
-    if (governanceDecision?.decision === "duplicate") {
+    if (governanceDecision?.decision === "duplicate" && duplicateDecisionApplies(current.id,candidate.id,governanceDecision.evidenceJson)) {
       const evidence = parseJson<Record<string, unknown>>(
         governanceDecision.evidenceJson,
         {},
@@ -906,8 +549,6 @@ function findDuplicateCandidates(
       current,
       candidate,
       scanContext,
-      localEvidence.get(candidate.id),
-      currentFileSignature,
     );
     if (!evaluation) continue;
     candidates.push({
@@ -918,6 +559,7 @@ function findDuplicateCandidates(
       matchedFields: evaluation.matchedFields,
       reason: evaluation.reason,
       ruleSnapshot: evaluation.ruleSnapshot,
+      evaluation: evaluation.evaluation,
     });
   }
   const governedCandidates = candidates.filter(
@@ -2065,6 +1707,7 @@ export function getReportDetail(
         left.title.localeCompare(right.title, "zh-CN")
       );
     }) as ReportStructuredSection[];
+  const duplicateCandidates = findDuplicateCandidates(row);
   return {
     ...row,
     bodyParts: parseJson(row.bodyPartsJson, []),
@@ -2081,7 +1724,10 @@ export function getReportDetail(
     billingItems,
     structuredSections,
     manualFieldKeys: [...listManualReportFieldKeys(reportId)],
-    duplicateCandidates: findDuplicateCandidates(row),
+    duplicateCandidates,
+    duplicateSearch: duplicateSearchInfo(reportId,duplicateCandidates.length),
+    duplicatePause: getDuplicatePause(reportId),
+    duplicateVerification: getDuplicateVerification(reportId),
     memberIdentityAssessment: assessReportMemberIdentity(user, reportId),
     pageAppend: (() => {
       const batch = getDatabase().prepare(`SELECT base_version AS originalRevision,result_version AS recognizedRevision,state,job_id AS jobId FROM report_page_appends WHERE report_id=? AND published=1 ORDER BY rowid DESC LIMIT 1`).get(reportId) as {originalRevision:number;recognizedRevision:number|null;state:string;jobId:string|null}|undefined;
@@ -3312,7 +2958,6 @@ function scanDuplicateReportGroups(
   const context: DuplicateScanContext = {
     stats,
     fileSignatures: new Map(),
-    observationSignatures: new Map(),
     ruleSelection: resolveReportDuplicateRuleSelection(),
   };
   const operationId = startDuplicateOperation({
@@ -3775,7 +3420,10 @@ export function getReportDuplicateComparison(
     reportIssuedAt: report.reportIssuedAt,
     pageCount: report.pageCount,
   });
+  const leftEvidence=buildDuplicateSnapshot(leftReportId),rightEvidence=buildDuplicateSnapshot(rightReportId);
+  const evaluation=leftEvidence&&rightEvidence?evaluateDuplicatePair(leftEvidence,rightEvidence,leftEvidence.extractionId&&rightEvidence.extractionId?"ai_post":"ocr_pre"):null;
   return {
+    evidence: evaluation ? {...evaluation,fields:evaluation.fields.slice(0,100)} : undefined,
     left: summarySide(pair.left),
     right: summarySide(pair.right),
     fields,

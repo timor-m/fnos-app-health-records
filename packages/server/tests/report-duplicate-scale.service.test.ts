@@ -98,6 +98,12 @@ function insertEvidenceReport(id: string, updatedAt: string) {
     ) VALUES (?, ?, ?, 'laboratory', ?, 'ready', '匿名负载测试医院',
       '2026-08-02', '[]', '{}', ?)
   `).run(id, fixture.member.id, admin.id, `负载候选 ${id}`, updatedAt);
+  const pageId=`${id}-page`,jobId=`${id}-ocr`;
+  db.prepare("UPDATE reports SET title='合成检验面板', identifiers_json='{\"reportNo\":\"SYN-SCALE\"}' WHERE id=?").run(id);
+  db.prepare("INSERT INTO report_pages(id,report_id,page_number,original_name,storage_path,mime_type,file_size,sha256) VALUES(?,?,1,'synthetic.png',?,'image/png',1,?)").run(pageId,id,pageId,id);
+  db.prepare("INSERT INTO processing_jobs(id,report_id,page_id,job_type,status,pipeline_version,deduplication_key) VALUES(?,?,?,'ocr','completed','test',?)").run(jobId,id,pageId,jobId);
+  const lines=['机构：合成负载测试医院','报告名称：合成检验面板','报告号：SYN-SCALE','采样时间：2026-08-02 09:00',...['甲','乙','丙','丁','戊','己'].map((name,i)=>`合成项目${name} ${i+1}.10 mmol/L 0-100`)].map((text,i)=>({id:`line-${i}`,text,confidence:.99,box:[0,i*20,520,i*20+14]}));
+  db.prepare("INSERT INTO ocr_results(id,job_id,page_id,engine,model_version,lines_json) VALUES(?,?,?,'test','test',?)").run(`${id}-result`,jobId,pageId,JSON.stringify(lines));
   const insertObservation = db.prepare(`
     INSERT INTO observations (
       id, report_id, section_name, item_name, normalized_name, result_text, numeric_value, unit, abnormal_flag
@@ -231,7 +237,7 @@ test("P2 candidate benchmark exercises bounded comparisons across 1,200 reports 
     assert.equal(overview.metrics.candidateGroups > 0, true);
     assert.equal(overview.metrics.candidatePairs > 0, true);
     assert.equal(overview.metrics.candidatePairs <= fixture.candidateBenchmark.maximumCandidatePairs, true);
-    assert.equal(overview.metrics.mediumCandidates, overview.metrics.candidatePairs);
+    assert.equal(overview.metrics.highCandidates, overview.metrics.candidatePairs);
     assert.equal(overview.metrics.scanDurationMs <= fixture.candidateBenchmark.maximumScanDurationMs, true);
     assert.equal(overview.pagination.totalGroups, overview.metrics.candidateGroups);
     assert.equal(overview.pagination.totalPairs, overview.metrics.candidatePairs);

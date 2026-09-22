@@ -26,6 +26,20 @@ const app = useAppContext();
 const toast = useToast();
 const confirmDialog = useConfirm();
 const loading = ref(false);
+const canManage = computed(() => app.selectedMember.value?.permission === "manager");
+const recovery = ref<{count:number;reportIds:string[];hasMore:boolean}>({count:0,reportIds:[],hasMore:false});
+async function recoverPaused() {
+  if (!canManage.value || loading.value) return;
+  confirmDialog.ask({ title:"重新检查并继续整理", message:"使用新规则检查旧暂停报告。不再满足暂停条件的报告将加入 AI 队列，可能产生模型调用费用；仍重复的报告保留暂停。", confirmText:"重新检查并继续", run:async () => {
+    loading.value=true;
+    try {
+      const result=await request<Array<{status:string}>>("duplicates/recovery",{method:"POST",body:JSON.stringify({memberId:app.selectedMemberId.value,reportIds:recovery.value.reportIds})});
+      toast.show(`已加入队列 ${result.filter(x=>x.status==='queued').length} 份，仍暂停 ${result.filter(x=>x.status==='paused').length} 份`);
+      await scan();
+    } catch(cause) { error.value=cause instanceof Error?cause.message:"恢复失败"; }
+    finally { loading.value=false; }
+  }});
+}
 const groups = ref<DuplicateReportGroup[]>([]);
 const decisions = ref<ReportDuplicateDecisionRecord[]>([]);
 const metrics = ref<ReportDuplicateMetrics | null>(null);
@@ -114,6 +128,7 @@ async function scan(requestedPage?: number) {
     if (reportTypeFilter.value !== "all") params.set("reportType", reportTypeFilter.value);
     if (hospitalFilter.value !== "all") params.set("hospital", hospitalFilter.value);
     const overview = await request<DuplicateReportOverview>(`duplicates/overview?${params.toString()}`);
+    recovery.value = await request(`duplicates/recovery?memberId=${encodeURIComponent(memberId)}`);
     groups.value = overview.groups;
     decisions.value = overview.decisions;
     metrics.value = overview.metrics;
@@ -260,6 +275,14 @@ function batchGovern(decision: "duplicate" | "distinct") {
   });
 }
 
+function reconfirmDecision(decision: ReportDuplicateDecisionRecord) {
+  if (!canManage.value) return;
+  confirmDialog.ask({title:"重新确认当前原件",message:"确认这两份报告当前仍是同一份报告的同一个结果版本？将保留历史记录并重新绑定当前原件。",confirmText:"确认重复",run:async()=>{
+    await request("duplicates/decisions",{method:"POST",body:JSON.stringify({reportId:decision.leftReportId,candidateReportId:decision.rightReportId,decision:"duplicate",reason:"重新核对当前原件"})});
+    await scan();
+  }});
+}
+
 async function undoDecision(decision: ReportDuplicateDecisionRecord) {
   confirmDialog.ask({
     title: "撤销重复报告判断",
@@ -344,6 +367,7 @@ async function mergeToCandidate(source: ReportSummary, target: DuplicateReportCa
           <RefreshCw :size="16" :class="{ 'spin-icon': loading }" />{{ loading ? "扫描中" : "开始检测" }}
         </button>
       </header>
+      <p v-if="recovery.count">旧规则暂停且尚未整理：{{ recovery.count }} 份{{ recovery.hasMore ? "（分批处理）" : "" }}。<button v-if="canManage" type="button" class="soft-action-button" :disabled="loading" @click="recoverPaused">重新检查并继续整理</button></p>
       <p v-if="error" class="inline-panel-error">{{ error }}</p>
     </section>
 
@@ -377,8 +401,8 @@ async function mergeToCandidate(source: ReportSummary, target: DuplicateReportCa
         <button type="button" :disabled="!selectableVisiblePairs.length" @click="toggleAllVisible">选择/取消当前结果</button>
         <span>已选择 {{ selectedCandidates.length }} 组，单次最多 100 组</span>
         <div>
-          <button type="button" :disabled="!selectedCandidates.length || batchGoverning" @click="batchGovern('duplicate')"><ShieldCheck :size="15" />批量确认重复</button>
-          <button type="button" :disabled="!selectedCandidates.length || batchGoverning" @click="batchGovern('distinct')"><ShieldX :size="15" />批量排除</button>
+          <button v-if="canManage" type="button" :disabled="!selectedCandidates.length || batchGoverning" @click="batchGovern('duplicate')"><ShieldCheck :size="15" />批量确认重复</button>
+          <button v-if="canManage" type="button" :disabled="!selectedCandidates.length || batchGoverning" @click="batchGovern('distinct')"><ShieldX :size="15" />批量排除</button>
         </div>
       </div>
     </section>
@@ -411,10 +435,10 @@ async function mergeToCandidate(source: ReportSummary, target: DuplicateReportCa
           </div>
           <div class="row-actions">
             <button type="button" @click="openReport(candidate.id)">查看已有</button>
-            <button type="button" :disabled="governingPairKey === candidate.pairKey || candidate.governanceDecision === 'duplicate'" @click="governCandidate(group.report, candidate, 'duplicate')"><ShieldCheck :size="15" />{{ candidate.governanceDecision === "duplicate" ? "已确认重复" : "确认重复" }}</button>
-            <button type="button" :disabled="governingPairKey === candidate.pairKey" @click="governCandidate(group.report, candidate, 'distinct')"><ShieldX :size="15" />不是重复</button>
+            <button v-if="canManage" type="button" :disabled="governingPairKey === candidate.pairKey || candidate.governanceDecision === 'duplicate'" @click="governCandidate(group.report, candidate, 'duplicate')"><ShieldCheck :size="15" />{{ candidate.governanceDecision === "duplicate" ? "已确认重复" : "确认重复" }}</button>
+            <button v-if="canManage" type="button" :disabled="governingPairKey === candidate.pairKey" @click="governCandidate(group.report, candidate, 'distinct')"><ShieldX :size="15" />不是重复</button>
             <button type="button" @click="openComparison(group.report, candidate)"><GitMerge :size="15" />差异预览/合并</button>
-            <button type="button" @click="trash(group.report)"><Trash2 :size="15" />当前进回收站</button>
+            <button v-if="canManage" type="button" @click="trash(group.report)"><Trash2 :size="15" />当前进回收站</button>
           </div>
         </section>
       </article>
@@ -432,7 +456,7 @@ async function mergeToCandidate(source: ReportSummary, target: DuplicateReportCa
       </header>
       <div class="duplicate-history-batch-bar">
         <span>已选择 {{ selectedDecisionPairKeys.length }} 条治理记录</span>
-        <button type="button" :disabled="!selectedDecisionPairKeys.length || batchGoverning" @click="batchUndoDecisions"><RotateCcw :size="15" />批量撤销</button>
+        <button v-if="canManage" type="button" :disabled="!selectedDecisionPairKeys.length || batchGoverning" @click="batchUndoDecisions"><RotateCcw :size="15" />批量撤销</button>
       </div>
       <div class="duplicate-decision-list">
         <article v-for="decision in decisions" :key="decision.pairKey" class="duplicate-decision-row">
@@ -440,9 +464,11 @@ async function mergeToCandidate(source: ReportSummary, target: DuplicateReportCa
           <div>
             <strong>{{ decision.decision === "duplicate" ? "确认重复" : "保留两份" }} · {{ decision.leftTitle }} / {{ decision.rightTitle }}</strong>
             <small>{{ decision.reason || "未填写原因" }} · {{ decision.decidedByName || "未知操作人" }} · {{ decision.updatedAt }}</small>
+            <small v-if="decision.appliesToCurrentSource === false">原件已变化或历史缺少源绑定，请重新核对；历史决定已保留。</small>
             <small>规则 {{ decision.ruleVersion }} · {{ decision.ruleSnapshot.ruleId }}</small>
           </div>
-          <button type="button" :disabled="batchGoverning || governingPairKey === decision.pairKey" @click="undoDecision(decision)"><RotateCcw :size="15" />撤销</button>
+          <button v-if="canManage && decision.appliesToCurrentSource === false" type="button" @click="reconfirmDecision(decision)">重新确认当前原件</button>
+          <button v-if="canManage" type="button" :disabled="batchGoverning || governingPairKey === decision.pairKey" @click="undoDecision(decision)"><RotateCcw :size="15" />撤销</button>
         </article>
       </div>
     </section>
@@ -459,11 +485,24 @@ async function mergeToCandidate(source: ReportSummary, target: DuplicateReportCa
             <article><span>当前报告</span><strong>{{ comparison.left.title }}</strong></article>
             <article><span>保留目标</span><strong>{{ comparison.right.title }}</strong></article>
           </div>
+          <div v-if="comparison.evidence" class="duplicate-comparison-stats">
+            <p>{{ comparison.evidence.reason }}</p>
+            <span>可靠相同 {{ comparison.evidence.sameCount }}</span><span>识别待核对 {{ comparison.evidence.uncertainCount }}</span>
+            <span>可靠差异 {{ comparison.evidence.conflictCount }}</span><span>单侧内容 {{ comparison.evidence.missingCount }}</span>
+            <p v-if="comparison.evidence.risks.length">存在完整性风险，不能据此暂缓整理。</p>
+            <p>{{ comparison.evidence.support.join(" · ") }}</p>
+          </div>
           <div class="duplicate-comparison-stats">
             <span>相同指标 {{ comparison.observations.shared }}</span>
             <span :class="{ warning: comparison.observations.conflicts }">冲突 {{ comparison.observations.conflicts }}</span>
             <span>仅当前 {{ comparison.observations.leftOnly }}</span>
             <span>仅目标 {{ comparison.observations.rightOnly }}</span>
+          </div>
+          <div v-if="comparison.evidence" class="duplicate-field-diff-list">
+            <article v-for="(field,index) in comparison.evidence.fields.filter(f=>f.state==='conflict'||f.state==='uncertain'||['sampled','examined','issuer','scope','report_identity'].includes(f.key))" :key="`${field.key}-${index}`">
+              <strong>{{ ({sampled:'采样时间',examined:'检查时间',issuer:'机构',scope:'检查范围',report_identity:'报告编号'} as Record<string,string>)[field.key] || field.key }} · {{ ({exact:'一致',equivalent:'等价',compatible:'相容',missing:'缺失',uncertain:'识别待核对',conflict:'可靠差异'} as Record<string,string>)[field.state] }}</strong>
+              <span>{{ field.left?.raw || field.left?.value || '—' }}</span><span>{{ field.right?.raw || field.right?.value || '—' }}</span>
+            </article>
           </div>
           <div class="duplicate-field-diff-list">
             <article v-for="field in comparison.fields" :key="field.key" :class="{ equal: field.equal }">
@@ -479,7 +518,7 @@ async function mergeToCandidate(source: ReportSummary, target: DuplicateReportCa
         </div>
         <footer v-if="comparison && !comparisonLoading">
           <button type="button" @click="comparisonOpen = false">取消</button>
-          <button v-if="comparisonSource && comparisonTarget" type="button" class="danger-action-button" @click="mergeToCandidate(comparisonSource, comparisonTarget)"><GitMerge :size="16" />确认合并到右侧报告</button>
+          <button v-if="canManage && comparisonSource && comparisonTarget" type="button" class="danger-action-button" @click="mergeToCandidate(comparisonSource, comparisonTarget)"><GitMerge :size="16" />确认合并到右侧报告</button>
         </footer>
       </section>
     </div>

@@ -138,7 +138,11 @@ const canUseNasImport = computed(
     Boolean(app.session.value?.isAdmin),
 );
 const endpoint = `reports/${encodeURIComponent(props.reportId)}/page-appends`;
-const key = ref(crypto.randomUUID()),
+// getRandomValues also works on HTTP NAS addresses, unlike randomUUID.
+function createRequestKey() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+const key = ref(createRequestKey()),
   finished = computed(() =>
     Boolean(
       batch.value &&
@@ -494,7 +498,7 @@ async function discard() {
     emit("stateChanged", "");
     localFiles.value = [];
     selected.value = [];
-    key.value = crypto.randomUUID();
+    key.value = createRequestKey();
   });
 }
 function newBatch() {
@@ -503,7 +507,7 @@ function newBatch() {
   emit("stateChanged", "");
   localFiles.value = [];
   selected.value = [];
-  key.value = crypto.randomUUID();
+  key.value = createRequestKey();
 }
 async function browse(rootId = "", path = "") {
   await perform(async () => {

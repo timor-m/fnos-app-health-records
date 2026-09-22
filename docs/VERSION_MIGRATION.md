@@ -260,3 +260,8 @@ npm run pack:app
 ## Issue #40 未编号草案
 
 新增 `page-append-draft.ts`，包含补充批次、文件、草稿页、指标来源抑制记录及并发约束。应用 0.2.10 / schema v17 不变，不修改已发布迁移。已有库安装草案前备份，恢复库通过同一 schema 初始化补齐；发布授权后相对正式基线统一整理编号。草稿内文件受备份、存储迁移和 GC 引用保护，详见 [补充报告页](REPORT_PAGE_APPEND.md)。
+
+
+### 当前未编号判重草案
+
+`report-duplicate-draft.ts` 为 family-v2 增加 `report_duplicate_runtime` 和原件哈希索引，保存当前结果源绑定、暂停、显式继续任务及独立后置核验状态。新库和现有 v17 库均幂等应用，旧库缺表/列时先备份；不递增 schema，不改历史迁移，不清理人工决定，不自动触发 AI。历史恢复和未绑定结果的保守处理见 [报告重复检测](./REPORT_DUPLICATE_DETECTION.md)。

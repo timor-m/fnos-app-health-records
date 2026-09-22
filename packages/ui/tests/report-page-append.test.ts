@@ -71,6 +71,7 @@ afterEach(() => {
   wrapper?.unmount();
   delete config.global.stubs.teleport;
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 it("allows PDF subset, ordering and rotation without changing old pages; failed submission keeps selections", async () => {
   mocks.request.mockImplementation(
@@ -422,4 +423,15 @@ it("shows that ready pages still need submission and OCR-only does not mean AI c
   expect(button("补充报告页").text()).toContain("待AI整理");
   expect(wrapper.text()).toContain("当前指标仍是上一版");
   expect(wrapper.text()).not.toContain("补充页面与整理结果均已保存");
+});
+
+it("renders the append entry on HTTP NAS addresses without randomUUID", async () => {
+  const getRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
+  vi.stubGlobal("crypto", { getRandomValues });
+  wrapper = mount(Panel, { props: { reportId: "report", oldPageCount: 1 } });
+  await flushPromises();
+  expect(button("补充报告页").text()).toBe("补充报告页");
+  await button("补充报告页").trigger("click");
+  await flushPromises();
+  expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
 });

@@ -151,10 +151,7 @@ test("P2 duplicate golden set keeps candidate detection independent from trend c
 
     const hospitalAlias = getReportDetail(admin, "hospital-alias-right").duplicateCandidates
       .find((candidate) => candidate.id === "hospital-alias-left");
-    assert.ok(hospitalAlias);
-    assert.equal(hospitalAlias.confidence, "medium");
-    assert.equal(hospitalAlias.matchedFields.includes("医院名称近似"), true);
-    assert.equal(hospitalAlias.matchedFields.includes("指标6项"), true);
+    assert.equal(hospitalAlias, undefined); // Background overlap alone is no longer a machine duplicate.
     assert.equal(shouldCollapseReportPair("hospital-alias-left", "hospital-alias-right"), false);
     assert.deepEqual(
       new Set(trendReportIds("甘油三酯").filter((id) => id.startsWith("hospital-alias-"))),
@@ -172,11 +169,7 @@ test("P2 duplicate golden set keeps candidate detection independent from trend c
       candidateReportId: "hospital-alias-right",
       decision: "duplicate",
       reason: "金标回归：等价机构名称且六项指标完全重合",
-      evidence: {
-        confidence: hospitalAlias.confidence,
-        reason: hospitalAlias.reason,
-        matchedFields: hospitalAlias.matchedFields
-      }
+      evidence: { source: "manual-review" }
     });
     assert.ok(applied);
     assert.equal(applied.pairKey, reportDuplicatePairKey("hospital-alias-left", "hospital-alias-right"));
@@ -218,7 +211,7 @@ test("P2 duplicate golden set keeps candidate detection independent from trend c
     assert.equal(
       getReportDetail(admin, "hospital-alias-right").duplicateCandidates
         .some((candidate) => candidate.id === "hospital-alias-left"),
-      true
+      false
     );
     assert.equal(shouldCollapseReportPair("hospital-alias-left", "hospital-alias-right"), false);
 
@@ -313,6 +306,8 @@ test("P2 duplicate overview filters and paginates candidates without changing fu
   process.env.STORAGE_DIR = storageDir;
   try {
     seedFixture();
+    // Keep pagination coverage using an explicit human decision instead of the retired alias heuristic.
+    setReportDuplicateDecision(admin,{reportId:"hospital-alias-left",candidateReportId:"hospital-alias-right",decision:"duplicate"});
     const firstPage = getDuplicateReportOverview(admin, fixture.member.id, { page: 1, pageSize: 1 });
     assert.equal(firstPage.pagination.totalGroups, 2);
     assert.equal(firstPage.pagination.totalPairs, 2);
@@ -328,11 +323,10 @@ test("P2 duplicate overview filters and paginates candidates without changing fu
     assert.equal(secondPage.metrics.candidateGroups, firstPage.metrics.candidateGroups);
 
     const highOnly = getDuplicateReportOverview(admin, fixture.member.id, { confidence: "high" });
-    assert.equal(highOnly.pagination.totalPairs, 1);
+    assert.equal(highOnly.pagination.totalPairs, 2);
     assert.equal(highOnly.groups[0].candidates[0].confidence, "high");
     const mediumOnly = getDuplicateReportOverview(admin, fixture.member.id, { confidence: "medium" });
-    assert.equal(mediumOnly.pagination.totalPairs, 1);
-    assert.equal(mediumOnly.groups[0].candidates[0].confidence, "medium");
+    assert.equal(mediumOnly.pagination.totalPairs, 0);
     const hospitalOnly = getDuplicateReportOverview(admin, fixture.member.id, { hospital: "安徽滨湖国宾健康体检中心" });
     assert.equal(hospitalOnly.pagination.totalPairs, 1);
     const searched = getDuplicateReportOverview(admin, fixture.member.id, { query: "国宾" });

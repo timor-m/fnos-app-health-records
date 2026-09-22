@@ -325,6 +325,24 @@ const duplicateCandidates = computed(() =>
     ? currentDetail.value?.duplicateCandidates || []
     : []
 );
+const duplicatePause = computed(() => currentDetail.value?.duplicatePause);
+async function retryDuplicateVerification() {
+  if (!canManageReport.value || triggeringAi.value) return;
+  triggeringAi.value = true;
+  try { await request(`reports/${encodeURIComponent(props.reportId)}/duplicate-recheck`, {method:"POST"}); await loadDetail(props.reportId,true); }
+  catch(cause) { failJobsAction(cause,"重复核验重试失败"); }
+  finally { triggeringAi.value=false; }
+}
+async function continueDuplicate(distinctTarget?: string) {
+  if (!canManageReport.value || triggeringAi.value) return;
+  triggeringAi.value = true;
+  try {
+    await request(`reports/${encodeURIComponent(props.reportId)}/duplicate-continue`, { method: "POST", body: JSON.stringify({ distinctTarget }) });
+    await Promise.all([loadDetail(props.reportId, true), refreshJobs()]);
+    toast.show("AI 整理任务已加入队列");
+  } catch (cause) { failJobsAction(cause, "继续整理失败"); }
+  finally { triggeringAi.value = false; }
+}
 const aiJobs = computed(() => currentJobs.value.filter((job) => job.jobType === "ai_extract"));
 const runningAiJobs = computed(() => aiJobs.value.filter((job) => ["queued", "processing"].includes(job.status)));
 const failedAiJobs = computed(() => aiJobs.value.filter((job) => job.status === "failed"));
@@ -1856,10 +1874,15 @@ watch(() => props.reportId, (reportId) => {
   void refreshJobs();
 }, { immediate: true });
 
+function refreshDuplicateOnFocus() {
+  if (duplicatePause.value) void loadDetail(props.reportId,true);
+}
 onMounted(() => {
+  window.addEventListener("focus", refreshDuplicateOnFocus);
   window.addEventListener("keydown", handleViewerKeydown);
 });
 onBeforeUnmount(() => {
+  window.removeEventListener("focus", refreshDuplicateOnFocus);
   stopOriginalExportStatusPolling();
   stopJobsPolling();
   stopEventPolling();
@@ -1945,11 +1968,22 @@ onActivated(() => {
           {{ reprocessingReport || triggeringAi ? "提交中" : reprocessNotice.actionLabel }}
         </button>
       </section>
-      <section v-if="duplicateCandidates.length" class="duplicate-warning">
+      <section v-if="currentDetail?.duplicateVerification?.status === 'failed'" class="duplicate-warning">
+        <p>报告整理已完成，重复核验暂未完成，已有结果不受影响。</p>
+        <button v-if="canManageReport" class="soft-action-button" type="button" :disabled="triggeringAi" @click="retryDuplicateVerification">重新核验</button>
+      </section>
+      <section v-if="duplicateCandidates.length || duplicatePause" class="duplicate-warning">
         <CircleAlert :size="18" />
         <div>
           <strong>可能已上传过这份报告</strong>
-          <p>系统根据原件、OCR 和已整理的报告内容发现 {{ duplicateCandidates.length }} 个候选，确认归档前建议先核对。若自动 AI 整理已暂缓，仍可在下方手动继续。</p>
+          <p v-if="duplicatePause?.valid">{{ duplicatePause.reason }}</p>
+          <p v-else-if="duplicatePause">原先暂停已失效，请按当前处理状态继续整理。</p>
+          <p v-else>{{ hasAiContent ? "整理已完成，请核对是否重复；现有结果已保留。" : "发现可能重复的报告，正常整理不受影响。" }}</p>
+          <div v-if="canManageReport && duplicatePause && !hasRunningJobs" class="duplicate-actions">
+            <button class="soft-action-button" type="button" :disabled="triggeringAi" @click="continueDuplicate()">仍然继续整理</button>
+            <button v-if="duplicatePause.valid" class="soft-action-button" type="button" :disabled="triggeringAi" @click="continueDuplicate(duplicatePause.targetId)">不是重复并继续整理</button>
+          </div>
+          <small v-if="duplicatePause">继续仅绕过当前原件的暂停；排除仅针对当前暂停所指的一对报告。</small>
           <button
             v-for="candidate in duplicateCandidates"
             :key="candidate.id"
@@ -1957,7 +1991,7 @@ onActivated(() => {
             type="button"
             @click="emit('openCandidate', candidate)"
           >
-            查看已有报告 · {{ candidate.confidence === "high" ? "高度重复" : "疑似重复" }} · {{ candidate.title }}
+            查看已有报告 · {{ candidate.evaluation?.classification === "related_variant" ? "内容版本不同" : candidate.confidence === "high" ? "高度重复" : "疑似重复" }} · {{ candidate.title }}
             <span>{{ candidate.reason }} · {{ candidate.matchedFields.join("、") }}</span>
           </button>
           <div v-if="source.status === 'needs_review'" class="duplicate-actions">

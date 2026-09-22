@@ -88,7 +88,7 @@ test("P2 duplicate scan operations stay aggregate-only and bound retained histor
     const latestScan = operations.find((operation) => operation.purpose === "metrics");
     assert.ok(latestScan);
     assert.equal(latestScan.status, "completed");
-    assert.equal(latestScan.ruleVersion, "family-v1");
+    assert.equal(latestScan.ruleVersion, "family-v2");
     assert.equal(typeof latestScan.stats.scanDurationMs, "number");
     const serialized = JSON.stringify(latestScan);
     for (const forbidden of [

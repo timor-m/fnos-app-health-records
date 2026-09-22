@@ -140,3 +140,35 @@ it("refreshes jobs and report details when the append component announces a proc
     expect(fetchMock.mock.calls.filter(([input])=>String(input).endsWith('/api/reports/r1')).length).toBeGreaterThan(detailsBefore);
   } finally { wrapper.unmount(); }
 });
+
+describe('重复报告当前暂停状态',()=>{
+ async function mountDuplicate(valid=true,memberId='m1') {
+  let continued=false;
+  fetchMock.mockImplementation(async (input:RequestInfo|URL)=>{
+   const url=String(input);
+   if(url.endsWith('/duplicate-continue')) {continued=true;return jsonResponse({id:'synthetic-job',status:'queued'});}
+   if(url.endsWith('/api/reports/r1')) return jsonResponse({...detailPayload,memberId,status:'needs_review',observations:[],duplicatePause:continued?null:{valid,state:valid?'paused':'expired',targetId:'r2',reason:'与已有报告的完整原件一致，已暂缓 AI 整理。',ruleId:'R0',ruleVersion:'family-v2'}});
+   if(url.includes('/original/status'))return jsonResponse({status:'ready'});
+   if(url.includes('jobs'))return jsonResponse([]);
+   if(url.endsWith('/notes'))return jsonResponse({notes:[],canManage:false});
+   return jsonResponse({});
+  });
+  const wrapper=mount(ReportDetail,{attachTo:document.body,props:{reportId:'r1',variant:'panel'},global:{stubs:{teleport:true,RouterLink:true}}});
+  await flushPromises();await flushPromises();return wrapper;
+ }
+ it('显示当前暂停，继续时不附带排除其他候选的请求',async()=>{
+  const wrapper=await mountDuplicate();
+  expect(wrapper.text()).toContain('与已有报告的完整原件一致');
+  await wrapper.findAll('button').find(b=>b.text()==='仍然继续整理')!.trigger('click');await flushPromises();
+  const call=callsTo('duplicate-continue')[0];expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({});
+  expect(wrapper.text()).not.toContain('与已有报告的完整原件一致');wrapper.unmount();
+ });
+ it('不是重复并继续只发送当前报告对',async()=>{
+  const wrapper=await mountDuplicate();await wrapper.findAll('button').find(b=>b.text()==='不是重复并继续整理')!.trigger('click');await flushPromises();
+  expect(JSON.parse((callsTo('duplicate-continue')[0][1] as RequestInit).body as string)).toEqual({distinctTarget:'r2'});wrapper.unmount();
+ });
+ it('失效暂停不会显示仍被拦截，无管理权限不显示继续按钮',async()=>{
+  const wrapper=await mountDuplicate(false,'unmanaged');expect(wrapper.text()).toContain('原先暂停已失效');
+  expect(wrapper.text()).not.toContain('与已有报告的完整原件一致');expect(wrapper.findAll('button').some(b=>b.text()==='仍然继续整理')).toBe(false);wrapper.unmount();
+ });
+});

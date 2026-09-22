@@ -1,3 +1,4 @@
+import { markDuplicateResultCurrent, buildDuplicateSnapshot } from "../services/report-duplicate-snapshot.service.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -164,6 +165,7 @@ test("completes thumbnail and OCR jobs then marks the report for review", async 
 test("pauses automatic AI extraction when local OCR precheck finds a high-confidence duplicate", async () => {
   await withDatabase(async () => {
     const ocrLines = [
+      "机构：合成测试医院", "报告名称：合成检验面板", "报告号：SYN-001", "采样时间：2026-01-01 09:00",
       "健康体检检验结果汇总",
       "白细胞计数 5.62 10^9/L 3.50-9.50",
       "红细胞计数 4.83 10^12/L 4.30-5.80",
@@ -202,6 +204,12 @@ test("pauses automatic AI extraction when local OCR precheck finds a high-confid
       )
       .run(existing.reportId);
 
+    // A ready status alone is insufficient: establish a completed, source-bound result.
+    const db = getDatabase();
+    db.prepare("INSERT INTO processing_jobs(id,report_id,job_type,status,pipeline_version,deduplication_key) VALUES('existing-ai',?,'ai_extract','completed','test','existing-ai')").run(existing.reportId);
+    db.prepare("INSERT INTO report_extractions(id,report_id,job_id,provider,model,prompt_version,fields_json,raw_response_json) VALUES('existing-extraction',?,'existing-ai','test','test','test','{}','{}')").run(existing.reportId);
+    for(const [i,f] of buildDuplicateSnapshot(existing.reportId)!.items.entries()) db.prepare("INSERT INTO observations(id,report_id,item_name,result_text,numeric_value,unit,evidence_json) VALUES(?,?,?,?,?,?,?)").run(`existing-obs-${i}`,existing.reportId,f.key.split('|')[0],f.value.split('|')[0],Number(f.value.split('|')[0]),f.value.split('|')[1],JSON.stringify([{pageNumber:f.page||1,lineIds:f.lines||[]}]));
+    markDuplicateResultCurrent(existing.reportId);
     saveAiSettings({
       enabled: true,
       baseUrl: "https://ai.example.test/v1",
@@ -229,7 +237,7 @@ test("pauses automatic AI extraction when local OCR precheck finds a high-confid
     assert.equal(detail.duplicateCandidates.length, 1);
     assert.equal(detail.duplicateCandidates[0].id, existing.reportId);
     assert.equal(detail.duplicateCandidates[0].confidence, "high");
-    assert.match(detail.duplicateCandidates[0].reason, /OCR.*高度一致/);
+    assert.equal(detail.duplicateCandidates[0].evaluation?.ruleId, "R1");
 
     const notice = getDatabase()
       .prepare(
