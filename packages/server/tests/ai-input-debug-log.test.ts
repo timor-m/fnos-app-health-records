@@ -95,9 +95,11 @@ test("logs the exact redacted AI request body in development", async () => {
     const filePath = join(logDir, "ai-input-debug.log");
     assert.equal(existsSync(filePath), true);
     const raw = readFileSync(filePath, "utf8");
-    const jsonText = raw
-      .slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
+    const inputStart = raw.indexOf("===== AI INPUT");
+    const inputEnd = raw.indexOf("===== END AI INPUT =====", inputStart);
+    const jsonText = raw.slice(raw.indexOf("{", inputStart), inputEnd).trim();
     const entry = JSON.parse(jsonText) as {
+      requestId: string;
       requestBody: Record<string, unknown>;
       provider: string;
       planHash: string;
@@ -111,6 +113,19 @@ test("logs the exact redacted AI request body in development", async () => {
     assert.match(raw, /R-20260729/);
     assert.match(raw, /空腹血糖 5\.2 mmol\/L/);
     assert.doesNotMatch(raw, /张三|13800138000|sk-debug-secret|local-report-id/);
+    const withOutput = readFileSync(filePath, "utf8");
+    assert.match(withOutput, /===== AI OUTPUT/);
+    assert.ok(entry.requestId);
+    const outputStart = withOutput.indexOf("===== AI OUTPUT");
+    const outputEnd = withOutput.indexOf("===== END AI OUTPUT =====", outputStart);
+    const output = JSON.parse(withOutput.slice(withOutput.indexOf("{", outputStart), outputEnd).trim()) as {
+      requestId: string; responseContent: string; completionTokens: number;
+    };
+    assert.equal(output.requestId, entry.requestId);
+    assert.match(output.responseContent, /血糖检验报告/);
+    assert.match(withOutput, /空腹血糖/);
+    assert.equal(output.completionTokens, 20);
+    assert.doesNotMatch(withOutput, /sk-debug-secret/);
   });
 });
 

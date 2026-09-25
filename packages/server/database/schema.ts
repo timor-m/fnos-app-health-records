@@ -1,3 +1,4 @@
+import { reportExaminationDraftSql } from "./report-examination-draft";
 import { reportDuplicateDraftSql } from "./report-duplicate-draft";
 import { pageAppendSchemaSql } from "./page-append-draft";
 import { memberSharingSchemaSql } from "./member-sharing-draft";
@@ -587,4 +588,5 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 ${uploadReceiptSchemaSql}
 ${pageAppendSchemaSql}
 ${reportDuplicateDraftSql}
+${reportExaminationDraftSql}
 `;

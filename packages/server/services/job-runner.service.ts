@@ -1249,6 +1249,7 @@ export async function processNextJob(
         .prepare("SELECT 1 AS found FROM report_extractions WHERE job_id = ?")
         .get(job.id) as { found: number } | undefined;
       if (!persisted) {
+        const sourceVersion = getDatabase().prepare('SELECT source_version FROM reports WHERE id=?').get(job.reportId)?.source_version;
         const execution = await executeAiExtractionPlan(
           job.id,
           job.reportId,
@@ -1289,6 +1290,10 @@ export async function processNextJob(
           job.id,
           extraction,
           execution.inputCharacters,
+          () => {
+            const currentVersion = getDatabase().prepare('SELECT source_version FROM reports WHERE id=?').get(job.reportId)?.source_version;
+            if (currentVersion !== sourceVersion) throw createError({statusCode:409,statusMessage:'报告在整理期间已修改，旧结果已保留，请重新整理'});
+          },
         );
         if (!isJobStillProcessable(job)) return true;
         appendJobEvent({

@@ -60,7 +60,10 @@ test("keeps trend data reversible in trash and removes the complete report graph
           ok: true,
           engine: "test-ocr",
           modelVersion: "lifecycle-v1",
-          lines: [{ text: "检验结果 血糖 5.1 mmol/L", confidence: 0.99 }],
+          lines: [
+            { text: "报告编号：SYNTHETIC 采样时间：2026-07-22 08:30", confidence: 0.99 },
+            { text: "检验结果 血糖 5.1 mmol/L", confidence: 0.99 }
+          ],
           elapsedMs: 6
         };
     const ai: AiExecutor = async () => {
@@ -101,6 +104,10 @@ test("keeps trend data reversible in trash and removes the complete report graph
     assert.equal(initialPoints.length, 1);
     assert.equal(initialPoints[0]?.numericValue, 5.1);
     assert.equal(initialPoints[0]?.reportStatus, "ready");
+    assert.equal(initialPoints[0]?.reportIssuedAt, "2026-07-22 08:30");
+    assert.equal(initialPoints[0]?.timeKind, "sampled");
+    const examinationId = initialPoints[0]?.examinationId;
+    assert.ok(examinationId);
 
     const beforeDelete = db.prepare(`
       SELECT
@@ -140,6 +147,8 @@ test("keeps trend data reversible in trash and removes the complete report graph
     assert.equal(restoredPoints.length, 1);
     assert.equal(restoredPoints[0]?.numericValue, 5.1);
     assert.equal(restoredPoints[0]?.reportStatus, "needs_review");
+    assert.equal(restoredPoints[0]?.examinationId, examinationId);
+    assert.equal(restoredPoints[0]?.reportIssuedAt, "2026-07-22 08:30");
 
     trashReport(manager, upload.reportId);
     assert.deepEqual(permanentlyDeleteReport(manager, upload.reportId), {
@@ -166,6 +175,8 @@ test("keeps trend data reversible in trash and removes the complete report graph
       upload.reportId
     ) as Record<string, number>;
     for (const count of Object.values(afterDelete)) assert.equal(count, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM report_examinations").get()?.n, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM observation_examinations").get()?.n, 0);
     assert.equal(listTrendSeries(manager, "trend-lifecycle-member")
       .flatMap((series) => series.points)
       .some((point) => point.reportId === upload.reportId), false);

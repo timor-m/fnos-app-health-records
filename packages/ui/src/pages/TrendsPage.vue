@@ -22,7 +22,7 @@ import ImageViewer, { type ImageViewerPage } from "../components/ImageViewer.vue
 import PullIndicator from "../components/PullIndicator.vue";
 import ReportDetailModal from "../components/ReportDetailModal.vue";
 import { apiUrl, request } from "../utils/api";
-import { matchTrendSearch } from "../utils/trends";
+import { matchTrendSearch, trendMeasurementTime, trendTimeSource } from "../utils/trends";
 import { describeObservationAbnormal, formatReferenceRange } from "../utils/indicator-display";
 import {
   canonicalNotation,
@@ -42,6 +42,7 @@ const route = useRoute();
 const loading = ref(true);
 const loadError = ref("");
 const series = ref<TrendSeries[]>([]);
+const pendingReports = ref<Array<{reportId:string;reportTitle:string;examinationCount:number;observationCount:number}>>([]);
 const query = ref("");
 const groupFilter = ref('');
 const groupTree = ref<TrendGroupNode[]>([]);
@@ -116,7 +117,7 @@ const sourceViewerPages = computed<ImageViewerPage[]>(() => {
   return [{
     key: value.point.sourcePage?.id || "source",
     fullUrl: sourcePreviewUrl.value,
-    label: `${value.seriesName} · 第 ${value.point.sourcePage?.pageNumber || 1} 页`,
+    label: `${value.seriesName} · ${trendMeasurementTime(value.point)} · ${'timeKind' in value.point ? trendTimeSource(value.point) : '未进入趋势'} · 第 ${value.point.sourcePage?.pageNumber || 1} 页`,
     downloadUrl: sourcePreviewUrl.value
   }];
 });
@@ -276,11 +277,13 @@ async function load(memberId: string, silent = false) {
   closeDetails();
   try {
     const params = `memberId=${encodeURIComponent(memberId)}`;
-    const [result, tree] = await Promise.all([
-      request<TrendSeries[]>(`trends?${params}`), request<TrendGroupNode[]>(`trends/groups?${params}`)
+    const [result, tree, pending] = await Promise.all([
+      request<TrendSeries[]>(`trends?${params}`), request<TrendGroupNode[]>(`trends/groups?${params}`),
+      request<typeof pendingReports.value>(`trends/pending?${params}`)
     ]);
     if (app.selectedMemberId.value === memberId && sequence === loadRequest) {
       series.value = result;
+      pendingReports.value = pending;
       groupTree.value = tree;
       const availableKeys = new Set(flattenTrendGroups(tree).filter(g => g.indicatorCount > 0).map(g => g.key));
       if (groupFilter.value && !availableKeys.has(groupFilter.value)) groupFilter.value = '';
@@ -491,7 +494,8 @@ function qualityLabel(value: TrendSeries["quality"]) {
 }
 
 function latestPoint(item: TrendSeries) {
-  return item.points[item.points.length - 1] || null;
+  const point=item.points[item.points.length - 1];
+  return point?.examinationConflict || point?.timeOrderAmbiguous ? null : point || null;
 }
 
 function referenceSummary(point: TrendPoint | null, unit: string | null) {
@@ -698,12 +702,15 @@ function trendChartMinWidth(item: TrendSeries) {
 }
 
 function trendNodeLabel(point: TrendPoint, item: TrendSeries) {
-  const review = point.trendOutlier ? "，该点与其余记录差异较大" : "";
-  return `${item.name} ${pointValue(item, point)}，${formatDate(point.reportIssuedAt)}${review}，点击查看来源`;
+  const review = point.examinationConflict ? "，同次检查结果冲突，需核对" : point.timeOrderAmbiguous ? "，同日检查先后不明" : point.trendOutlier ? "，该点与其余记录差异较大" : "";
+  return `${item.name} ${pointValue(item, point)}，${trendMeasurementTime(point)}，${trendTimeSource(point)}${review}，点击查看来源`;
 }
 
+const expandedRecordKeys=ref<string[]>([]);
+function toggleRecords(item:TrendSeries){const key=seriesKey(item);expandedRecordKeys.value=expandedRecordKeys.value.includes(key)?expandedRecordKeys.value.filter(k=>k!==key):[...expandedRecordKeys.value,key];}
 function recentPoints(item: TrendSeries) {
-  return [...item.points].reverse().slice(0, 6);
+  const points=[...item.points].reverse();
+  return expandedRecordKeys.value.includes(seriesKey(item))?points:points.slice(0,6);
 }
 
 function seriesKey(item: TrendSeries) {
@@ -811,6 +818,7 @@ watch(() => app.selectedMemberId.value, (memberId) => {
   ++loadRequest;
   ++groupRequest;
   series.value = [];
+  pendingReports.value = [];
   groupTree.value = [];
   groupFilter.value = '';
   groupResultKeys.value = null;
@@ -873,6 +881,16 @@ onDeactivated(() => {
       <RouterLink to="/trends" aria-current="page">指标趋势</RouterLink>
       <RouterLink to="/trends/morphology">形态变化</RouterLink>
     </nav>
+    <section v-if="!loading && !loadError && pendingReports.length" class="trend-pending-panel" aria-label="待确认检查">
+      <h3>有检查结果待确认</h3>
+      <p>这些结果已保留，检查归属或时间确认后才会进入趋势。请打开报告，在“全部指标”的来源报告页中核对时间。</p>
+      <details>
+        <summary>查看 {{ pendingReports.length }} 份报告</summary>
+        <button v-for="report in pendingReports" :key="report.reportId" type="button" class="soft-action-button" @click="openReport(report.reportId)">
+          <span>{{ report.reportTitle }}</span><span>{{ report.examinationCount }} 次检查 · {{ report.observationCount }} 项结果</span><ChevronRight :size="16" />
+        </button>
+      </details>
+    </section>
     <PullIndicator :distance="pullDistance" :refreshing="refreshing" />
     <div v-if="loading" class="loading-list"><span v-for="index in 3" :key="index"></span></div>
     <p v-else-if="loadError" class="inline-panel-error">
@@ -966,7 +984,7 @@ onDeactivated(() => {
           <div class="trend-main">
             <div class="trend-latest">
               <span>最新值</span>
-              <strong>{{ formatSeriesNumber(item, item.latestValue) }}<small v-if="item.unit">{{ item.unit }}</small></strong>
+              <strong>{{ item.points.at(-1)?.examinationConflict ? '结果冲突' : item.points.at(-1)?.timeOrderAmbiguous ? '同日多次检查' : formatSeriesNumber(item, item.latestValue) }}<small v-if="item.unit && !item.points.at(-1)?.examinationConflict && !item.points.at(-1)?.timeOrderAmbiguous">{{ item.unit }}</small></strong>
               <p>{{ formatDate(item.lastDate) }}<template v-if="item.pointCount === 1"> · 目前只有一次记录</template></p>
               <small v-if="showTrendChangeSummary(item)" class="trend-change-summary" :class="item.trendStatus">
                 {{ trendStatusLabel(item) }}<template v-if="item.latestIntervalDays !== null"> · {{ intervalLabel(item.latestIntervalDays) }}</template>
@@ -1069,7 +1087,7 @@ onDeactivated(() => {
                 >
                   <span class="trend-chart-value">{{ formatSeriesNumber(item, chartPoint.point.numericValue) }}</span>
                   <i :class="pointFlagClass(chartPoint.point)"></i>
-                  <time>{{ formatDate(chartPoint.point.reportIssuedAt) }}</time>
+                  <time>{{ trendMeasurementTime(chartPoint.point) }}</time>
                 </button>
               </div>
             </div>
@@ -1080,11 +1098,16 @@ onDeactivated(() => {
               <span v-if="trendDateRange(item)">{{ trendDateRange(item) }}</span>
             </div>
           </div>
+          <button v-if="item.points.length > 6" class="soft-action-button" type="button" :aria-expanded="expandedRecordKeys.includes(seriesKey(item))" @click="toggleRecords(item)">{{ expandedRecordKeys.includes(seriesKey(item)) ? '收起记录' : `查看全部 ${item.points.length} 条记录` }}</button>
           <div class="trend-points">
             <article v-for="point in recentPoints(item)" :key="`${item.name}-${point.reportId}-${point.observationId}`">
               <div>
                 <strong>{{ pointValue(item, point) }}<IndicatorHint v-if="pointComputedFlagHint(point)" :text="pointComputedFlagHint(point)" :label="`${item.name}的异常标记说明`"><template #trigger="{ toggle, open, panelId }"><button type="button" class="trend-flag" :class="pointFlagClass(point)" :title="point.abnormalReason || undefined" :aria-expanded="open" :aria-controls="open ? panelId : undefined" @click="toggle">{{ pointFlagLabel(point) }}</button></template></IndicatorHint><em v-else-if="pointFlagVisible(point)" class="trend-flag" :class="pointFlagClass(point)" :title="point.abnormalReason || undefined">{{ pointFlagLabel(point) }}</em></strong>
-                <span>{{ formatDate(point.reportIssuedAt) }} · {{ point.hospitalName || "医院待整理" }}</span>
+                <span>{{ trendMeasurementTime(point) }} · {{ point.hospitalName || "医院待整理" }}</span>
+                <small>{{ trendTimeSource(point) }}</small>
+                <small v-if="point.timeOrderAmbiguous" role="status">同日检查先后不明，已保留全部记录，暂不计算先后变化。</small>
+                <small v-if="point.examinationConflict" role="status">同次检查存在不同结果，已全部保留，请核对原件。</small>
+                <details v-if="(point.duplicateSources?.length || 0)>1"><summary>{{ point.duplicateSources!.length }} 处相同结果，趋势计一次</summary><div v-for="source in point.duplicateSources" :key="source.observationId"><button type="button" class="soft-action-button" @click="openReport(source.reportId)">{{ source.reportTitle }}<template v-if="source.pageNumber"> · 第 {{ source.pageNumber }} 页</template></button></div></details>
                 <small v-if="hasReferenceInfo(point)">{{ referenceSummary(point, item.unit) }}</small>
                 <small v-if="pointInterpretationLine(point)" class="trend-point-interpretation">{{ pointInterpretationLine(point) }}</small>
                 <small v-if="point.trendOutlier" class="trend-point-outlier">{{ point.trendOutlierReason }}</small>
@@ -1120,3 +1143,13 @@ onDeactivated(() => {
     <BackToTop />
   </section>
 </template>
+
+<style scoped>
+.trend-pending-panel { margin: 1rem 0; padding: 1rem; border-radius: 1rem; background: var(--surface); }
+.trend-pending-panel h3 { margin: 0 0 .5rem; font-size: 1rem; }
+.trend-pending-panel p { margin: 0 0 .75rem; color: var(--ink-2); line-height: 1.6; }
+.trend-pending-panel summary { cursor: pointer; }
+.trend-pending-panel button { display: flex; align-items: center; gap: .5rem; width: 100%; margin-top: .5rem; text-align: left; white-space: normal; }
+.trend-pending-panel button span:first-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.trend-pending-panel button span:nth-child(2) { font-size: .8rem; }
+</style>

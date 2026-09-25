@@ -267,6 +267,69 @@ test('unsafe table rows accept AI evidence only when the quote anchors to the li
   });
 });
 
+test('unsafe coordinate rows accept a detached result cell but reject a reference value', async () => {
+  await withReport(1, async ({ jobId, reportId }) => {
+    const cells = [
+      { id: 'coord-name', text: '总胆固醇', box: [50, 100, 220, 125] },
+      { id: 'coord-result', text: '5.3', box: [300, 100, 350, 125] },
+      { id: 'coord-reference', text: '0-5.2', box: [450, 100, 540, 125] },
+      { id: 'coord-unit', text: 'mmol/L', box: [650, 100, 730, 125] },
+    ].map((line) => ({ ...line, confidence: .99, tableUnsafe: true }));
+    getDatabase().prepare('UPDATE ocr_results SET lines_json = ?').run(JSON.stringify(cells));
+    const executor: AiExecutor = async () => ({
+      provider: 'test', model: 'test', promptVersion: 'test',
+      ...normalizeAiExtraction({ observations: [
+        { itemName: '总胆固醇', resultText: '5.3', numericValue: 5.3, unit: 'mmol/L',
+          evidence: [{ pageNumber: 1, quote: '总胆固醇 5.3 mmol/L' }] },
+        { itemName: '总胆固醇', resultText: '5.2', numericValue: 5.2, unit: 'mmol/L',
+          evidence: [{ pageNumber: 1, quote: '总胆固醇 5.2 mmol/L' }] },
+      ] }),
+      rawResponseJson: '{}', promptTokens: 1, completionTokens: 1, elapsedMs: 1,
+    });
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    assert.equal(execution.result.fields.observations.length, 1);
+    assert.equal(execution.result.fields.observations[0]?.numericValue, 5.3);
+    assert.equal(execution.result.evidenceValidation?.rejectedObservations, 1);
+  });
+});
+
+test('single-result headers allow coordinate recovery when text column mapping misses the result', async () => {
+  await withReport(1, async ({ jobId, reportId }) => {
+    const raw = [
+      ['项目名称', '单位', '结果', '参考范围'],
+      ['总胆固醇', '5.3', 'mmol/L', '0-5.2'],
+    ].flatMap((row, rowIndex) => row.map((text, columnIndex) => ({
+      id: `header-row-${rowIndex}-${columnIndex}`,
+      text,
+      confidence: .99,
+      box: [50 + columnIndex * 180, 100 + rowIndex * 40, 150 + columnIndex * 180, 124 + rowIndex * 40],
+    })));
+    getDatabase().prepare('UPDATE ocr_results SET lines_json = ?').run(JSON.stringify(raw));
+    const executor: AiExecutor = async () => ({
+      provider: 'test', model: 'test', promptVersion: 'test',
+      ...normalizeAiExtraction({ observations: [
+        { itemName: '总胆固醇', resultText: '5.3', numericValue: 5.3, unit: 'mmol/L',
+          evidence: [{ pageNumber: 1, quote: '总胆固醇 5.3 mmol/L' }] },
+        { itemName: '总胆固醇', resultText: '5.2', numericValue: 5.2, unit: 'mmol/L',
+          evidence: [{ pageNumber: 1, quote: '总胆固醇 5.2 mmol/L' }] },
+      ] }),
+      rawResponseJson: '{}', promptTokens: 1, completionTokens: 1, elapsedMs: 1,
+    });
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    assert.equal(execution.result.fields.observations.length, 1);
+    assert.equal(execution.result.fields.observations[0]?.numericValue, 5.3);
+    assert.equal(execution.result.evidenceValidation?.rejectedObservations, 1);
+    persistAiExtraction(reportId, jobId, execution.result, execution.inputCharacters);
+    const persisted = getDatabase().prepare(`
+      SELECT numeric_value AS numericValue, evidence_json AS evidenceJson
+      FROM observations WHERE report_id = ?
+    `).all(reportId) as Array<{ numericValue: number; evidenceJson: string }>;
+    assert.equal(persisted.length, 1);
+    assert.equal(persisted[0]?.numericValue, 5.3);
+    assert.equal(JSON.parse(persisted[0]!.evidenceJson)[0].coordinateVerified, true);
+  });
+});
+
 test('result cell units keep the full text instead of partial hardcoded matches', async () => {
   await withReport(1, async ({ reportId, jobId }) => {
     // 回归：硬编码单位清单缺少 umol/L，L/L 在 (umol/L) 内提前匹配导致落库为 l/L；
@@ -1283,7 +1346,7 @@ test("merges duplicate indicator variants that resolve to the same OCR source ro
   ]);
 });
 
-test("deduplicates the same normalized indicator across report pages before persistence", async () => {
+test("preserves separate same-examination source rows during persistence", async () => {
   await withReport(9, async ({ reportId, jobId }) => {
     const executor: AiExecutor = async (input) => {
       const variants = [
@@ -1327,15 +1390,15 @@ test("deduplicates the same normalized indicator across report pages before pers
       referenceHigh: number | null;
       evidenceJson: string;
     }>;
-    assert.equal(stored.length, 1);
-    assert.equal(stored[0].numericValue, 5);
-    assert.equal(stored[0].referenceLow, 3.5);
-    assert.equal(stored[0].referenceHigh, 9.5);
-    assert.deepEqual(
-      (JSON.parse(stored[0].evidenceJson) as Array<{ pageNumber: number }>).map((item) => item.pageNumber),
-      [1, 9]
-    );
+    assert.equal(stored.length, 2);
+    assert.ok(stored.every(item => item.numericValue === 5));
+    const byPage = new Map(stored.map(item => [JSON.parse(item.evidenceJson)[0].pageNumber, item]));
+    assert.equal(byPage.get(1)?.referenceLow, null);
+    assert.equal(byPage.get(9)?.referenceLow, 3.5);
+    assert.equal(byPage.get(9)?.referenceHigh, 9.5);
+    assert.deepEqual([...byPage.keys()].sort((a,b)=>a-b), [1,9]);
   }, (pageNumber) => [
+    "报告编号：SYNTHETIC-EXAM", "采样时间：2026-09-01",
     pageNumber === 1
       ? "白细胞数目(WBC) 5.0 10^9/L 参考范围 3.5-9.5"
       : pageNumber === 9
@@ -1405,7 +1468,7 @@ test("blanks conflicting clinical fields instead of silently picking one when me
   }, () => ["空腹血糖 5.18 mmol/L 参考范围 3.9-6.1"]);
 });
 
-test("deduplicates low-quality summary and detail aliases using semantic fact identity", async () => {
+test("preserves summary and detail aliases when their examination identity cannot be verified", async () => {
   await withReport(1, async ({ reportId }) => {
     const base = {
       itemCode: null,
@@ -1435,11 +1498,10 @@ test("deduplicates low-quality summary and detail aliases using semantic fact id
         evidence: [{ pageNumber: 10, quote: "胱抑素C 1.23 mg/L 参考范围 0.5-1.0" }]
       }
     ]);
-    assert.equal(deduplicated.length, 1);
-    assert.equal(deduplicated[0].itemName, "胱抑素C");
-    assert.equal(deduplicated[0].referenceLow, 0.5);
-    assert.equal(deduplicated[0].referenceHigh, 1.0);
-    assert.deepEqual(deduplicated[0].evidence.map((item) => item.pageNumber), [4, 10]);
+    assert.equal(deduplicated.length, 2);
+    assert.deepEqual(deduplicated.map(item=>item.numericValue),[1.23,1.23]);
+    assert.deepEqual(deduplicated.flatMap(item=>item.evidence.map(e=>e.pageNumber)),[4,10]);
+    assert.equal(deduplicated.find(item=>item.itemName==="胱抑素C")?.referenceLow,0.5);
   });
 });
 
@@ -1919,6 +1981,74 @@ test("treats a checkup summary as redundant when the detailed local table has th
     "【一般检查】",
     "项目 | 本次结果 | 参考值 | 历史结果",
     "体重指数BMI | 24.9 ↑ | 18.5~23.9 | 24.8 ↑"
+  ]);
+});
+
+test("deduplicates AI partial evidence against a deterministic full-row table fallback", async () => {
+  await withReport(1, async ({ reportId, jobId }) => {
+    const raw = [
+      ["缩写", "项目名称", "结果", "单位", "参考区间", "方法学"],
+      ["17", "HDL-C★高密度脂蛋白胆固醇", "1.60", "mmol/L", "≥1", "直接法"],
+      ["GLO", "血清球蛋白", "26.7", "g/L", "20-40", "计算法"],
+      ["GLU", "血糖", "4.96", "mmol/L", "3.9-6.1", "已糖激酶法"],
+      ["eGFR", "肾小球滤过率（估算）", "124.71", "mL/min/1.73m²", "≥90", "估算法"],
+    ].flatMap((cells, row) => cells.map((text, column) => ({
+      id: `hdl-${row}-${column}`, text, confidence: .99,
+      box: [column * 200, row * 40, column * 200 + 100, row * 40 + 20],
+      tableCell: { table: "hdl-table", row, column, columns: 6 },
+    })));
+    getDatabase().prepare("UPDATE ocr_results SET lines_json = ?").run(JSON.stringify(raw));
+    const plan = buildAiExtractionPlan(reportId);
+    const localNames = plan.pages.flatMap((page) =>
+      page.lines.flatMap((line) =>
+        line.localObservations?.length
+          ? line.localObservations
+          : line.localObservation
+            ? [line.localObservation]
+            : [],
+      ),
+    ).map((item) => item.itemName);
+    for (const name of ["血清球蛋白", "血糖", "肾小球滤过率（估算）"])
+      assert.ok(localNames.some((candidate) => candidate.includes(name)), `${name}: ${localNames.join(" / ")}`);
+    const executor: AiExecutor = async () => {
+      const normalized = normalizeAiExtraction({
+        reportType: "laboratory",
+        observations: [
+          ["HDL-C★高密度脂蛋白胆固醇", "1.60", 1.6, "mmol/L"],
+          ["血清球蛋白", "26.7", 26.7, "g/L"],
+          ["血糖", "4.96", 4.96, "mmol/L"],
+          ["肾小球滤过率（估算）", "124.71", 124.71, "mL/min/1.73m²"],
+        ].map(([itemName, resultText, numericValue, unit]) => ({
+          itemName: String(itemName),
+          resultText: String(resultText),
+          numericValue: Number(numericValue),
+          unit: String(unit),
+          evidence: [{ pageNumber: 1, quote: `${itemName} | ${resultText}` }],
+        })),
+      });
+      return {
+        provider: "test", model: "test", promptVersion: "test", ...normalized,
+        rawResponseJson: "{}", promptTokens: 10, completionTokens: 5, elapsedMs: 1,
+      };
+    };
+    const execution = await executeAiExtractionPlan(jobId, reportId, executor);
+    const expected = new Map([
+      ["血清球蛋白", 26.7],
+      ["血糖", 4.96],
+      ["肾小球滤过率", 124.71],
+    ]);
+    for (const [name, value] of expected) {
+      const matches = execution.result.fields.observations.filter((item) =>
+        item.itemName.includes(name) && item.numericValue === value,
+      );
+      assert.equal(matches.length, 1, `${name} should only appear once`);
+    }
+  }, () => [
+    "缩写 | 项目名称 | 结果 | 单位 | 参考区间 | 方法学",
+    "17 | HDL-C★高密度脂蛋白胆固醇 | 1.60 | mmol/L | ≥1 | 直接法",
+    "GLO | 血清球蛋白 | 26.7 | g/L | 20-40 | 计算法",
+    "GLU | 血糖 | 4.96 | mmol/L | 3.9-6.1 | 已糖激酶法",
+    "eGFR | 肾小球滤过率（估算） | 124.71 | mL/min/1.73m² | ≥90 | 估算法",
   ]);
 });
 
@@ -3295,4 +3425,19 @@ test('keeps narrative findings and interpretive text that only names indicators'
     '中性粒细胞总数 4.36 109/L 参考范围 1.8-6.3',
     '血红蛋白 153 g/L 参考范围 130-175',
   ]);
+});
+
+test('omitted multi-date table rows are recovered locally and published with independent dates', async () => {
+  for (const structuredCells of [false,true]) await withReport(1, async ({ reportId,jobId }) => {
+    if (structuredCells) {
+      const cells=[['项目','2026-09-01','2026-09-08','单位','参考范围'],['丙氨酸氨基转移酶','120','80','U/L','0-40']].flatMap((row,r)=>row.map((text,c)=>({id:`cell-${r}-${c}`,text,confidence:.99,box:[c*100,r*40,c*100+90,r*40+20],tableCell:{table:'synthetic-table',row:r,column:c,columns:5}})));
+      getDatabase().prepare('UPDATE ocr_results SET lines_json=? WHERE page_id IN (SELECT id FROM report_pages WHERE report_id=?)').run(JSON.stringify([{text:'报告编号：SYNTHETIC',box:[0,-40,200,-20]},...cells]),reportId);
+    }
+    const executor:AiExecutor=async()=>({provider:'test',model:'test',promptVersion:'test',...normalizeAiExtraction({reportType:'laboratory',observations:[]}),rawResponseJson:'{}',promptTokens:1,completionTokens:1,elapsedMs:1});
+    const execution=await executeAiExtractionPlan(jobId,reportId,executor);
+    assert.deepEqual(execution.result.fields.observations.map(o=>[o.numericValue,o.examination?.timeText]),[[120,'2026-09-01'],[80,'2026-09-08']]);
+    persistAiExtraction(reportId,jobId,execution.result,execution.inputCharacters);
+    const rows=getDatabase().prepare(`SELECT o.numeric_value AS value,e.occurred_at AS time FROM observations o JOIN observation_examinations l ON l.observation_id=o.id JOIN report_examinations e ON e.id=l.examination_id WHERE o.report_id=? ORDER BY e.occurred_at`).all(reportId);
+    assert.deepEqual(rows.map(r=>[r.value,r.time]),[[120,'2026-09-01'],[80,'2026-09-08']]);
+  },()=>['报告编号：SYNTHETIC','肝功能','项目 | 2026-09-01 | 2026-09-08 | 单位 | 参考范围','丙氨酸氨基转移酶 | 120 | 80 | U/L | 0-40']);
 });

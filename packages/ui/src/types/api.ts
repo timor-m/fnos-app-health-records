@@ -518,6 +518,10 @@ export type ObservationEvidence = {
 };
 
 export type Observation = {
+  examinationId?: string | null;
+  examinationTime?: string | null;
+  examinationTimeKind?: string | null;
+  examinationTimeStatus?: string | null;
   id: string;
   reportId: string;
   sectionName: string | null;
@@ -561,6 +565,8 @@ export type MorphologyFinding = {
   id: string;
   reportId: string;
   examDate: string | null;
+  examinationId: string | null;
+  examinationTime: string | null;
   sectionName: string | null;
   organ: string | null;
   region: string | null;
@@ -599,6 +605,7 @@ export type MorphologyTrackingPoint = {
   reportTitle: string;
   reportStatus: string;
   reportIssuedAt: string | null;
+  examinationId: string | null;
   hospitalName: string | null;
   findingName: string;
   organ: string | null;
@@ -654,7 +661,8 @@ export type MorphologyTrackingSeries = {
     | "size_stable"
     | "presence_changed"
     | "classification_changed"
-    | "description_changed";
+    | "description_changed"
+    | "time_order_ambiguous";
   changeSummary: string;
   points: MorphologyTrackingPoint[];
 };
@@ -664,6 +672,7 @@ export type UntrackedMorphologyFinding = {
   reportId: string;
   reportTitle: string;
   reportIssuedAt: string | null;
+  examinationId: string | null;
   hospitalName: string | null;
   findingName: string;
   organ: string | null;
@@ -716,6 +725,14 @@ export type TrendExcludedPoint = {
 };
 
 export type TrendPoint = {
+  duplicateSources?: Array<{observationId:string;reportId:string;reportTitle:string;examinationId:string|null;pageNumber:number|null}>;
+  examinationConflict?: boolean;
+  timeOrderAmbiguous?: boolean;
+  examinationId?: string | null;
+  timeKind?: string;
+  timePrecision?: string;
+  timeStatus?: string;
+  timeText?: string | null;
   comparisonMethod?: string | null;
   comparisonSpecimen?: string | null;
   observationId: string;

@@ -140,6 +140,7 @@ type FindingRow = {
   reportStatus: string;
   hospitalName: string | null;
   examDate: string | null;
+  examinationId: string | null;
   sectionName: string | null;
   organ: string | null;
   region: string | null;
@@ -192,6 +193,7 @@ export type MorphologyTrackingPoint = {
   reportTitle: string;
   reportStatus: string;
   reportIssuedAt: string | null;
+  examinationId: string | null;
   hospitalName: string | null;
   findingName: string;
   organ: string | null;
@@ -247,7 +249,8 @@ export type MorphologyTrackingSeries = {
     | "size_stable"
     | "presence_changed"
     | "classification_changed"
-    | "description_changed";
+    | "description_changed"
+    | "time_order_ambiguous";
   changeSummary: string;
   points: MorphologyTrackingPoint[];
 };
@@ -257,6 +260,7 @@ export type UntrackedMorphologyFinding = {
   reportId: string;
   reportTitle: string;
   reportIssuedAt: string | null;
+  examinationId: string | null;
   hospitalName: string | null;
   findingName: string;
   organ: string | null;
@@ -454,7 +458,9 @@ function trackingRows(memberId?: string) {
     SELECT f.id, f.report_id AS reportId, r.member_id AS memberId,
       r.title AS reportTitle, r.status AS reportStatus,
       r.hospital_name_raw AS hospitalName,
-      COALESCE(r.examined_at, r.report_issued_at, r.created_at) AS examDate,
+      CASE WHEN l.finding_id IS NOT NULL THEN e.occurred_at
+        ELSE COALESCE(r.examined_at, r.report_issued_at, r.created_at) END AS examDate,
+      l.examination_id AS examinationId,
       f.section_name AS sectionName, f.organ, f.region, f.laterality,
       f.finding_type AS findingType, f.finding_name AS findingName,
       f.presence, f.finding_count AS findingCount,
@@ -470,6 +476,8 @@ function trackingRows(memberId?: string) {
       f.source, f.manual_fields_json AS manualFieldsJson
     FROM morphology_findings f
     JOIN reports r ON r.id = f.report_id
+    LEFT JOIN morphology_finding_examinations l ON l.finding_id=f.id
+    LEFT JOIN report_examinations e ON e.id=l.examination_id
     WHERE r.status IN ('needs_review', 'ready')
       AND (? IS NULL OR r.member_id = ?)
       AND NOT EXISTS (
@@ -837,6 +845,20 @@ function trackingSeriesName(descriptor: TrackingDescriptor) {
 }
 
 function changeSummary(points: MorphologyTrackingPoint[]) {
+  const sameDayExaminations = new Map<string, Set<string>>();
+  const timesByDay = new Map<string, Set<string>>();
+  for (const point of points) {
+    if (!point.examinationId || !point.reportIssuedAt) continue;
+    const day = point.reportIssuedAt.slice(0, 10);
+    sameDayExaminations.set(day, new Set([...(sameDayExaminations.get(day) || []), point.examinationId]));
+    timesByDay.set(day, new Set([...(timesByDay.get(day) || []), point.reportIssuedAt]));
+  }
+  const unorderedSameDay = [...sameDayExaminations].some(([day, examinations]) => {
+    if (examinations.size < 2) return false;
+    const times = [...(timesByDay.get(day) || [])];
+    return times.length < examinations.size || times.some((time) => time.length === 10) || times.length === 1;
+  });
+  if (unorderedSameDay) return { kind: "time_order_ambiguous" as const, summary: "同日多次检查先后不明，暂不判断变化" };
   const latest = points.at(-1)!;
   const previous = points.length > 1 ? points.at(-2)! : null;
   if (!previous) return { kind: "baseline" as const, summary: "目前只有一次报告记录" };
@@ -910,8 +932,9 @@ export function listMorphologyTracking(user: RequestUser, memberId: string) {
     const { descriptor } = presentation;
     const byReport = new Map<string, FindingRow>();
     for (const row of groupRows) {
-      const existing = byReport.get(row.reportId);
-      if (!existing || pointRichness(row) > pointRichness(existing)) byReport.set(row.reportId, row);
+      const key = row.examinationId ? `examination:${row.examinationId}` : `report:${row.reportId}`;
+      const existing = byReport.get(key);
+      if (!existing || pointRichness(row) > pointRichness(existing)) byReport.set(key, row);
     }
     const selectedRows = [...byReport.values()].sort((left, right) =>
       String(left.examDate || "").localeCompare(String(right.examDate || ""))
@@ -926,6 +949,7 @@ export function listMorphologyTracking(user: RequestUser, memberId: string) {
         reportTitle: row.reportTitle,
         reportStatus: row.reportStatus,
         reportIssuedAt: row.examDate,
+        examinationId: row.examinationId,
         hospitalName: row.hospitalName,
         findingName: row.findingName,
         organ: row.organ,
@@ -951,6 +975,7 @@ export function listMorphologyTracking(user: RequestUser, memberId: string) {
         sourcePage: evidence ? pages.get(`${row.reportId}:${evidence.pageNumber}`) || null : null
       };
       const duplicateKey = [
+        row.examinationId || `report:${row.reportId}`,
         String(row.examDate || "").slice(0, 10),
         compactKey(row.hospitalName),
         row.presence,
@@ -993,6 +1018,7 @@ export function listMorphologyTracking(user: RequestUser, memberId: string) {
       reportId: row.reportId,
       reportTitle: row.reportTitle,
       reportIssuedAt: row.examDate,
+      examinationId: row.examinationId,
       hospitalName: row.hospitalName,
       findingName: row.findingName,
       organ: normalizeMorphologyOrgan(row.organ || row.findingName),

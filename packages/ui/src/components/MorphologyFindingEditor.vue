@@ -118,7 +118,7 @@ async function save() {
           </div>
           <div class="morphology-editor-original"><span>原文备案</span><p>{{ finding.rawText || "原报告未提供原文证据" }}</p></div>
           <p v-if="error" class="inline-panel-error">{{ error }}</p>
-          <footer>
+          <footer class="form-actions morphology-editor-actions">
             <button type="button" @click="emit('close')">取消</button>
             <button class="primary-button" type="submit" :disabled="saving">
               <LoaderCircle v-if="saving" class="spin-icon" :size="16" />{{ saving ? "保存中" : "保存校对" }}

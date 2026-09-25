@@ -11,6 +11,8 @@ import { bootstrapLocalAdministrator,createLocalAccount,setLocalAccountDisabled,
 import { createMember,setMemberPermission,assertMemberAccess,assertMemberManage,assertMemberShare,updateMember,listMemberSharingAccounts,setMembersPermission } from '../services/member.service';
 import { getAccountPreferences,updateAccountPreferences,setMemberHidden } from '../services/member-preferences.service';
 import { listMembers,listReports,createFullBackup,preflightStoredBackup,restoreBackup,getReportDetail } from '../services/records.service';
+import { getReportExaminations,saveReportExamination } from '../services/report-examination.service';
+import { setExaminationDuplicateDecision,examinationDuplicateResolver } from '../services/examination-duplicate.service';
 import { getDeploymentIdentity } from '../utils/deployment-identity';
 import { getRequestUser } from '../utils/request-user';
 import type { H3Event } from 'h3';
@@ -72,18 +74,57 @@ test('same-instance restore preserves ordinary credentials, viewer grants, prefe
  setMemberPermission(a,self.id,{userId:admin.id,permission:'viewer',version:0});
  setMemberHidden(admin,self.id,true);updateAccountPreferences(b,{selfProfileChoice:'skipped'});
  const db=getDatabase();const accountBefore=db.prepare('SELECT * FROM local_accounts WHERE user_id=?').get(a.id);
+ db.prepare("INSERT INTO reports(id,member_id,created_by,report_type,title,status) VALUES('examination-report',?,?,'laboratory','合成检查','ready')").run(self.id,a.id);
+ db.exec("INSERT INTO observations(id,report_id,item_name,result_text) VALUES('examination-observation','examination-report','合成指标','80')");
+ const initial=getReportExaminations(a,'examination-report');
+ const examinationBefore=saveReportExamination(a,'examination-report',{version:initial.version,reportVersion:initial.reportVersion,requestKey:'restore-test',examination:{sampledAt:'2026-09-08',examinationType:'检验',timeText:'采样日期：2026-09-08'},observationIds:['examination-observation']});
  const backup=createFullBackup(admin);
  db.prepare("UPDATE local_accounts SET username='renamed-admin' WHERE user_id=?").run(admin.id);
  db.prepare("UPDATE user_identities SET subject='renamed-admin' WHERE user_id=? AND provider='local'").run(admin.id);
  const plan=preflightStoredBackup(admin,backup.id);assert.equal(plan.strategy,'same');
  db.prepare("UPDATE health_members SET display_name='备份之后' WHERE id=?").run(self.id);
  const result=restoreBackup(admin,backup.id,plan.token);assert.equal(result.identityRebind.memberPermissionCount,0);
+ assert.deepEqual(getReportExaminations(a,'examination-report'),examinationBefore);
+ assert.deepEqual(getReportExaminations(admin,'examination-report'),examinationBefore);
  assert.equal(assertMemberAccess(admin,self.id),'viewer');assert.throws(()=>assertMemberManage(admin,self.id),status(403));
  assert.deepEqual(getDatabase().prepare('SELECT * FROM local_accounts WHERE user_id=?').get(a.id),accountBefore);
  assert.equal(getAccountPreferences(a)!.selfMemberId,self.id);assert.equal(listMembers(admin)[0].hidden,1);
  assert.equal(getDatabase().prepare('SELECT COUNT(*) AS n FROM auth_sessions').get()!.n,0);
  assert.equal(getDatabase().prepare('SELECT username FROM local_accounts WHERE user_id=?').get(admin.id)!.username,'renamed-admin');
  assert.equal(getDatabase().prepare("SELECT COUNT(*) AS n FROM user_identities WHERE user_id=? AND provider='local'").get(admin.id)!.n,1);
+}));
+
+test('backup restores explicit examination relationships and keeps revocation effective',()=>setup((_dir,admin,a,b)=>{
+ const member=createMember(a,{displayName:'合成档案',relationship:'other'});
+ setMemberPermission(a,member.id,{userId:b.id,permission:'viewer',version:0});
+ const db=getDatabase();
+ for(const id of ['source-a','source-b']) {
+  db.prepare("INSERT INTO reports(id,member_id,created_by,report_type,title,status) VALUES(?,?,?,'laboratory','合成检查','ready')").run(id,member.id,a.id);
+  db.prepare("INSERT INTO report_examinations(id,report_id,source_key,occurred_at,time_kind,confirmation_status,evidence_json) VALUES(?,?,'synthetic','2026-09-08','sampled','confirmed',?)").run(id,id,JSON.stringify([{pageNumber:1,quote:'合成时间证据'}]));
+ }
+ const versions=()=>['source-a','source-b'].map(id=>Number(getDatabase().prepare('SELECT source_version FROM reports WHERE id=?').get(id)!.source_version));
+ let [leftVersion,rightVersion]=versions();
+ setExaminationDuplicateDecision(a,{leftId:'source-a',rightId:'source-b',leftVersion,rightVersion,decision:'same'});
+ const before=getReportExaminations(b,'source-a');
+ const backup=createFullBackup(admin);
+ [leftVersion,rightVersion]=versions();
+ setExaminationDuplicateDecision(a,{leftId:'source-a',rightId:'source-b',leftVersion,rightVersion,decision:'different'});
+ assert.equal(examinationDuplicateResolver()('source-a','source-b'),false);
+ const plan=preflightStoredBackup(admin,backup.id);
+ restoreBackup(admin,backup.id,plan.token);
+ assert.deepEqual(getReportExaminations(b,'source-a'),before);
+ assert.equal(examinationDuplicateResolver()('source-a','source-b'),true);
+ assert.throws(()=>getReportExaminations(admin,'source-a'),status(403));
+ [leftVersion,rightVersion]=versions();
+ assert.throws(()=>setExaminationDuplicateDecision(b,{leftId:'source-a',rightId:'source-b',leftVersion,rightVersion,decision:'different'}),status(403));
+ setExaminationDuplicateDecision(a,{leftId:'source-a',rightId:'source-b',leftVersion,rightVersion,decision:'different'});
+ const unlinked=createFullBackup(admin);
+ const unlinkPlan=preflightStoredBackup(admin,unlinked.id);
+ restoreBackup(admin,unlinked.id,unlinkPlan.token);
+ assert.equal(examinationDuplicateResolver()('source-a','source-b'),false,'explicit unlink survives a second restore');
+ setMemberPermission(a,member.id,{userId:b.id,permission:null,version:1});
+ assert.throws(()=>getReportExaminations(b,'source-a'),status(403));
+ assert.equal(getDatabase().prepare('SELECT COUNT(*) AS n FROM report_examinations').get()!.n,2);
 }));
 
 test('cross-instance restore isolates identities despite matching IDs and enables explicit mapping preview',()=>setup((dir,admin,a)=>{
@@ -242,4 +283,21 @@ test('batch sharing is atomic for version, scope and last-manager failures',()=>
  const alien=createMember(admin,{displayName:'无权范围',relationship:'other'});
  assert.throws(()=>setMembersPermission(a,{members:[{memberId:first.id,version:2},{memberId:alien.id,version:0}],userId:b.id,permission:'viewer'}),status(403));
  assertMemberShare(b,first.id);
+}));
+
+test('restoring an older backup without examination tables preserves unlinked observations without inference',()=>setup((_dir,admin,a)=>{
+ const member=createMember(a,{displayName:'合成旧档案',relationship:'other'});
+ const db=getDatabase();
+ db.prepare("INSERT INTO reports(id,member_id,created_by,report_type,title,status,report_issued_at) VALUES('old-exam-report',?,?,'laboratory','合成旧报告','ready','2025-01-02')").run(member.id,a.id);
+ db.exec("INSERT INTO observations(id,report_id,item_name,result_text) VALUES('old-exam-observation','old-exam-report','合成指标','80'); DROP TABLE observation_examinations; DROP TABLE report_examinations; DROP TABLE report_examination_state;");
+ const backup=createFullBackup(admin);
+ const plan=preflightStoredBackup(admin,backup.id);
+ restoreBackup(admin,backup.id,plan.token);
+ const result=getReportExaminations(a,'old-exam-report');
+ assert.equal(result.examinations.length,0);
+ assert.equal(result.observations.length,1);
+ assert.equal(result.observations[0].resultText,'80');
+ assert.equal(result.observations[0].examinationId,null);
+ assert.equal(getDatabase().prepare('SELECT COUNT(*) AS n FROM processing_jobs').get()!.n,0);
+ assert.throws(()=>getReportExaminations(admin,'old-exam-report'),status(403));
 }));

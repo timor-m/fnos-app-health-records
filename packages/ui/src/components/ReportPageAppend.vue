@@ -186,7 +186,7 @@ const triggerLabel = computed(() => {
   const states: Record<string, string> = {
     uploading: "待上传",
     preparing: "准备中",
-    ready: "待提交",
+    ready: "待选页",
     ocr: "OCR中",
     review: "待核对",
     ai: "AI整理中",
@@ -232,7 +232,7 @@ const stageDetail = computed(() => {
   if (b.state === "normalizing")
     return "正在保存整理结果，完成后报告指标会自动更新。";
   if (b.state === "ready")
-    return "页面已准备好。确认勾选后点击“补充并识别”，才会加入当前报告并开始整理。";
+    return "页面预览已准备好，OCR 尚未开始。选择页面并确认顺序与方向后点击“补充并识别”；之后会自动进行 OCR 和 AI 整理，只有发现内容冲突时才会暂停核对。";
   if (b.state === "review")
     return "新页面尚未加入报告，请先核对疑点并确认继续。";
   if (b.state === "complete")
@@ -603,7 +603,7 @@ async function importNas() {
             <p class="append-muted">
               将页面补充到当前报告（已有
               {{ oldPageCount }}
-              页）。仅用于同一份报告的漏页，不同日期或检查批次请单独上传。
+              页）。可补充当前成员的漏页或其他检查；不同日期的检查分别记录，时间不明确时需核对。
             </p>
             <p v-if="error" role="alert" class="append-error">{{ error }}</p>
             <template v-if="!batch">
@@ -982,7 +982,7 @@ async function importNas() {
                 </li>
               </ul>
               <p v-if="batch.state === 'review'" class="append-muted">
-                这些页面尚未加入正式报告。请对照已有原件，可以取消勾选疑点页；确认保留的页面属于同一成员、同一次报告后再继续。
+                这些页面尚未加入正式报告。请对照已有原件，可以取消勾选疑点页；确认保留的页面属于当前成员，并需要归档到本报告后再继续。
               </p>
             </template>
           </div>

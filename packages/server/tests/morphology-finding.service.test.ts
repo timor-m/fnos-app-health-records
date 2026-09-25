@@ -17,6 +17,7 @@ import {
 } from "../services/morphology-finding.service.ts";
 import type { RequestUser } from "../domain/request-user.ts";
 import { normalizeAiExtraction, persistAiExtraction } from "../services/ai-extraction.service.ts";
+import { backfillMorphologyExaminationAssignments } from "../services/report-examination-inference.service.ts";
 
 test("moves only clear unmatched legacy morphology rows and remains idempotent", () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-morphology-"));
@@ -504,4 +505,50 @@ test("conservatively links morphology findings into member-scoped timelines", ()
     delete process.env.STORAGE_DIR;
     rmSync(storageDir, { recursive: true, force: true });
   }
+});
+
+test("shows two dated morphology findings from one report as separate timeline points",()=>{
+ const storageDir=mkdtempSync(join(tmpdir(),"health-records-morphology-examinations-"));process.env.STORAGE_DIR=storageDir;
+ const owner:RequestUser={id:"user-1",displayName:"测试用户",provider:"development",authenticated:true,isGatewayAdmin:false};
+ try{
+  const db=getDatabase();db.exec(`INSERT INTO users(id,display_name) VALUES('user-1','测试用户');
+   INSERT INTO health_members(id,display_name,created_by) VALUES('member-1','本人','user-1');
+   INSERT INTO member_permissions(member_id,user_id,permission,granted_by) VALUES('member-1','user-1','manager','user-1');
+   INSERT INTO reports(id,member_id,created_by,report_type,title,status,hospital_name_raw,report_issued_at) VALUES('same-report','member-1','user-1','checkup','合并报告','ready','示例医院','2026-09-20');
+   INSERT INTO report_examinations(id,report_id,source_key,occurred_at,confirmation_status) VALUES
+    ('exam-a','same-report','a','2026-09-01','confirmed'),('exam-b','same-report','b','2026-09-08','confirmed'),
+    ('exam-c','same-report','c','2026-09-10','confirmed'),('exam-d','same-report','d','2026-09-10','confirmed');
+   INSERT INTO morphology_findings(id,report_id,organ,laterality,finding_type,finding_name,presence,size_length,size_unit,raw_text,tracking_group_id,match_confidence) VALUES
+    ('finding-a','same-report','胆囊','unspecified','息肉','胆囊息肉','present',4,'mm','胆囊息肉4mm','same-polyp',1),
+    ('finding-b','same-report','胆囊','unspecified','息肉','胆囊息肉','present',7,'mm','胆囊息肉7mm','same-polyp',1),
+    ('finding-c','same-report','胆囊','unspecified','息肉','胆囊息肉','present',9,'mm','胆囊息肉9mm','same-polyp',1),
+    ('finding-d','same-report','胆囊','unspecified','息肉','胆囊息肉','present',12,'mm','胆囊息肉12mm','same-polyp',1);
+   INSERT INTO morphology_finding_examinations(finding_id,examination_id,assignment_source) VALUES
+    ('finding-a','exam-a','manual'),('finding-b','exam-b','manual'),('finding-c','exam-c','manual'),('finding-d','exam-d','manual');`);
+  const series=listMorphologyTracking(owner,"member-1").series.find(item=>item.trackingGroupId==='same-polyp');
+  assert.ok(series);assert.equal(series.pointCount,4);
+  assert.deepEqual(series.points.map(point=>[point.reportIssuedAt,point.examinationId,point.size.primaryMm]),[['2026-09-01','exam-a',4],['2026-09-08','exam-b',7],['2026-09-10','exam-c',9],['2026-09-10','exam-d',12]]);
+  assert.equal(series.changeKind,'time_order_ambiguous');
+  assert.equal(series.changeSummary,'同日多次检查先后不明，暂不判断变化');
+ }finally{closeDatabaseForTests();process.env.STORAGE_DIR=undefined;rmSync(storageDir,{recursive:true,force:true});}
+});
+
+test("backfills only morphology dates proven by existing OCR evidence",()=>{
+ const storageDir=mkdtempSync(join(tmpdir(),"health-records-morphology-date-backfill-"));process.env.STORAGE_DIR=storageDir;
+ try{
+  const db=getDatabase();db.exec(`INSERT INTO users(id,display_name) VALUES('owner','测试用户');
+   INSERT INTO health_members(id,display_name,created_by) VALUES('member','本人','owner');
+   INSERT INTO member_permissions(member_id,user_id,permission,granted_by) VALUES('member','owner','manager','owner');
+   INSERT INTO reports(id,member_id,created_by,report_type,title,status,report_issued_at) VALUES('report','member','owner','imaging','合并报告','ready','2026-09-20');
+   INSERT INTO report_pages(id,report_id,page_number,original_name,storage_path,mime_type,file_size,sha256) VALUES('page','report',1,'synthetic','synthetic','image/png',1,'synthetic');
+   INSERT INTO processing_jobs(id,report_id,page_id,job_type,pipeline_version,deduplication_key,status) VALUES('ocr-job','report','page','ocr','test','ocr-job','completed');
+   INSERT INTO ocr_results(id,job_id,page_id,engine,model_version,lines_json) VALUES('ocr','ocr-job','page','test','test', '[{"text":"检查日期：2026-09-01"},{"text":"肝囊肿约4mm"}]');
+   INSERT INTO morphology_findings(id,report_id,organ,finding_type,finding_name,raw_text,evidence_json) VALUES
+    ('dated','report','肝脏','囊肿','肝囊肿','肝囊肿约4mm','[{"pageNumber":1,"quote":"肝囊肿约4mm"}]'),
+    ('unclear','report','胆囊','息肉','胆囊息肉','胆囊息肉','[{"pageNumber":1,"quote":"missing row"}]');`);
+  assert.deepEqual(backfillMorphologyExaminationAssignments(),{scanned:2,assigned:1,alreadyCompleted:false});
+  assert.equal(db.prepare("SELECT e.occurred_at AS date FROM morphology_finding_examinations l JOIN report_examinations e ON e.id=l.examination_id WHERE l.finding_id='dated'").get()?.date,'2026-09-01');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM morphology_finding_examinations WHERE finding_id='unclear'").get()?.n,0);
+  assert.deepEqual(backfillMorphologyExaminationAssignments(),{scanned:0,assigned:0,alreadyCompleted:true});
+ }finally{closeDatabaseForTests();delete process.env.STORAGE_DIR;rmSync(storageDir,{recursive:true,force:true});}
 });

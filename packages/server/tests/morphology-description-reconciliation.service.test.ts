@@ -128,6 +128,24 @@ test("does not merge a descriptor from the opposite side or a page without match
   );
 });
 
+test("keeps otherwise identical morphology findings from explicitly different examination dates", () => {
+  const dated = (date: string) => finding({
+    rawText: "肝右叶囊肿",
+    evidence: [{
+      pageNumber: 18,
+      quote: "肝右叶囊肿",
+      table: {
+        headerText: `项目 | ${date}`,
+        headerSourceLineIds: [],
+        rowSourceLineIds: [],
+        resultColumn: { index: 1, headerText: date, selectionBasis: "explicit_current_result_header" },
+      },
+    }],
+  });
+  assert.equal(deduplicateReportMorphologyFindings([dated("2026-09-01"), dated("2026-09-08")]).length, 2);
+  assert.equal(deduplicateReportMorphologyFindings([dated("2026-09-01"), dated("2026-09-01")]).length, 1);
+});
+
 
 test("recovers a labeled single diameter from compatible evidence without leaking it into another finding", () => {
   const detail =

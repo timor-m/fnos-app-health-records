@@ -175,7 +175,7 @@ const worker: WorkerExecutor = async (request) =>
           },
           {
             id: "golden_date",
-            text: "报告日期 2026-08-06",
+            text: "报告编号：SYNTHETIC 报告日期 2026-08-06",
             confidence: 0.99,
             box: [0, 12, 120, 22],
           },

@@ -7,6 +7,7 @@ import {
 } from "@lucide/vue";
 import ClinicalFactEditor from "./ClinicalFactEditor.vue";
 import ReportNotesPanel from './ReportNotesPanel.vue';
+import ObservationTimeEditor from './ObservationTimeEditor.vue';
 import ReportScrollingTitle from "./ReportScrollingTitle.vue";
 import ReportPageAppend from './ReportPageAppend.vue';
 import DateTimePicker from "./DateTimePicker.vue";
@@ -750,6 +751,18 @@ async function searchObservationCatalog() {
   }
 }
 
+function observationSourceLabel(item: ReportDetail["observations"][number]) {
+  const page = detail.value?.pages.find((page) => page.id === item.evidence?.pageId);
+  const time = item.examinationId ? item.examinationTime : detail.value?.reportIssuedAt;
+  const date = time?.match(/^\d{4}-\d{2}-\d{2}/)?.[0] || (item.examinationId ? "时间待确认" : "日期未注明");
+  return `${page ? `P${page.pageNumber}` : "P?"}·${date}`;
+}
+function selectObservation(item: ReportDetail["observations"][number]) {
+  selectedObservationId.value=item.id;
+  const pageIndex=detail.value?.pages.findIndex(page=>page.id===item.evidence?.pageId) ?? -1;
+  observationSourcePageIndex.value=pageIndex>=0?pageIndex:0;
+  observationEditorOpen.value=false;
+}
 function openObservationEditor(item?: ReportDetail["observations"][number]) {
   selectedObservationId.value = item?.id || null;
   const evidencePageIndex = item?.evidence?.pageId
@@ -1053,6 +1066,15 @@ function morphologyLocationLine(item: ReportDetail["morphologyFindings"][number]
     item.organ,
     item.region
   ].filter(Boolean).join(" · ") || item.sectionName || "部位未明确";
+}
+
+function morphologySourceLabel(item: ReportDetail["morphologyFindings"][number]) {
+  const page = morphologyEvidenceItems(item)[0]?.pageNumber;
+  const date = item.examinationId ? item.examinationTime : item.examDate;
+  const dateLabel = item.examinationId
+    ? date?.slice(0, 10) || "时间待确认"
+    : date ? `${date.slice(0, 10)}·报告日期` : "时间待确认";
+  return `${page ? `P${page}·` : ""}${dateLabel}`;
 }
 
 function morphologyClassificationLine(item: ReportDetail["morphologyFindings"][number]) {
@@ -1666,19 +1688,7 @@ function startEventPolling(jobId: string) {
   eventTimer = setInterval(() => { void loadJobEvents(jobId, true); }, 2000);
 }
 
-const appendProcessingState = ref("");
-const appendProcessingLabel = computed(() => ({
-  complete_review: "补页完成，部分内容待核对，请对照原件核对指标",
-  uploading: "等待上传补充文件", preparing: "正在读取补充文件并生成预览", ready: "补充页面待选择提交",
-  ocr: "正在识别补充页面（OCR）", review: "补充页面需要核对，请打开补充报告页确认",
-  ai: "正在结合整份报告进行 AI 整理", normalizing: "正在更新识别结果和指标索引",
-  failed: "补页处理失败，旧结果已保留，请打开补充报告页重试",
-  ocr_only: "补充原件与 OCR 已保存，尚未完成 AI 整理",
-}[appendProcessingState.value] || ""));
-const appendProcessingActive = computed(() => ["preparing", "ocr", "ai", "normalizing"].includes(appendProcessingState.value));
-watch(() => props.reportId, () => { appendProcessingState.value = ""; });
-async function syncAppendProcessing(state: string) {
-  appendProcessingState.value = state;
+async function syncAppendProcessing() {
   const reportId = props.reportId;
   await Promise.all([refreshJobs(true), loadDetail(reportId, true)]);
 }
@@ -2207,7 +2217,7 @@ onActivated(() => {
             <article v-for="item in detail.morphologyFindings" :key="item.id">
               <div class="morphology-heading">
                 <div>
-                  <strong>{{ item.findingName }}<em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
+                  <strong>{{ item.findingName }}<em class="morphology-source-label">{{ morphologySourceLabel(item) }}</em><em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
                   <span>{{ morphologyLocationLine(item) }}</span>
                 </div>
                 <div class="morphology-heading-actions">
@@ -2263,9 +2273,9 @@ onActivated(() => {
           </header>
           <div class="observation-list">
             <article v-for="item in visibleObservations" :key="item.id">
-              <div class="observation-title"><strong>{{ item.itemName }}</strong><IndicatorHint v-if="observationAttentionHint(item)" :text="observationAttentionHint(item)" label="查看指标待核对提示" /></div>
+              <div class="observation-title"><strong>{{ item.itemName }}</strong><IndicatorHint v-if="observationAttentionHint(item)" :text="observationAttentionHint(item)" label="查看指标待核对提示" /><span class="observation-source-label">{{ observationSourceLabel(item) }}</span></div>
               <p>{{ observationValueLine(item) }}<IndicatorHint v-if="observationComputedFlagHint(item)" :text="observationComputedFlagHint(item)" :label="`${item.itemName}的异常标记说明`"><template #trigger="{ toggle, open, panelId }"><button type="button" class="observation-flag" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined" :aria-expanded="open" :aria-controls="open ? panelId : undefined" @click="toggle">{{ observationFlagLabel(item) }}</button></template></IndicatorHint><em v-else-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
-              <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
+                <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
             </article>
           </div>
           <div class="observation-panel-footer">
@@ -2354,7 +2364,6 @@ onActivated(() => {
           </button>
         </div>
       </div>
-      <p v-if="appendProcessingLabel" class="report-append-notice" role="status"><LoaderCircle v-if="appendProcessingActive" :size="16" class="spin-icon" /><CircleAlert v-else :size="16" /><span>{{ appendProcessingLabel }}</span></p>
       <div v-if="currentJobs.length" class="job-progress-compact">
         <div class="job-progress-bar" role="progressbar" :aria-valuenow="progressPercent" aria-valuemin="0" aria-valuemax="100">
           <span :style="{ width: `${progressPercent}%` }"></span>
@@ -2465,8 +2474,6 @@ onActivated(() => {
         </button>
         <ReportPageAppend v-if="app.session.value?.authenticated && canManageReport && detail && detail.status !== 'trashed'" :key="reportId" :report-id="reportId" :old-page-count="detail.pages.length" :report-title="detail.title" :member-name="app.allMembers.value.find(member => member.id === detail?.memberId)?.displayName" :busy="detail.status === 'processing'" @state-changed="syncAppendProcessing" @updated="emit('updated')" />
       </div>
-      <p v-if="detail?.pageAppend && detail.pageAppend.recognizedRevision !== detail.pageAppend.originalRevision" class="report-append-notice" role="status"><LoaderCircle v-if="detail.pageAppend.state === 'ai'" :size="16" class="spin-icon" /><CircleAlert v-else :size="16" /><span>{{ detail.pageAppend.state === 'ai' ? '正在结合新增页面重新识别，当前显示上一版指标。' : '原件已补充，当前显示上一版指标，尚未完成新的 AI 整理。' }}</span></p>
-      <div v-if="detail?.pageAppend?.reviewWarnings?.length" class="report-append-notice" role="status"><CircleAlert :size="16" /><div><strong>补页完成，部分内容待核对</strong><ul><li v-for="warning in detail.pageAppend.reviewWarnings" :key="warning">{{ warning }}</li></ul></div></div>
       <div v-if="detail?.pages.length" class="original-grid">
         <div v-for="(page, index) in detail.pages" :key="page.id" class="original-tile-card">
           <button type="button" class="original-tile" :disabled="savingPages" @click="openOriginalViewer(index)">
@@ -2522,14 +2529,14 @@ onActivated(() => {
                 :key="item.id"
                 :class="{ 'is-selected': selectedObservationId === item.id }"
                 tabindex="0"
-                @click="openObservationEditor(item)"
-                @keydown.enter.prevent="openObservationEditor(item)"
-                @keydown.space.prevent="openObservationEditor(item)"
+                @click="selectObservation(item)"
+                @keydown.enter.prevent="selectObservation(item)"
+                @keydown.space.prevent="selectObservation(item)"
               >
-              <div class="observation-title"><strong>{{ item.itemName }}</strong><IndicatorHint v-if="observationAttentionHint(item)" :text="observationAttentionHint(item)" label="查看指标待核对提示" /></div>
+              <div class="observation-title"><strong>{{ item.itemName }}</strong><IndicatorHint v-if="observationAttentionHint(item)" :text="observationAttentionHint(item)" label="查看指标待核对提示" /><span class="observation-source-label">{{ observationSourceLabel(item) }}</span></div>
                 <p>{{ observationValueLine(item) }}<IndicatorHint v-if="observationComputedFlagHint(item)" :text="observationComputedFlagHint(item)" :label="`${item.itemName}的异常标记说明`"><template #trigger="{ toggle, open, panelId }"><button type="button" class="observation-flag" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined" :aria-expanded="open" :aria-controls="open ? panelId : undefined" @click="toggle">{{ observationFlagLabel(item) }}</button></template></IndicatorHint><em v-else-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
-                <button class="observation-edit-button" type="button" title="编辑指标" @click.stop="openObservationEditor(item)"><Pencil :size="15" /></button>
-                <button class="observation-edit-button observation-delete-button" type="button" title="删除指标" aria-label="删除指标" @click.stop="removeObservation(item)"><Trash2 :size="15" /></button>
+                <button v-if="canManageReport" class="observation-edit-button" type="button" title="编辑指标" @click.stop="openObservationEditor(item)"><Pencil :size="15" /></button>
+                <button v-if="canManageReport" class="observation-edit-button observation-delete-button" type="button" title="删除指标" aria-label="删除指标" @click.stop="removeObservation(item)"><Trash2 :size="15" /></button>
                 <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}<em v-if="item.manualReviewed" class="observation-manual-chip">人工校对</em></span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
               </article>
             </div>
@@ -2542,14 +2549,14 @@ onActivated(() => {
                 :key="item.id"
                 :class="{ 'is-selected': selectedObservationId === item.id }"
                 tabindex="0"
-                @click="openObservationEditor(item)"
-                @keydown.enter.prevent="openObservationEditor(item)"
-                @keydown.space.prevent="openObservationEditor(item)"
+                @click="selectObservation(item)"
+                @keydown.enter.prevent="selectObservation(item)"
+                @keydown.space.prevent="selectObservation(item)"
               >
-              <div class="observation-title"><strong>{{ item.itemName }}</strong><IndicatorHint v-if="observationAttentionHint(item)" :text="observationAttentionHint(item)" label="查看指标待核对提示" /></div>
+              <div class="observation-title"><strong>{{ item.itemName }}</strong><IndicatorHint v-if="observationAttentionHint(item)" :text="observationAttentionHint(item)" label="查看指标待核对提示" /><span class="observation-source-label">{{ observationSourceLabel(item) }}</span></div>
                 <p>{{ observationValueLine(item) }}<IndicatorHint v-if="observationComputedFlagHint(item)" :text="observationComputedFlagHint(item)" :label="`${item.itemName}的异常标记说明`"><template #trigger="{ toggle, open, panelId }"><button type="button" class="observation-flag" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined" :aria-expanded="open" :aria-controls="open ? panelId : undefined" @click="toggle">{{ observationFlagLabel(item) }}</button></template></IndicatorHint><em v-else-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
-                <button class="observation-edit-button" type="button" title="编辑指标" @click.stop="openObservationEditor(item)"><Pencil :size="15" /></button>
-                <button class="observation-edit-button observation-delete-button" type="button" title="删除指标" aria-label="删除指标" @click.stop="removeObservation(item)"><Trash2 :size="15" /></button>
+                <button v-if="canManageReport" class="observation-edit-button" type="button" title="编辑指标" @click.stop="openObservationEditor(item)"><Pencil :size="15" /></button>
+                <button v-if="canManageReport" class="observation-edit-button observation-delete-button" type="button" title="删除指标" aria-label="删除指标" @click.stop="removeObservation(item)"><Trash2 :size="15" /></button>
                 <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}<em v-if="item.manualReviewed" class="observation-manual-chip">人工校对</em></span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
               </article>
             </div>
@@ -2557,9 +2564,10 @@ onActivated(() => {
             </aside>
             <section class="observation-source-panel">
               <header>
-                <div><h4>原件参考</h4><p>{{ selectedObservation ? "已定位该指标的原件证据" : "选择指标后定位相关原件" }}</p></div>
+                <div><h4>来源报告页</h4><p>{{ selectedObservation ? "已定位该指标的原件证据" : "选择指标后定位相关原件" }}</p></div>
                 <button v-if="observationSourcePage" class="plain-icon-button" type="button" title="打开原件" @click="openOriginalViewer(observationSourcePageIndex)"><Maximize2 :size="16" /></button>
               </header>
+              <ObservationTimeEditor v-if="selectedObservation" :key="selectedObservation.id" :report-id="reportId" :observation="selectedObservation" :can-manage="canManageReport" :busy="hasRunningJobs" @updated="loadDetail(reportId,true);emit('updated')" />
               <div v-if="observationSourcePage" class="observation-source-stage">
                 <OriginalOrientation :image="observationOriginalImage" :page-key="observationSourcePage.id">
                 <div class="observation-source-image-wrapper">

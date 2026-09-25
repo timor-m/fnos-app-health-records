@@ -8,6 +8,7 @@ import {
   backfillLegacyMorphologyFindings,
   rebuildMorphologyTrackingIfNeeded
 } from "../services/morphology-finding.service";
+import { backfillDocumentWideObservationDates, backfillMorphologyExaminationAssignments } from "../services/report-examination-inference.service";
 
 export default definePlugin(() => {
   if (getAppConfig().storageError || storageMigrationPaused()) return;
@@ -17,5 +18,7 @@ export default definePlugin(() => {
   ensureCoreDictionaryMaterialized();
   syncBuiltinTrendGroups(getDatabase());
   backfillLegacyMorphologyFindings();
+  backfillDocumentWideObservationDates();
+  backfillMorphologyExaminationAssignments();
   rebuildMorphologyTrackingIfNeeded();
 });

@@ -1133,12 +1133,6 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .processing-card > .section-title-row p { line-height: 1.6; overflow-wrap: break-word; }
 .processing-card > .section-title-row > .section-title-actions { width: 100%; min-width: 0; display: flex; justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
 .processing-card > .section-title-row > .section-title-actions > button { flex: 0 0 auto; white-space: nowrap; font-size: 12px; }
-.report-append-notice { margin: 0; display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: 10px; background: var(--brand-softer); color: var(--ink-2); font-size: 12px; line-height: 1.6; }
-.report-append-notice > svg { flex: 0 0 16px; margin-top: 2px; color: var(--brand); }
-.report-append-notice > div { min-width: 0; }
-.report-append-notice ul { margin: 4px 0 0; padding-left: 16px; }
-.report-append-notice > span { min-width: 0; overflow-wrap: break-word; }
-
 .ai-result-card { align-content: start; }
 .ai-content { width: 100%; display: grid; gap: 12px; }
 .ai-section-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
@@ -1202,6 +1196,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .morphology-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .morphology-heading > div { min-width: 0; display: grid; gap: 3px; }
 .morphology-heading strong { font-size: 13px; overflow-wrap: anywhere; }
+.morphology-heading .morphology-source-label { margin-left: 6px; color: color-mix(in srgb, var(--muted) 78%, var(--surface)); font-size: 10px; font-style: normal; font-weight: 500; white-space: nowrap; }
 .morphology-heading span { color: var(--muted); font-size: 11px; }
 .morphology-presence {
   flex: 0 0 auto; padding: 3px 8px; border-radius: 999px; background: var(--chip-plain-bg);
@@ -1243,6 +1238,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .observation-title { grid-column: 1; grid-row: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
 .observation-title > strong { flex: 1; min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
 .observation-title > .indicator-hint { flex: none; }
+.observation-title > .observation-source-label { flex: none; color: color-mix(in srgb, var(--muted) 72%, var(--surface)); font-size: 11px; font-weight: 500; white-space: nowrap; }
 .observation-list article > p { grid-column: 2; grid-row: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .observation-meta { grid-column: 1 / 3; display: flex; justify-content: space-between; gap: 3px 12px; flex-wrap: wrap; }
 .observation-list article span, .observation-list article p { color: var(--muted); font-size: 12px; }
@@ -1332,7 +1328,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .observation-edit-empty { flex: 1; display: grid; place-items: center; align-content: center; gap: 8px; color: var(--muted); text-align: center; }
 .observation-edit-empty p { font-size: 12px; }
 .observation-edit-panel .observation-editor-form { min-height: 0; max-height: none; padding: 0; overflow: auto; overscroll-behavior: contain; }
-.observation-all-body .observation-list article { position: relative; padding-right: 86px; }
+.observation-all-body .observation-list article { position: relative; padding-right: 84px; }
 .observation-all-body .observation-list article { cursor: pointer; transition: background .15s, border-color .15s, box-shadow .15s; }
 .observation-all-body .observation-list article:hover { border-color: var(--line-strong); background: var(--fill-2); }
 .observation-all-body .observation-list article:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
@@ -1342,9 +1338,19 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
   display: grid; place-items: center;
 }
 .observation-edit-button:hover { background: var(--brand-softer); color: var(--brand); }
-.observation-all-body .observation-edit-button:not(.observation-delete-button) { right: 46px; }
+.observation-all-body .observation-edit-button.observation-delete-button { right: 48px; }
 .observation-delete-button { color: var(--muted); }
 .observation-delete-button:hover { color: var(--danger, #c43d3d); background: var(--fill-2); }
+@media (max-width: 760px) {
+  .observation-all-body .observation-list article { padding-right: 48px; }
+  .observation-all-body .observation-edit-button.observation-delete-button { top: 44px; right: 8px; }
+}
+@media (min-width: 761px) {
+  .observation-all-body .observation-title > .observation-source-label {
+    position: absolute; top: 10px; right: 84px; max-width: 96px;
+    overflow: hidden; text-align: right; text-overflow: ellipsis;
+  }
+}
 .observation-list article.is-selected { box-shadow: inset 3px 0 0 var(--brand), var(--shadow-s); background: var(--brand-softer); }
 .observation-list article em.observation-manual-chip {
   margin-left: 7px; padding: 2px 6px; background: var(--brand-soft); color: var(--brand-strong);
@@ -2952,6 +2958,8 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
   .observation-list article > strong,
   .observation-list article > p { grid-column: 1; grid-row: auto; }
   .observation-list article > p { white-space: normal; }
+  .observation-list article > .observation-meta { grid-column: 1; }
+  .observation-title > .observation-source-label { font-size: 10px; }
   .observation-display-reason { grid-column: 1; }
   .observation-tier-section > header { align-items: flex-start; flex-direction: column; gap: 2px; }
   .observation-panel-footer { min-height: 42px; }
@@ -3573,6 +3581,13 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
 .morphology-editor-form, .clinical-fact-editor-form, .structured-section-editor-form { min-height: 0; padding: 14px 16px; overflow: auto; }
 .morphology-editor-form .form-grid, .clinical-fact-editor-form .form-grid, .structured-section-editor-form .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .morphology-editor-form .field-wide, .clinical-fact-editor-form .field-wide, .structured-section-editor-form .field-wide { grid-column: 1 / -1; }
+.morphology-editor-form textarea {
+  width: 100%; min-height: 104px; box-sizing: border-box; padding: 10px 12px;
+  border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface);
+  color: var(--ink); outline: 0; resize: vertical; line-height: 1.55;
+  transition: border-color .15s, box-shadow .15s;
+}
+.morphology-editor-form textarea:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
 .clinical-fact-check {
   min-height: 42px; align-self: end; display: flex !important; align-items: center; gap: 7px;
 }
@@ -3583,6 +3598,8 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
 .morphology-editor-form > footer, .clinical-fact-editor-form > footer, .structured-section-editor-form > footer, .compact-action-footer {
   margin-top: 14px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap;
 }
+.morphology-editor-form > footer { flex-wrap: nowrap; }
+.morphology-editor-actions button { border-radius: 999px; }
 .compact-action-modal { width: min(540px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
 .compact-action-body { padding: 14px 16px 0; display: grid; gap: 12px; }
 .compact-action-body > p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }

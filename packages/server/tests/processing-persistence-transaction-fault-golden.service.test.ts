@@ -163,7 +163,7 @@ function workerForGeneration(
       lines: [
         {
           id: `persistence_header_${generation}_${pageNumber}`,
-          text: `匿名事务报告 第${pageNumber}页`,
+          text: `匿名事务报告 第${pageNumber}页 报告编号：SYNTHETIC 报告日期：2026-08-06`,
           confidence: 0.99,
           box: [0, 0, 180, 10],
         },

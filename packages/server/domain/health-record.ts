@@ -30,6 +30,10 @@ export type EvidenceRef = {
 };
 
 export type Observation = {
+  examinationId?: string | null;
+  examinationTime?: string | null;
+  examinationTimeKind?: string | null;
+  examinationTimeStatus?: string | null;
   id: string;
   reportId: string;
   sectionName: string | null;
@@ -77,6 +81,8 @@ export type MorphologyFinding = {
   id: string;
   reportId: string;
   examDate: string | null;
+  examinationId: string | null;
+  examinationTime: string | null;
   sectionName: string | null;
   organ: string | null;
   region: string | null;

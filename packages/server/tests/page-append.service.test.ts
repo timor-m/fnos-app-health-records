@@ -376,6 +376,114 @@ test("full pipeline sends old and new OCR to AI, publishes both observations and
     env.cleanup();
   }
 });
+test("append deduplicates repeated old-page extraction candidates with changed evidence and preserves the new result", async () => {
+  const env = setup();
+  try {
+    seedOld();
+    saveAiSettings({ enabled: true, baseUrl: "https://ai.example.test/v1", textModel: "test", apiKey: "test-secret" });
+    const rewrittenQuote = `${oldQuote}。`;
+    env.db.prepare("UPDATE ocr_results SET lines_json=? WHERE id='old-text'")
+      .run(JSON.stringify([{ text: rewrittenQuote }]));
+    const batch = await publishNew();
+    const jobId = (env.db.prepare("SELECT job_id FROM report_page_appends WHERE id=?")
+      .get(batch.id) as { job_id: string }).job_id;
+    // Simulate the old-page result being re-extracted twice with differing evidence
+    // metadata, alongside the genuinely new page B result.
+    persistAiExtraction("report", jobId, extraction([
+      observation("白细胞计数", 5, "10^9/L", 1, rewrittenQuote),
+      {
+        ...observation("白细胞计数", 5, "10^9/L", 1, `${rewrittenQuote}。`),
+        sectionName: "血常规", itemCode: "WBC", referenceText: "3.5-9.5",
+        referenceLow: 3.5, referenceHigh: 9.5, abnormalFlag: "normal",
+      },
+      observation("红细胞计数", 4.5, "10^12/L", 2, newQuote),
+    ]), 80);
+
+    const oldMetricRows = env.db.prepare(`SELECT COUNT(*) AS count FROM observations
+      WHERE report_id='report' AND item_name='白细胞计数' AND numeric_value=5`).get() as {count:number};
+    assert.equal(oldMetricRows.count, 1, "the same A result must be persisted once");
+    assert.equal(env.db.prepare("SELECT COUNT(*) AS count FROM observations WHERE report_id='report'").get()?.count, 2,
+      "the single new B result must remain alongside the de-duplicated A result");
+    const series = listTrendSeries(user, "member").find(item => item.name === "白细胞计数");
+    assert.equal(series?.points.length, 1, "A should contribute one trend point after appending B");
+    assert.equal(listTrendSeries(user, "member").find(item => item.name === "红细胞计数")?.points.length, 1,
+      "the new B result must be visible in trends");
+  } finally {
+    env.cleanup();
+  }
+});
+test("append also reuses an equivalent legacy observation without examination links", async () => {
+  const env = setup();
+  try {
+    seedOld();
+    env.db.exec("DELETE FROM observation_examinations; DELETE FROM report_examinations;");
+    saveAiSettings({ enabled: true, baseUrl: "https://ai.example.test/v1", textModel: "test", apiKey: "test-secret" });
+    const rewrittenQuote = `${oldQuote}。`;
+    env.db.prepare("UPDATE ocr_results SET lines_json=? WHERE id='old-text'")
+      .run(JSON.stringify([{ text: rewrittenQuote }]));
+    const batch = await publishNew();
+    const jobId = (env.db.prepare("SELECT job_id FROM report_page_appends WHERE id=?")
+      .get(batch.id) as { job_id: string }).job_id;
+    persistAiExtraction("report", jobId, extraction([
+      {
+        ...observation("白细胞计数", 5, "10^9/L", 1, rewrittenQuote),
+        sectionName: "血常规", itemCode: "WBC", referenceText: "3.5-9.5",
+        referenceLow: 3.5, referenceHigh: 9.5, abnormalFlag: "normal",
+      },
+      observation("红细胞计数", 4.5, "10^12/L", 2, newQuote),
+    ]), 40);
+
+    assert.equal(env.db.prepare("SELECT COUNT(*) AS count FROM observations WHERE report_id='report'").get()?.count, 2);
+    assert.equal(listTrendSeries(user, "member").find(series => series.name === "白细胞计数")?.points.length, 1);
+  } finally {
+    env.cleanup();
+  }
+});
+test("legacy append preserves old time while a new dated examination retains the same indicator", async () => {
+  for (const value of [5, 8]) {
+    const env=setup();
+    try {
+      seedOld();
+      // Model a pre-upgrade report: migration does not assign examinations to old observations.
+      env.db.exec("DELETE FROM observation_examinations; DELETE FROM report_examinations;");
+      saveAiSettings({enabled:true,baseUrl:"https://ai.example.test/v1",textModel:"test",apiKey:"test-secret"});
+      const quote=`白细胞计数 ${value}.0 10^9/L`;
+      const datedWorker=async(r:WorkerRequest):Promise<WorkerResponse>=>({
+        ...(await newWorker(r)),lines:[{text:"报告编号：SYNTHETIC 采样时间：2026-09-08"},{text:quote}]
+      });
+      const batch=await publishNew(datedWorker);
+      await processNextJob(datedWorker,async()=>extraction([
+        observation("白细胞计数",5,"10^9/L",1,oldQuote),
+        observation("白细胞计数",value,"10^9/L",2,quote)
+      ]));
+      assert.equal(getPageAppend(user,"report",batch.id).state,"complete");
+      const points=listTrendSeries(user,"member").flatMap(series=>series.points);
+      assert.equal(points.length,2);
+      assert.deepEqual(points.map(p=>[p.reportIssuedAt,p.numericValue,p.timeKind]),[
+        ["2025-01-02",5,"report"],["2026-09-08",value,"sampled"]
+      ]);
+      assert.equal(points[0].examinationId,null);
+      assert.ok(points[1].examinationId);
+    } finally {env.cleanup();}
+  }
+});
+test("append accepts valid new indicators when AI omits older automatically linked results",async()=>{
+ const env=setup();
+ try{
+  seedOld();
+  const old=env.db.prepare('SELECT * FROM observations').get()!;
+  saveAiSettings({enabled:true,baseUrl:'https://ai.example.test/v1',textModel:'test',apiKey:'test-secret'});
+  env.db.prepare("UPDATE ocr_results SET lines_json=? WHERE id='old-text'").run(JSON.stringify([{text:'采样时间：2025-01-02'},{text:oldQuote}]));
+  const batch=await publishNew();
+  const job=env.db.prepare('SELECT job_id FROM report_page_appends WHERE id=?').get(batch.id)!.job_id as string;
+  persistAiExtraction('report',job,extraction([observation('红细胞计数',4.5,'10^12/L',2,newQuote)]),40);
+  assert.deepEqual(env.db.prepare('SELECT * FROM observations WHERE id=?').get(old.id),old);
+  assert.equal(env.db.prepare('SELECT COUNT(*) AS n FROM observations').get()!.n,2);
+  assert.equal(getPageAppend(user,'report',batch.id).state,'complete');
+  assert.equal(env.db.prepare('SELECT e.occurred_at FROM observation_examinations l JOIN report_examinations e ON e.id=l.examination_id WHERE l.observation_id=?').get(old.id)!.occurred_at,'2025-01-02','retained automatic pending results also use verified source dates');
+ }finally{env.cleanup();}
+});
+
 test("post-filter loss of old observation rolls back all candidate publication; AI failure retains data", async () => {
   const env = setup();
   try {
@@ -449,7 +557,7 @@ test("deleted observations have stable suppression across later AI extraction", 
   }
 });
 
-test("same-text cross-format pages require confirmation and remain invisible before it", async () => {
+test("same-text cross-format pages remain preserved without an extra confirmation", async () => {
   const env = setup();
   try {
     seedOld();
@@ -468,15 +576,37 @@ test("same-text cross-format pages require confirmation and remain invisible bef
     );
     await processNextJob(oldTextWorker);
     ready = getPageAppend(user, "report", b.id);
-    assert.equal(ready.state, "review");
-    assert.equal(getReportDetail(user, "report").pages.length, 1);
-    assert.ok(ready.conflicts.length);
-    confirmPageAppend(user, "report", b.id);
-    confirmPageAppend(user, "report", b.id);
+    assert.notEqual(ready.state, "review");
+    assert.equal(ready.published,true);
+    assert.ok(ready.reviewWarnings.some((message:string)=>message.includes('文字高度相似')));
     assert.equal(getReportDetail(user, "report").pages.length, 2);
   } finally {
     env.cleanup();
   }
+});
+test("same member can append a different examination number and date without identity conflict", async () => {
+  const env = setup();
+  try {
+    seedOld();
+    env.db.prepare("UPDATE ocr_results SET lines_json=?").run(JSON.stringify([
+      {text:"姓名：合成甲"}, {text:"报告编号：TEST-A"}, {text:"检查日期：2026-09-01"},
+      {text:"旧页合成检查结果"}
+    ]));
+    const b = start();
+    const nextWorker = async (r: WorkerRequest) => ({
+      ...(await worker()(r)),
+      lines:[{text:"姓名：合成甲"},{text:"报告编号：TEST-B"},{text:"检查日期：2026-09-08"},
+        {text:"本次新增的其他检查内容，与原页不同"}]
+    });
+    await processNextJob(nextWorker);
+    const ready = getPageAppend(user,"report",b.id);
+    submitPageAppend(user,"report",b.id,ready.pages.map(p=>({id:p.id,rotation:0})));
+    await processNextJob(nextWorker);
+    const published = getPageAppend(user,"report",b.id);
+    assert.deepEqual(published.conflicts,[]);
+    assert.equal(published.state,"ocr_only");
+    assert.equal(getReportDetail(user,"report").pages.length,2);
+  } finally { env.cleanup(); }
 });
 test("identity conflict holds new pages; missing old OCR is repaired once", async () => {
   const env = setup();
@@ -629,10 +759,11 @@ test("existing v17 database receives unnumbered draft with backup and no schema 
 });
 
 import { updateManualObservation } from "../services/observation-field-overrides.service";
-test("manual edits and manually added observations survive whole-report append recognition", async () => {
+test("legacy manual edits and manually added observations survive whole-report append recognition", async () => {
   const env = setup();
   try {
     seedOld();
+    env.db.exec("DELETE FROM observation_examinations; DELETE FROM report_examinations;");
     const id = env.db.prepare("SELECT id FROM observations").get()!
       .id as string;
     updateManualObservation(user, "report", id, {
@@ -808,7 +939,7 @@ test("review allows excluding suspect pages and enforces idempotent confirmation
     const b = start(pdf);
     const same = async (r: WorkerRequest) => ({
       ...(await worker()(r)),
-      lines: [{ text: oldQuote, confidence: 0.99, box: [0, 0, 200, 20] }],
+      lines: r.pageNumber === 1 ? [] : [{ text: oldQuote, confidence: 0.99, box: [0, 0, 200, 20] }],
     });
     await processNextJob(same);
     const ready = getPageAppend(user, "report", b.id);

@@ -107,7 +107,8 @@ test("protects OCR input, rendered page, and temporary output resources before p
   process.env.STORAGE_DIR = directory;
   process.env.LOG_DIR = join(directory, "logs");
   process.env.OCR_WORKER_TIMEOUT_MS = "1000";
-  process.env.OCR_WORKER_STARTUP_TIMEOUT_MS = "500";
+  // Normal process startup is not the boundary under test; allow parallel-suite scheduling.
+  process.env.OCR_WORKER_STARTUP_TIMEOUT_MS = "10000";
   process.env.OCR_WORKER_MAX_INPUT_FILE_BYTES = "10";
   process.env.OCR_WORKER_MAX_OUTPUT_FILE_BYTES = "1024";
   process.env.OCR_WORKER_MAX_PDF_PAGES = "500";

@@ -236,6 +236,7 @@ npm run pack:app
 
 - v17 正式迁移保持不变；本轮新增的补充记录、附件和趋势分组结构不入迁移注册表，由启动期补表幂等应用，历史内部测试包落库的草案记录通过维护修复或幂等补表兼容。
 - 形态变化追踪复用 v16 `morphology_findings.tracking_group_id` 和 `match_confidence`，本次闭环不新增表、字段或数据库版本。应用启动仅在本地规则版本变化时幂等重建一次追踪关系，不调用外部 AI；管理员维护操作同样只更新这两个关联字段。
+- 多检查时间归属在未编号草案中新增 `morphology_finding_examinations`，与指标检查关联共用 `report_examinations`。旧形态发现仅在已有 OCR 能明确证实时补关联，其余沿用原报告时间；启动补齐前备份，不调整 schema 编号。
 - `schema_migrations`：数据库迁移记录。
 - `app_upgrade_history`：应用版本升级记录。
 - 启动时数据库版本检查和按需迁移。
@@ -265,3 +266,7 @@ npm run pack:app
 ### 当前未编号判重草案
 
 `report-duplicate-draft.ts` 为 family-v2 增加 `report_duplicate_runtime` 和原件哈希索引，保存当前结果源绑定、暂停、显式继续任务及独立后置核验状态。新库和现有 v17 库均幂等应用，旧库缺表/列时先备份；不递增 schema，不改历史迁移，不清理人工决定，不自动触发 AI。历史恢复和未绑定结果的保守处理见 [报告重复检测](./REPORT_DUPLICATE_DETECTION.md)。
+
+## 未编号多次检查草案（实施中）
+
+`report-examination-draft.ts` 新增检查记录、指标归属和检查版本表，schema 保持 v17。启动检查缺表时先备份，再补齐结构；不根据报告时间批量生成检查记录，不修改旧指标，不自动启动 OCR/AI。实施范围与尚待验收部分见 [单份报告多次检查](MULTI_EXAMINATION_REPORTS.md)。

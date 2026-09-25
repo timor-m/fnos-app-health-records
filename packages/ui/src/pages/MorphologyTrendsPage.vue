@@ -224,6 +224,7 @@ function sizeTrendPoints(item: MorphologyTrackingSeries) {
 }
 
 function sizeTrendPolyline(item: MorphologyTrackingSeries) {
+  if (item.changeKind === "time_order_ambiguous") return "";
   return sizeTrendPoints(item).map((point) => `${point.x},${point.y}`).join(" ");
 }
 
@@ -471,7 +472,7 @@ async function editorSaved() {
 
       <section v-if="multiRecordSeries.length" class="morphology-record-section">
         <header class="morphology-section-heading">
-          <div><strong>历年变化</strong><span>同一项目在不同报告中的记录</span></div>
+          <div><strong>历年变化</strong><span>同一项目在不同检查中的记录</span></div>
           <em>{{ multiRecordSeries.length }} 项</em>
         </header>
         <div class="morphology-series-list">
@@ -507,7 +508,12 @@ async function editorSaved() {
             </header>
 
             <div class="morphology-card-body">
-              <button class="morphology-current-result" type="button" @click="openReport(item.latest.reportId)">
+              <div v-if="item.changeKind === 'time_order_ambiguous'" class="morphology-current-result">
+                <span>同日检查</span>
+                <strong>共 {{ item.pointCount }} 次</strong>
+                <small>检查先后不明，暂不指定最近结果；可在历年记录中分别查看。</small>
+              </div>
+              <button v-else class="morphology-current-result" type="button" @click="openReport(item.latest.reportId)">
                 <span>最近结果</span>
                 <strong>{{ pointResult(item.latest) }}</strong>
                 <small>{{ formatDate(item.latest.reportIssuedAt) }} · {{ item.latest.hospitalName || "机构待整理" }}</small>

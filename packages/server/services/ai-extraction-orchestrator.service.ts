@@ -813,6 +813,88 @@ function observationResultMatches(
   );
 }
 
+function coordinateRect(value: unknown) {
+  if (!Array.isArray(value)) return null;
+  const points = Array.isArray(value[0])
+    ? value.flatMap((point) => Array.isArray(point) && point.length >= 2
+      ? [{ x: Number(point[0]), y: Number(point[1]) }]
+      : [])
+    : value.length >= 4
+      ? [{ x: Number(value[0]), y: Number(value[1]) }, { x: Number(value[2]), y: Number(value[3]) }]
+      : [];
+  if (!points.length || points.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))) return null;
+  return {
+    left: Math.min(...points.map((point) => point.x)),
+    right: Math.max(...points.map((point) => point.x)),
+  };
+}
+
+/**
+ * 对列映射不可靠的表格行，只在 OCR 坐标能独立定位项目和值时补足证据校验：
+ * 名称和值必须位于不同框，值框紧随名称右侧且是其右侧第一个数值框。
+ * 后续数值可属于参考区间，因此不要求整行只有一个数值。
+ */
+function coordinateEvidenceForObservation(
+  line: AiExtractionPlan["pages"][number]["lines"][number],
+  item: AiObservation,
+) {
+  if (line.sourceCells.length < 2) return null;
+  const names = [item.itemName, item.normalizedName || ""].filter(Boolean);
+  const nameTerms = [
+    ...names,
+    ...line.dictionaryFacts.flatMap((fact) => {
+      const labels = [fact.displayName, fact.alias];
+      return labels.some((label) => names.some((name) => fuzzyEvidenceContains(label, name)))
+        ? labels
+        : [];
+    }),
+  ].map(compactEvidence).filter((name) => name.length >= 2);
+  const cells = line.sourceCells.flatMap((cell) => {
+    const rect = coordinateRect(cell.box);
+    return rect ? [{ text: cell.text, rect, numbers: evidenceNumbers(cell.text) }] : [];
+  });
+  const nameCells = cells.filter((cell) => {
+    const text = compactEvidence(cell.text);
+    return nameTerms.some((name) => text.includes(name));
+  });
+  if (nameCells.length !== 1) return null;
+  const nameCell = nameCells[0];
+  const targetNumbers = item.numericValue !== null
+    ? [item.numericValue]
+    : evidenceNumbers(item.resultText);
+  if (targetNumbers.length !== 1) return null;
+  const target = targetNumbers[0];
+  const valueCells = cells.filter((cell) => cell.numbers.length === 1 && sameEvidenceNumber(cell.numbers[0], target));
+  if (valueCells.length !== 1) return null;
+  const valueCell = valueCells[0];
+  if (valueCell.rect.left < nameCell.rect.right) return null;
+  const firstNumericRight = cells
+    .filter((cell) => cell.numbers.length > 0 && cell.rect.left >= nameCell.rect.right)
+    .sort((left, right) => left.rect.left - right.rect.left)[0];
+  if (firstNumericRight !== valueCell) return null;
+  const expectedComparator = resultComparator(item.resultText);
+  if (expectedComparator && resultComparator(valueCell.text) !== expectedComparator) return null;
+  return [nameCell.text, valueCell.text] as const;
+}
+
+const multiTimepointHeaderPattern = /(?:历史|既往|上次|前次|复查|入院|出院|治疗前|治疗后|第\s*\d+\s*次|previous|prior|historical|baseline|follow[- ]?up)/i;
+
+function hasMultipleTimepointHeaders(header: string | null | undefined) {
+  if (!header) return false;
+  const normalized = header.normalize("NFKC");
+  return multiTimepointHeaderPattern.test(normalized) ||
+    (normalized.match(/20\d{2}\s*[-/.年]\s*\d{1,2}/g) || []).length > 1;
+}
+
+function hasSingleResultColumnHeader(header: string | null | undefined) {
+  if (!header || hasMultipleTimepointHeaders(header)) return false;
+  const normalized = header.normalize("NFKC");
+  const resultHeaders = splitOcrTableCells(normalized).filter((cell) =>
+    /(?:结果|测定值|实测值|当前值)/.test(cell),
+  );
+  return resultHeaders.length === 1;
+}
+
 function observationResultInRegionMatches(
   region: string,
   item: AiObservation,
@@ -906,28 +988,50 @@ function exactEvidenceForObservation(
         )
         .flatMap((line) => {
           const name = observationNameMatches(line, item);
-          if (
-            !name.matched ||
-            !observationResultMatches(line.text, item, name.names, line.tableHeaderText)
-          )
-            return [];
+          if (!name.matched) return [];
+          const coordinateEvidence = coordinateEvidenceForObservation(line, item);
+          const coordinateMatched =
+            coordinateEvidence !== null &&
+            (line.tableStructureUnsafe || hasSingleResultColumnHeader(line.tableHeaderText)) &&
+            !hasMultipleTimepointHeaders(line.tableHeaderText);
+          const textResultMatched = observationResultMatches(
+            line.text,
+            item,
+            name.names,
+            line.tableHeaderText,
+          );
+          if (!textResultMatched && !coordinateMatched) return [];
           const quoteMatched =
             normalizedEvidenceText(evidence.quote).length >= 4 &&
             fuzzyEvidenceContains(line.text, evidence.quote);
-          /*
-           * 表格结构不可信的行按更严格口径放行：名称、结果命中之外，AI 引文还必须
-           * 逐字锚定到该行文本本身。名称+结果+引文行内自洽时，列错位风险已被文本
-           * 校验覆盖；引文锚不上时保持拒绝。可信行的引文仍只作加分项。
-           */
-          if (line.tableStructureUnsafe && !quoteMatched) return [];
+          /* 结构不可信的行须由整行引文或项目和值的独立坐标证明；可靠行的引文仍只加分。 */
+          if (
+            line.tableStructureUnsafe &&
+            !quoteMatched &&
+            !coordinateMatched
+          ) return [];
           const unitMatched = observationUnitMatches(line.text, item.unit);
           const score = 2 + (quoteMatched ? 2 : 0) + (unitMatched ? 0.5 : 0);
-          return [{ pageNumber: page.pageNumber, quote: line.text, score }];
+          const quote = coordinateMatched && !textResultMatched
+            ? coordinateEvidence!.join(" | ")
+            : line.text;
+          const table = item.evidence.find((entry) => entry.pageNumber === page.pageNumber && normalizedEvidenceText(entry.quote) === normalizedEvidenceText(line.text))?.table;
+          return [{
+            pageNumber: page.pageNumber,
+            quote,
+            score,
+            ...(coordinateMatched && !textResultMatched ? { coordinateVerified: true as const } : {}),
+            ...(table ? { table } : {}),
+          }];
         });
     })
     .sort((left, right) => right.score - left.score);
   return uniqueBy(
-    matches.map(({ pageNumber, quote }) => ({ pageNumber, quote })),
+    matches.map(({ pageNumber, quote, coordinateVerified }) => ({
+      pageNumber,
+      quote,
+      ...(coordinateVerified ? { coordinateVerified: true as const } : {}),
+    })),
     (entry) => `${entry.pageNumber}:${entry.quote}`,
   );
 }
@@ -1171,7 +1275,7 @@ function exactEvidenceForMorphology(
       allowedPages.has(page.pageNumber) &&
       (!preferredPages.size || preferredPages.has(page.pageNumber)),
   );
-  const matches = pages
+  const matches: Array<{ pageNumber: number; quote: string; score: number; table?: AiEvidence["table"] }> = pages
     .flatMap((page) => {
       const pageLines = page.lines.filter((line) =>
         unit.text.includes(line.text),
@@ -1233,7 +1337,7 @@ function exactEvidenceForMorphology(
     })
     .sort((left, right) => right.score - left.score);
   return uniqueBy(
-    matches.slice(0, 5).map(({ pageNumber, quote }) => ({ pageNumber, quote })),
+    matches.slice(0, 5).map(({ pageNumber, quote, table }) => ({ pageNumber, quote, ...(table ? { table } : {}) })),
     (entry) => `${entry.pageNumber}:${entry.quote}`,
   );
 }
@@ -1618,7 +1722,7 @@ function deduplicateObservationsBySource(
     const result = observationResultIdentity(observation);
     const sources = evidenceSourceKeys(plan, observation);
     const keys = sources.map(
-      (source) => `${source}\u0000${semantic}\u0000${result}`,
+      (source) => `${source}\u0000${semantic}\u0000${result}\u0000${JSON.stringify(observation.examination || null)}`,
     );
     const existingIndex = keys.flatMap((key) => {
       const index = sourceIndex.get(key);
@@ -2518,6 +2622,7 @@ function deterministicTableObservations(
             referenceText: fact.referenceText,
             abnormalFlag: fact.abnormalFlag,
             method: null,
+            examination: fact.examination,
             evidence: [{ pageNumber: fact.pageNumber, quote: fact.sourceText }],
           },
         ];
@@ -2742,18 +2847,28 @@ function withDeterministicFallback(
     (local) =>
       !result.fields.observations.some(
         (existing) =>
-          (compactEvidence(existing.itemName) ===
-            compactEvidence(local.itemName) ||
+          (observationSemanticIdentity(existing) ===
+            observationSemanticIdentity(local) ||
+            compactEvidence(existing.itemName) ===
+              compactEvidence(local.itemName) ||
             compactEvidence(existing.normalizedName) ===
               compactEvidence(local.normalizedName)) &&
-          compactEvidence(existing.resultText) ===
-            compactEvidence(local.resultText) &&
+          observationResultIdentity(existing) ===
+            observationResultIdentity(local) &&
+          (!existing.unit ||
+            !local.unit ||
+            compactEvidence(existing.unit) === compactEvidence(local.unit)) &&
+          (!local.examination || existing.examination?.timeText === local.examination.timeText) &&
           existing.evidence.some((entry) =>
             local.evidence.some(
               (candidate) =>
                 entry.pageNumber === candidate.pageNumber &&
-                compactEvidence(entry.quote) ===
+                compactEvidence(entry.quote).includes(
                   compactEvidence(candidate.quote),
+                ) ||
+                compactEvidence(candidate.quote).includes(
+                  compactEvidence(entry.quote),
+                ),
             ),
           ),
       ),

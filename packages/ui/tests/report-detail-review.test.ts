@@ -103,6 +103,53 @@ afterEach(() => {
 });
 
 describe("ReportDetail 核对指标模式", () => {
+  it("在全部指标显示同名多时间结果，选择时定位来源而不打开编辑",async()=>{
+    fetchMock.mockImplementation(async(input:RequestInfo|URL)=>{
+      const url=String(input);
+      if(url.endsWith('/api/reports/r1'))return jsonResponse({...detailPayload,observations:[
+        {...observation,id:'obs-1',examinationId:'e1',examinationTime:'2026-09-01'},
+        {...observation,id:'obs-2',examinationId:'e2',examinationTime:'2026-09-08'}
+      ]});
+      if(url.includes('jobs'))return jsonResponse([]);
+      return jsonResponse({});
+    });
+    const wrapper=mount(ReportDetail,{attachTo:document.body,props:{reportId:'r1',variant:'panel'},global:{stubs:{teleport:true,RouterLink:true,ReportNotesPanel:true}}});
+    await flushPromises();await flushPromises();
+    expect(wrapper.find('.examinations-panel').exists()).toBe(false);
+    const all=wrapper.findAll('button').find(button=>button.text().includes('查看全部'))!;
+    await all.trigger('click');await flushPromises();
+    expect(wrapper.find('.observation-panel .observation-title .observation-source-label').text()).toBe('P?·2026-09-01');
+    expect(wrapper.text()).toContain('2026-09-08');
+    const cards=wrapper.findAll('.observation-all-list .observation-list article');
+    expect(cards).toHaveLength(2);await cards[1].trigger('click');
+    expect(cards[1]!.find('.observation-title .observation-source-label').text()).toBe('P?·2026-09-08');
+    expect(cards[1]!.find('.observation-meta .observation-source-label').exists()).toBe(false);
+    expect(wrapper.find('.observation-edit-panel.is-open').exists()).toBe(false);
+    expect(wrapper.text()).toContain('来源报告页');
+    wrapper.unmount();
+  });
+
+  it("在名称右侧紧凑显示来源页与检查日期", async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/reports/r1")) return jsonResponse({
+        ...detailPayload,
+        pages: [{ id: "p1", pageNumber: 1, mimeType: "image/jpeg", hasThumbnail: false }],
+        observations: [{ ...observation, examinationId: "e1", examinationTime: "2026-07-13 08:30", evidence: { pageId: "p1" } }]
+      });
+      if (url.includes("jobs")) return jsonResponse([]);
+      return jsonResponse({});
+    });
+    const wrapper = mount(ReportDetail, {
+      props: { reportId: "r1", variant: "panel" },
+      global: { stubs: { teleport: true, RouterLink: true, ReportNotesPanel: true } }
+    });
+    await flushPromises();
+    expect(wrapper.find(".observation-panel .observation-title .observation-source-label").text()).toBe("P1·2026-07-13");
+    expect(wrapper.find(".observation-panel .observation-meta .observation-source-label").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it("打开核对弹窗时直接展示编辑面板，且不查询任务进度", async () => {
     const wrapper = await mountReview("obs-1");
     expect(wrapper.find(".observation-edit-panel.is-open").exists()).toBe(true);
@@ -135,7 +182,8 @@ it("refreshes jobs and report details when the append component announces a proc
     const jobsBefore=callsTo('jobs?reportId=r1').length;
     const detailsBefore=fetchMock.mock.calls.filter(([input])=>String(input).endsWith('/api/reports/r1')).length;
     await wrapper.get('[data-append-state]').trigger('click');await flushPromises();await flushPromises();
-    expect(wrapper.get('#report-processing-section').text()).toContain('正在识别补充页面（OCR）');
+    expect(wrapper.find('.report-append-notice').exists()).toBe(false);
+    expect(wrapper.get('#report-processing-section').text()).not.toContain('正在识别补充页面（OCR）');
     expect(callsTo('jobs?reportId=r1').length).toBeGreaterThan(jobsBefore);
     expect(fetchMock.mock.calls.filter(([input])=>String(input).endsWith('/api/reports/r1')).length).toBeGreaterThan(detailsBefore);
   } finally { wrapper.unmount(); }
@@ -151,9 +199,10 @@ describe('重复报告当前暂停状态',()=>{
    if(url.includes('/original/status'))return jsonResponse({status:'ready'});
    if(url.includes('jobs'))return jsonResponse([]);
    if(url.endsWith('/notes'))return jsonResponse({notes:[],canManage:false});
+   if(url.endsWith('/examinations'))return jsonResponse({version:0,reportVersion:0,examinations:[],observations:[]});
    return jsonResponse({});
   });
-  const wrapper=mount(ReportDetail,{attachTo:document.body,props:{reportId:'r1',variant:'panel'},global:{stubs:{teleport:true,RouterLink:true}}});
+  const wrapper=mount(ReportDetail,{attachTo:document.body,props:{reportId:'r1',variant:'panel'},global:{stubs:{teleport:true,RouterLink:true,ReportNotesPanel:true}}});
   await flushPromises();await flushPromises();return wrapper;
  }
  it('显示当前暂停，继续时不附带排除其他候选的请求',async()=>{

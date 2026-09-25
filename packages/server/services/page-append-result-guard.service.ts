@@ -26,12 +26,38 @@ const ignored = new Set([
   "manual_fields_json",
   "updated_by",
   "created_by",
+  "examination_id",
 ]);
+const compact = (value: unknown) => typeof value === "string"
+  ? value.normalize("NFKC").replace(/[\s（）()，,。.:：;；、|_\-]+/g, "").toLowerCase()
+  : value;
+function sameObservationMeasurement(left: Record<string, unknown>, right: Record<string, unknown>, sameLegacySource: boolean) {
+  const sameExamination = Boolean(left.examination_id && left.examination_id === right.examination_id);
+  if (!sameExamination && !(sameLegacySource && !left.examination_id)) return false;
+  const leftNames = [left.item_name, left.normalized_name].map(compact);
+  const rightNames = [right.item_name, right.normalized_name].map(compact);
+  if (!leftNames.some((name) => name && rightNames.includes(name))) return false;
+  const leftValue = typeof left.numeric_value === "number" ? left.numeric_value : null;
+  const rightValue = typeof right.numeric_value === "number" ? right.numeric_value : null;
+  const sameValue = leftValue !== null && rightValue !== null
+    ? Math.abs(leftValue - rightValue) <= Math.max(1, Math.abs(leftValue), Math.abs(rightValue)) * 1e-10
+    : compact(left.result_text) === compact(right.result_text);
+  if (!sameValue) return false;
+  for (const key of ["unit", "method"] as const) {
+    const a = compact(left[key]);
+    const b = compact(right[key]);
+    if (a && b && a !== b) return false;
+  }
+  return true;
+}
 export function snapshotPublishedRecords(reportId: string) {
   const db = getDatabase();
   return tables.map((table) => ({
     table,
-    rows: db.prepare(`SELECT * FROM ${table} WHERE report_id=?`).all(reportId),
+    rows: table === "observations"
+      ? db.prepare(`SELECT o.*,l.examination_id AS examination_id FROM observations o
+          LEFT JOIN observation_examinations l ON l.observation_id=o.id WHERE o.report_id=?`).all(reportId)
+      : db.prepare(`SELECT * FROM ${table} WHERE report_id=?`).all(reportId),
   }));
 }
 export function assertPublishedRecordsRetained(
@@ -44,9 +70,10 @@ export function assertPublishedRecordsRetained(
       ? v.normalize("NFKC").replace(/\s+/g, "").toLowerCase()
       : v;
   for (const { table, rows } of before) {
-    const after = db
-      .prepare(`SELECT * FROM ${table} WHERE report_id=?`)
-      .all(reportId);
+    const after = table === "observations"
+      ? db.prepare(`SELECT o.*,l.examination_id AS examination_id FROM observations o
+          LEFT JOIN observation_examinations l ON l.observation_id=o.id WHERE o.report_id=?`).all(reportId)
+      : db.prepare(`SELECT * FROM ${table} WHERE report_id=?`).all(reportId);
     const sourcePages = (row: Record<string, unknown>) => {
       const evidence = JSON.parse(String(row.evidence_json || "[]"));
       return Array.isArray(evidence)
@@ -86,7 +113,11 @@ export function assertPublishedRecordsRetained(
             )
             .every((k) => compact(old[k]) === compact(next[k])),
       );
-      if (match < 0)
+      const equivalentObservation = table === "observations" && match < 0
+        ? after.findIndex((next) => sameObservationMeasurement(old, next,
+            sourcePages(old).length > 0 && sourcePages(old).some((id) => sourcePages(next).includes(id))))
+        : -1;
+      if (match < 0 && equivalentObservation < 0)
         throw Object.assign(
           createError({
             statusCode: 409,
@@ -96,7 +127,7 @@ export function assertPublishedRecordsRetained(
           }),
           { appendCandidateRejected: true },
         );
-      after.splice(match, 1);
+      after.splice(match >= 0 ? match : equivalentObservation, 1);
     }
   }
 }

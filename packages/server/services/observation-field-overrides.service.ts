@@ -1,4 +1,5 @@
 import { assertNoPageAppend } from "./page-append-lock.service";
+import type { ExaminationInput } from "../domain/examination";
 import { createHash } from "node:crypto";
 import { createError } from "h3";
 import { rollbackAfterError, getDatabase } from "../database/client";
@@ -22,6 +23,7 @@ export type EditableObservationFields = {
 };
 
 export type PersistableObservation = EditableObservationFields & {
+  examination?: ExaminationInput;
   normalizedName: string | null;
   method: string | null;
   evidence: Array<{ pageNumber?: number; quote?: string; [key: string]: unknown }>;
@@ -49,6 +51,7 @@ export function observationSourceKey(input: EditableObservationFields & Partial<
   const evidence = (input.evidence || []).map((entry) => ({
     pageNumber: reportId ? (entry.pageId || (getDatabase().prepare("SELECT id FROM report_pages WHERE report_id=? AND page_number=?").get(reportId,Number(entry.pageNumber)||0) as {id:string}|undefined)?.id || Number(entry.pageNumber) || 0) : Number(entry.pageNumber) || 0,
     quote: compactIdentity(entry.quote),
+    ...(typeof entry.examinationSourceKey==='string' ? {examinationSourceKey:entry.examinationSourceKey} : {}),
   }));
   return createHash("sha256").update(JSON.stringify({
     sectionName: compactIdentity(input.sectionName),

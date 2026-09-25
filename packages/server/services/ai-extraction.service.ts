@@ -1,3 +1,6 @@
+import type { ExaminationInput } from "../domain/examination";
+import { examinationSourcePages, inferObservationExamination, expandTemporalObservationColumns, publishExaminationAssignments, publishMorphologyExaminationAssignments } from "./report-examination-inference.service";
+import { snapshotExaminationAssignments, restoreExaminationAssignments } from "./report-examination.service";
 import { snapshotPublishedRecords, assertPublishedRecordsRetained } from "./page-append-result-guard.service";
 import { rollbackAfterError, getDatabase } from "../database/client";
 import { createId } from "../utils/identifier";
@@ -33,7 +36,7 @@ import type {
   LocalObservationSourceMap,
   PlannedOcrLine,
 } from "./ai-input-planner.service";
-import { writeAiInputDebugLog } from "../utils/ai-input-debug-log";
+import { writeAiInputDebugLog, writeAiOutputDebugLog } from "../utils/ai-input-debug-log";
 import { isTrackableMorphologyFinding } from "../utils/morphology-rules";
 import type { ReportContentType } from "./report-content-classifier.service";
 import {
@@ -47,7 +50,7 @@ import {
 } from "./observation-interpretation.service";
 import { assessObservationReference } from "./observation-reference.service";
 
-export const aiExtractionPromptVersion = "health-record-routed-v9";
+export const aiExtractionPromptVersion = "health-record-routed-v10-examinations";
 const maxInputCharacters = 80_000;
 const reportTypeAliases: Record<string, string> = {
   physical_exam: "checkup",
@@ -144,6 +147,7 @@ export type AiTableEvidence = {
 };
 
 export type AiEvidence = {
+  examinationSourceKey?: string;
   pageId?: string;
   pageNumber: number;
   quote: string;
@@ -154,8 +158,11 @@ export type AiEvidence = {
    * 归一化证据闸门对纯视觉来源跳过数值/单位回指（验收门已锚定真实 OCR 候选行）。
    */
   source?: "vision";
+  /** Coordinate verifier proved an independent name/value cell pair in one OCR row group. */
+  coordinateVerified?: true;
 };
 export type AiObservation = {
+  examination?: ExaminationInput;
   sectionName: string | null;
   itemCode: string | null;
   itemName: string;
@@ -178,6 +185,7 @@ export type AiMorphologyMeasurement = {
 };
 
 export type AiMorphologyFinding = {
+  examination?: ExaminationInput;
   sectionName: string | null;
   organ: string | null;
   region: string | null;
@@ -518,7 +526,16 @@ function evidenceValue(value: unknown): AiEvidence[] {
       (item as Record<string, unknown>).source === "vision"
         ? ({ source: "vision" } as const)
         : null;
-    return [{ pageNumber, quote, ...(source || {}) }];
+    const raw = item as Record<string, unknown>;
+    const coordinateVerified = raw.coordinateVerified === true
+      ? ({ coordinateVerified: true } as const)
+      : null;
+    const rawTable = raw.table && typeof raw.table === "object" ? raw.table as Record<string, unknown> : null;
+    const rawColumn = rawTable?.resultColumn && typeof rawTable.resultColumn === "object" ? rawTable.resultColumn as Record<string, unknown> : null;
+    const table = rawTable && typeof rawTable.headerText === "string" && Array.isArray(rawTable.headerSourceLineIds) && Array.isArray(rawTable.rowSourceLineIds)
+      ? { headerText: rawTable.headerText.slice(0, 1000), headerSourcePageNumber: numberValue(rawTable.headerSourcePageNumber), headerSourceLineIds: rawTable.headerSourceLineIds.filter((id): id is string => typeof id === "string").slice(0, 50), rowSourceLineIds: rawTable.rowSourceLineIds.filter((id): id is string => typeof id === "string").slice(0, 50), resultColumn: rawColumn && Number.isSafeInteger(rawColumn.index) ? { index: Number(rawColumn.index), headerText: textValue(rawColumn.headerText, 200), selectionBasis: rawColumn.selectionBasis === "local_source_map" ? "local_source_map" as const : "explicit_current_result_header" as const } : null }
+      : null;
+    return [{ pageNumber, quote, ...(source || {}), ...(coordinateVerified || {}), ...(table ? { table } : {}) }];
   });
 }
 
@@ -872,6 +889,7 @@ function morphologyFindingValue(value: unknown): AiMorphologyFinding | null {
         ]
       : [];
   return {
+    examination: row.examination && typeof row.examination === "object" ? row.examination as ExaminationInput : undefined,
     sectionName: textValue(row.sectionName, 200),
     organ,
     region: textValue(row.region, 120),
@@ -1046,6 +1064,7 @@ export function normalizeAiExtraction(value: unknown): {
               }),
             method: textValue(row.method ?? row.m, 200),
             evidence,
+            ...(row.examination && typeof row.examination === 'object' ? {examination: Object.fromEntries(['examinationType','institution','reportNumber','specimen','method','sampledAt','examinedAt','issuedAt','timeText'].map(key=>[key,textValue((row.examination as Record<string,unknown>)[key],1000)])) as ExaminationInput} : {}),
           },
         ];
       })
@@ -1430,7 +1449,7 @@ export function buildAiExtractionInput(reportId: string): AiExtractionInput {
 
 function commonSystemPrompt() {
   return `你是健康报告结构化助手。只能提取输入中明确出现的事实，不得诊断、推测风险、解释病情或给出治疗建议。
-只返回一个可被 JSON.parse 解析的 JSON 对象，不要 Markdown、注释或前后说明。日期统一为 YYYY-MM-DD 或 YYYY-MM-DD HH:mm:ss。
+只返回一个可被 JSON.parse 解析的 JSON 对象，不要 Markdown、注释或前后说明。日期保留原文精度，使用 YYYY-MM-DD、YYYY-MM-DD HH:mm 或 YYYY-MM-DD HH:mm:ss；不得补写缺失的年份、时刻或秒。
 不得输出姓名、身份证号、电话、住址或其他已过滤个资。缺失字段直接省略，不输出 null、空字符串或无值占位。证据必须来自当前输入，p 为页码，q 为最长 160 字的最短可定位原文。`;
 }
 
@@ -1449,8 +1468,8 @@ summary 只能提取原报告明确存在的总结，不得为当前输入另写
 }
 
 function observationContract() {
-  return `只输出 observations。每项必填 n（原项目名）、r（原结果文本）、p、q；可选 s（最近章节）、c、v、u、lo、hi、ref、f、m。f 只能是 high、low、abnormal、normal。禁止输出 normalizedName。
-严格按表头解释本次结果、单位、参考值和历史结果。本次结果为“-”“±”或阴阳性时必须原样保留，不得把参考值或历史值作为本次结果。历史章节和历史列不得输出。
+  return `只输出 observations。每项必填 n（原项目名）、r（原结果文本）、p、q；可选 s（最近章节）、c、v、u、lo、hi、ref、f、m、examination（仅含 timeText，逐字引用该结果对应的日期列表头或阶段标签）。f 只能是 high、low、abnormal、normal。禁止输出 normalizedName。
+严格按表头解释本次结果、单位、参考值和历史结果。本次结果为“-”“±”或阴阳性时必须原样保留，不得把参考值或历史值作为本次结果。历史章节和历史列中的真实测量也须逐次输出；每次结果独立记录 examination.timeText（对应日期列或“入院时/出院时”原文）及 evidence。不能套用报告日期，无法确定时间仍保留结果待确认。
 项目名只能来自“项目/名称”列或当前行开头；本次结果列中的文字（包括“右侧外耳道耵聍堵塞”这类异常发现描述）就是结果文本，不得把结果文本提升为项目名后再从其他列另找结果。
 只提取单值定量或定性指标。囊肿、结节、斑块、息肉、结石、占位、积液、器官形态、回声、密度、边界、血流及影像分级不得进入 observations。
 一般检查中的身高、体重、BMI、腰围、臀围、脉搏和血压逐项输出；120/80 mmHg 拆成收缩压和舒张压，不得推算报告未写出的数据。异常标记只取本次结果旁的原报告标记。`;
@@ -1566,7 +1585,7 @@ const contentTypeLabels: Record<ReportContentType, string> = {
 
 const typePromptPlugins: Partial<Record<ReportContentType, string>> = {
   checkup: `体检内容：重点检查一般检查、基础测量、各科分项、阳性发现、总检结论和原报告建议。综合体检中的检验、影像、功能检查仍按其原始章节提取，不要把专项页标题当作整份报告标题。
-各科查体表（耳鼻喉、眼科、口腔、内外科等）多为“项目 | 本次结果 | 参考值 | 历史结果”结构：项目列（如耳、鼻、口咽）是项目名，本次结果列原样作为结果（“未见异常”或异常发现描述均可），历史结果列不得输出。`,
+各科查体表（耳鼻喉、眼科、口腔、内外科等）多为“项目 | 本次结果 | 参考值 | 历史结果”结构：项目列（如耳、鼻、口咽）是项目名，本次结果列原样作为结果（“未见异常”或异常发现描述均可），历史结果列中的真实测量独立输出并通过 examination.timeText 指明对应日期或阶段，不得混入本次结果。`,
   laboratory: `检验内容：逐行提取当前结果、单位、参考范围、异常标记、标本和检测方法。严格区分本次结果列与历史结果列；项目名必须来自当前行，不得用表头或参考项目代替。`,
   imaging: `影像内容：重点提取检查方式、真实部位、左右侧、增强信息、检查所见和影像结论。结节、囊肿、斑块、息肉、结石、积液、占位及明确异常形态只进入 morphologyFindings。`,
   functional: `功能检查内容：提取心电图、肺功能、骨密度、动脉功能、呼气试验等明确测量和原报告结论。单值测量进入 observations，可追踪形态发现进入 morphologyFindings。
@@ -1662,7 +1681,9 @@ export const requestAiExtraction: AiExecutor = async (input) => {
     maxOutputTokens,
     timeoutMs,
   });
+  const requestId = createId("aireq");
   await writeAiInputDebugLog({
+    requestId,
     provider: new URL(settings.baseUrl).host,
     model: settings.model,
     promptVersion: aiExtractionPromptVersion,
@@ -1682,16 +1703,42 @@ export const requestAiExtraction: AiExecutor = async (input) => {
     documentContentType: input.documentContentType,
     requestBody,
   });
-  const response = await executeAiTask("report_extraction", {
-    messages,
-    temperature,
-    responseFormat: "json_object",
-    maxOutputTokens,
-    timeoutMs,
-    timeoutCode: "AI_REQUEST_TIMEOUT",
-    timeoutMessage: `当前 AI 解析单元在 ${Math.round(timeoutMs / 1000)} 秒内未完成`,
-    networkCode: "AI_NETWORK_ERROR",
-    networkMessage: "无法连接 AI 服务，请检查 NAS 网络、服务地址和模型状态",
+  let response: Awaited<ReturnType<typeof executeAiTask>>;
+  try {
+    response = await executeAiTask("report_extraction", {
+      messages,
+      temperature,
+      responseFormat: "json_object",
+      maxOutputTokens,
+      timeoutMs,
+      timeoutCode: "AI_REQUEST_TIMEOUT",
+      timeoutMessage: `当前 AI 解析单元在 ${Math.round(timeoutMs / 1000)} 秒内未完成`,
+      networkCode: "AI_NETWORK_ERROR",
+      networkMessage: "无法连接 AI 服务，请检查 NAS 网络、服务地址和模型状态",
+    });
+  } catch (error) {
+    const failure = error as { code?: string; upstreamStatus?: number; elapsedMs?: number; provider?: string; model?: string };
+    await writeAiOutputDebugLog({
+      requestId,
+      provider: failure.provider || new URL(settings.baseUrl).host,
+      model: failure.model || settings.model,
+      status: "failed",
+      elapsedMs: failure.elapsedMs ?? null,
+      errorCode: failure.code || "AI_REQUEST_FAILED",
+      upstreamStatus: failure.upstreamStatus,
+    });
+    throw error;
+  }
+  await writeAiOutputDebugLog({
+    requestId,
+    provider: response.provider,
+    model: response.model,
+    status: "completed",
+    responseContent: response.content,
+    finishReason: response.finishReason,
+    promptTokens: response.promptTokens,
+    completionTokens: response.completionTokens,
+    elapsedMs: response.elapsedMs,
   });
   if (response.finishReason === "length") {
     throw Object.assign(
@@ -2283,6 +2330,7 @@ function reconcileDescriptiveMorphologyFindings(
         candidateIndex === descriptorIndex ||
         standardizedMorphologyType(candidate) !== targetType ||
         !compatibleMorphologyLocation(candidate, descriptor) ||
+        morphologyTemporalHint(candidate) !== morphologyTemporalHint(descriptor) ||
         !sharesMorphologyEvidencePage(candidate, descriptor)
       )
         return [];
@@ -2415,7 +2463,10 @@ export function deduplicateReportMorphologyFindings(
       region: standardizedMorphologyRegion(finding),
       size: normalizedMorphologySize(finding),
     };
-    const existingIndex = identities.findIndex((candidate) => {
+    const existingIndex = identities.findIndex((candidate, candidateIndex) => {
+      const leftTime = morphologyTemporalHint(merged[candidateIndex]);
+      const rightTime = morphologyTemporalHint(finding);
+      if (leftTime !== rightTime) return false;
       if (
         candidate.organ !== identity.organ ||
         candidate.type !== identity.type ||
@@ -2458,6 +2509,13 @@ export function deduplicateReportMorphologyFindings(
     };
   }
   return reconcileDescriptiveMorphologyFindings(merged);
+}
+
+function morphologyTemporalHint(finding: AiMorphologyFinding) {
+  const value = finding.examination?.timeText || finding.evidence.find((entry) => entry.table?.resultColumn?.headerText)?.table?.resultColumn?.headerText || "";
+  const date = value.match(/(?:19|20|21)\d{2}[-/.年]\d{1,2}[-/.月]\d{1,2}日?(?:\s*\d{1,2}[:：]\d{2}(?:[:：]\d{2})?)?/);
+  const stage = value.match(/入院前|入院时|出院时|出院后/);
+  return date?.[0] || stage?.[0] || "";
 }
 
 function normalizedReportDate(value: string) {
@@ -2740,6 +2798,66 @@ function compactPersistedEvidence(value: unknown) {
     .replace(/[（）()，,。.:：;；、|｜\s_]/g, "");
 }
 
+function persistedEvidenceRect(value: unknown) {
+  if (!Array.isArray(value)) return null;
+  const points = Array.isArray(value[0])
+    ? value.flatMap((point) => Array.isArray(point) && point.length >= 2
+      ? [{ x: Number(point[0]), y: Number(point[1]) }]
+      : [])
+    : value.length >= 4
+      ? [{ x: Number(value[0]), y: Number(value[1]) }, { x: Number(value[2]), y: Number(value[3]) }]
+      : [];
+  if (!points.length || points.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))) return null;
+  return {
+    left: Math.min(...points.map((point) => point.x)),
+    right: Math.max(...points.map((point) => point.x)),
+  };
+}
+
+/** Re-check coordinate evidence against the actual planned OCR cells before allowing it through persistence. */
+function persistedCoordinateEvidenceMatches(
+  line: PlannedOcrLine,
+  observation: AiObservation,
+  quote: string,
+) {
+  const parts = quote.split(/\s+\|\s+/);
+  if (parts.length !== 2 || line.sourceCells.length < 2) return false;
+  const [namePart, valuePart] = parts;
+  const compactNamePart = compactPersistedEvidence(namePart);
+  const compactValuePart = compactPersistedEvidence(valuePart);
+  if (!compactNamePart || !compactValuePart) return false;
+  const names = [observation.itemName, observation.normalizedName || ""]
+    .map(compactPersistedEvidence)
+    .filter((name) => name.length >= 2);
+  const nameCells = line.sourceCells.filter((cell) => {
+    const text = compactPersistedEvidence(cell.text);
+    return text === compactNamePart && names.some((name) => text.includes(name));
+  });
+  const valueCells = line.sourceCells.filter((cell) =>
+    compactPersistedEvidence(cell.text) === compactValuePart,
+  );
+  if (nameCells.length !== 1 || valueCells.length !== 1 || nameCells[0] === valueCells[0]) return false;
+  const target = observation.numericValue ?? strictNumericObservationResult(observation.resultText);
+  const numbers = valueCells[0].text.match(/[-+]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g) || [];
+  if (target === null || numbers.length !== 1 || !sameObservationNumber(Number(numbers[0]), target)) return false;
+  const nameRect = persistedEvidenceRect(nameCells[0].box);
+  const valueRect = persistedEvidenceRect(valueCells[0].box);
+  if (!nameRect || !valueRect || valueRect.left < nameRect.right) return false;
+  const firstNumericRight = line.sourceCells
+    .flatMap((cell) => {
+      const rect = persistedEvidenceRect(cell.box);
+      const cellNumbers = cell.text.match(/[-+]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g) || [];
+      return rect && cellNumbers.length && rect.left >= nameRect.right
+        ? [{ cell, rect }]
+        : [];
+    })
+    .sort((left, right) => left.rect.left - right.rect.left)[0];
+  if (firstNumericRight?.cell !== valueCells[0]) return false;
+  const expectedComparator = observation.resultText.match(/[<>≤≥]/)?.[0] || null;
+  const actualComparator = valueCells[0].text.match(/[<>≤≥]/)?.[0] || null;
+  return !expectedComparator || expectedComparator === actualComparator;
+}
+
 /**
  * 持久化前只保留能回指当前报告 OCR 来源的证据。原始 OCR 行可直接命中；经过本地表格重排、
  * 相邻单元拼接后形成的预处理行，必须与当前规划器产出的行完全一致才可信，避免 AI 通过
@@ -2777,13 +2895,10 @@ function validatePersistedObservationEvidence(
       pages.set(row.pageNumber, []);
     }
   }
-  const plannedPages = new Map<number, string[]>();
+  const plannedPages = new Map<number, PlannedOcrLine[]>();
   try {
     for (const page of buildAiExtractionPlan(reportId).pages) {
-      plannedPages.set(
-        page.pageNumber,
-        page.lines.map((line) => line.text.trim()).filter(Boolean),
-      );
+      plannedPages.set(page.pageNumber, page.lines);
     }
   } catch (error) {
     if (
@@ -2798,11 +2913,19 @@ function validatePersistedObservationEvidence(
       observation.evidence.flatMap((evidence) => {
         const quote = compactPersistedEvidence(evidence.quote);
         if (quote.length < 2) return [];
-        const plannedCandidates = (
-          plannedPages.get(evidence.pageNumber) || []
-        ).flatMap((line) =>
-          compactPersistedEvidence(line) === quote ? [{ line, score: 4 }] : [],
+        const plannedLines = plannedPages.get(evidence.pageNumber) || [];
+        const plannedCandidates = plannedLines.flatMap((line) =>
+          compactPersistedEvidence(line.text) === quote
+            ? [{ line: line.text, score: 4 }]
+            : [],
         );
+        const coordinateCandidates = evidence.coordinateVerified
+          ? plannedLines.flatMap((line) =>
+              persistedCoordinateEvidenceMatches(line, observation, evidence.quote)
+                ? [{ line: evidence.quote, score: 5 }]
+                : [],
+            )
+          : [];
         const rawCandidates = (pages.get(evidence.pageNumber) || [])
           .map((line) => {
             const source = compactPersistedEvidence(line);
@@ -2815,7 +2938,7 @@ function validatePersistedObservationEvidence(
           .filter((candidate): candidate is { line: string; score: number } =>
             Boolean(candidate),
           );
-        const candidates = [...plannedCandidates, ...rawCandidates].sort(
+        const candidates = [...coordinateCandidates, ...plannedCandidates, ...rawCandidates].sort(
           (left, right) =>
             right.score - left.score ||
             left.line.localeCompare(right.line, "zh-CN"),
@@ -2828,6 +2951,7 @@ function validatePersistedObservationEvidence(
                 /* 视觉复核来源标记随证据改写一并保留，
                    归一化闸门据此区分"以图为准"的数值/单位 */
                 ...(evidence.source ? { source: evidence.source } : {}),
+                ...(evidence.coordinateVerified ? { coordinateVerified: true as const } : {}),
               },
             ]
           : [];
@@ -3113,12 +3237,14 @@ export function deduplicateReportObservations(
   reportId: string,
   observations: AiObservation[],
 ) {
-  observations = sanitizeReportObservations(observations);
+  const examinationPages = examinationSourcePages(reportId);
+  observations = sanitizeReportObservations(expandTemporalObservationColumns(observations, examinationPages));
   if (observations.length < 2) return observations;
   const report = getDatabase()
     .prepare(
       `
-    SELECT report_type AS reportType, hospital_name_raw AS hospitalName,
+    SELECT report_type AS reportType, report_issued_at AS reportIssuedAt,
+      hospital_name_raw AS hospitalName,
       performing_department AS performingDepartment, reporting_department AS reportingDepartment
     FROM reports WHERE id = ?
   `,
@@ -3126,6 +3252,7 @@ export function deduplicateReportObservations(
     .get(reportId) as
     | {
         reportType: string;
+        reportIssuedAt: string | null;
         hospitalName: string | null;
         performingDepartment: string | null;
         reportingDepartment: string | null;
@@ -3139,6 +3266,7 @@ export function deduplicateReportObservations(
     canonicalKey: string | null;
     result: string;
     unit: string | null;
+    examinationKey: string | null;
     temporalKind: string;
     measuredAt: string | null;
     specimen: string | null;
@@ -3166,6 +3294,14 @@ export function deduplicateReportObservations(
     const safeDedupCanonicalKey = usesCanonicalValue
       ? normalized.canonicalKey
       : null;
+    const inferredExamination = examinationPages.length
+      ? inferObservationExamination(observation, examinationPages, report.reportIssuedAt)
+      : null;
+    const hasInferredTime = Boolean(
+      inferredExamination?.sampledAt ||
+      inferredExamination?.examinedAt ||
+      inferredExamination?.issuedAt,
+    );
     const identity = {
       names: semanticObservationNames(observation),
       canonicalKey: safeDedupCanonicalKey,
@@ -3180,6 +3316,22 @@ export function deduplicateReportObservations(
           usesCanonicalValue ? normalized.canonicalUnit : observation.unit,
         ) || null,
       ...context,
+      // Evidence wording and page/block position can vary between extraction passes.
+      // Group by the temporal and specimen/method identity instead: distinct dates or
+      // examination contexts remain separate, while repeated extraction of the same
+      // measurement across summary/detail pages folds into one row with merged evidence.
+      examinationKey: inferredExamination
+        ? hasInferredTime
+          ? JSON.stringify([
+              inferredExamination.sampledAt,
+              inferredExamination.examinedAt,
+              inferredExamination.issuedAt,
+              inferredExamination.reportNumber,
+              inferredExamination.specimen,
+              inferredExamination.method,
+            ])
+          : inferredExamination.sourceKey
+        : null,
     };
     const existingIndex = identities.findIndex(
       (candidate) =>
@@ -3193,6 +3345,7 @@ export function deduplicateReportObservations(
         (!candidate.unit ||
           !identity.unit ||
           candidate.unit === identity.unit) &&
+        candidate.examinationKey === identity.examinationKey &&
         candidate.temporalKind === identity.temporalKind &&
         (!candidate.measuredAt ||
           !identity.measuredAt ||
@@ -3434,9 +3587,15 @@ export function persistAiExtraction(
       normalized.fields.observations,
     ),
   };
+  const examinationPagesForOverrides=examinationSourcePages(reportId);
   const observationsWithOverrides = applyObservationFieldOverrides(
     reportId,
-    fields.observations,
+    fields.observations.map(observation=>{
+      if(!observation.examination?.timeText)return observation;
+      const inferred=inferObservationExamination(observation,examinationPagesForOverrides);
+      if(inferred.risks.some(risk=>['source_unverified','source_row_ambiguous','time_hint_unverified','column_result_unverified'].includes(risk)))return observation;
+      return {...observation,evidence:observation.evidence.map(evidence=>({...evidence,examinationSourceKey:inferred.sourceKey}))};
+    }),
   );
   const deterministicDates = deterministicReportDates(reportId);
   const protectedRows = protectedMorphologyRows(reportId);
@@ -3557,6 +3716,8 @@ export function persistAiExtraction(
     db.prepare(
       `UPDATE reports SET ${updates.length ? `${updates.join(", ")}, ` : ""}source_version = source_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
     ).run(...values, reportId);
+    const examinationAssignments = snapshotExaminationAssignments(reportId, isAppend);
+    const examinationCandidates: Array<{id:string;observation:AiObservation}> = [];
     db.prepare("DELETE FROM observations WHERE report_id = ?").run(reportId);
     for (const applied of observationsWithOverrides) {
       const observation = applied.observation;
@@ -3597,10 +3758,15 @@ export function persistAiExtraction(
         observation.method,
         JSON.stringify(observation.evidence),
       );
+      examinationCandidates.push({id:observationId,observation:{...observation,evidence:observation.evidence.flatMap(entry =>
+        typeof entry.pageNumber === "number" && typeof entry.quote === "string"
+          ? [{pageNumber:entry.pageNumber,quote:entry.quote}] : [])}});
       if (applied.overrideId) {
         bindObservationFieldOverride(applied.overrideId, observationId);
       }
     }
+    const legacyExaminationIds = restoreExaminationAssignments(reportId, examinationAssignments, isAppend && observationsWithOverrides.length > 0);
+    publishExaminationAssignments(reportId, examinationCandidates, examinationSourcePages(reportId), legacyExaminationIds);
     /* 血型等成员固有属性随提取结果沉淀到成员档案（仅填空、人工优先） */
     backfillMemberBloodTypeFromReport(
       reportId,
@@ -3851,12 +4017,18 @@ export function persistAiExtraction(
         JSON.stringify(section.evidence),
       );
     }
+    const morphologyTimeAssignments = db.prepare(`SELECT f.id,f.finding_name AS findingName,f.raw_text AS rawText,f.evidence_json AS evidenceJson,
+      l.examination_id AS examinationId,l.assignment_source AS assignmentSource,e.confirmation_status AS confirmationStatus
+      FROM morphology_findings f JOIN morphology_finding_examinations l ON l.finding_id=f.id
+      JOIN report_examinations e ON e.id=l.examination_id WHERE f.report_id=?
+      AND (l.assignment_source='manual' OR e.confirmation_status='confirmed')`).all(reportId) as Array<{id:string;findingName:string;rawText:string;evidenceJson:string;examinationId:string;assignmentSource:string;confirmationStatus:string}>;
     db.prepare(
       `
       DELETE FROM morphology_findings
       WHERE report_id = ? AND json_array_length(manual_fields_json) = 0
     `,
     ).run(reportId);
+    const morphologyExaminationCandidates: Array<{id:string;finding:AiMorphologyFinding}> = [];
     for (const finding of fields.morphologyFindings) {
       const old = matchProtectedMorphology(
         finding,
@@ -3923,7 +4095,19 @@ export function persistAiExtraction(
         protectedValue.source,
         protectedValue.manualFieldsJson,
       );
+      morphologyExaminationCandidates.push({id:protectedValue.id,finding});
     }
+    const morphologyRows=db.prepare('SELECT id,finding_name AS findingName,raw_text AS rawText,evidence_json AS evidenceJson FROM morphology_findings WHERE report_id=?').all(reportId) as Array<{id:string;findingName:string;rawText:string;evidenceJson:string}>;
+    const usedMorphologyIds=new Set<string>();
+    for(const old of morphologyTimeAssignments){
+      const match=morphologyRows.find(row=>!usedMorphologyIds.has(row.id) && row.findingName===old.findingName && row.rawText===old.rawText && row.evidenceJson===old.evidenceJson);
+      if(!match)continue;
+      usedMorphologyIds.add(match.id);
+      db.prepare(`INSERT INTO morphology_finding_examinations(finding_id,examination_id,assignment_source) VALUES(?,?,?)
+        ON CONFLICT(finding_id) DO UPDATE SET examination_id=excluded.examination_id,assignment_source=excluded.assignment_source,updated_at=CURRENT_TIMESTAMP`)
+        .run(match.id,old.examinationId,old.assignmentSource);
+    }
+    publishMorphologyExaminationAssignments(reportId,morphologyExaminationCandidates,examinationSourcePages(reportId));
     db.prepare(
       `
       INSERT INTO report_extractions (

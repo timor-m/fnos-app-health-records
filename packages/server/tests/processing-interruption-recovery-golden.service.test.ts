@@ -259,7 +259,7 @@ function controlledWorker(
       lines: [
         {
           id: `recovery_header_${pageNumber}`,
-          text: `匿名异常恢复检验报告 第${pageNumber}页`,
+          text: `匿名异常恢复检验报告 第${pageNumber}页 报告编号：SYNTHETIC 报告日期：2026-08-06`,
           confidence: 0.99,
           box: [0, 0, 180, 10],
         },

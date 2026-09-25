@@ -841,7 +841,7 @@ test("recognizes bracketed report sections and preserves a dash as the current t
   );
 });
 
-test("excludes historical result sections from scalar and morphology candidates", () => {
+test("retains historical measurements and their date heading for separate examination extraction", () => {
   const plan = planRebuiltOcrPages(
     "historical-report",
     rebuildOcrPages([
@@ -856,9 +856,11 @@ test("excludes historical result sections from scalar and morphology candidates"
   );
   const sent = plan.pages[0].text;
   assert.match(sent, /中度脂肪肝/);
-  assert.doesNotMatch(sent, /轻度脂肪肝|总胆固醇|2025-07-12/);
-  assert.equal(plan.pages[0].morphologyCandidateCount, 1);
-  assert.equal(plan.pages[0].candidateRowCount, 1);
+  assert.match(sent, /轻度脂肪肝/);
+  assert.match(sent, /总胆固醇/);
+  assert.match(sent, /2025-07-12/);
+  assert.equal(plan.pages[0].morphologyCandidateCount, 2);
+  assert.equal(plan.pages[0].candidateRowCount, 3);
 });
 
 test("keeps health education continuation pages out of the candidate plan", () => {
@@ -4867,5 +4869,28 @@ test("leaves ambiguous or unsupported wrapped table names unchanged", () => {
       pageId: "ambiguous-table", pageNumber: 1, linesJson: JSON.stringify(lines),
     }]);
     assert.ok(rebuilt[0].lines.every((line) => !line.id.includes("table_name_wrap_")), `case ${index}`);
+  }
+});
+
+test('explicit multi-date columns recover every local measurement even when AI omits the row', () => {
+  for (const headers of ['2026-09-01 | 2026-09-08','入院时 | 出院时']) {
+    const [rebuilt] = rebuildOcrPages([page(1,['肝功能',`项目 | ${headers} | 单位 | 参考范围`,'丙氨酸氨基转移酶 | 120 | 80 | U/L | 0-40'])]);
+    const facts=rebuilt.lines.flatMap(localObservationsForLine);
+    assert.equal(facts.length,2);
+    assert.deepEqual(facts.map(f=>[f.numericValue,f.examination?.timeText]),[[120,headers.split(' | ')[0]],[80,headers.split(' | ')[1]]]);
+    assert.ok(facts.every(f=>f.referenceHigh===40 && f.sourceText==='丙氨酸氨基转移酶 | 120 | 80 | U/L | 0-40'));
+    assert.notEqual(facts[0].observationKey,facts[1].observationKey);
+  }
+});
+
+test('ambiguous temporal headers and partially parsed temporal rows remain available for review', () => {
+  for (const [header,row] of [
+    ['项目 | 2026-09-01 | 2026-09-01 | 单位','丙氨酸氨基转移酶 | 120 | 80 | U/L'],
+    ['项目 | 2026-09-01 | 2026-09-08 | 单位','丙氨酸氨基转移酶 | 120 | 无法判读 | U/L'],
+  ]) {
+    const [rebuilt]=rebuildOcrPages([page(1,['肝功能',header,row])]);
+    const line=rebuilt.lines.find(l=>l.text===row)!;
+    assert.equal(localObservationsForLine(line).length,0);
+    assert.equal(line.candidateKind,'scalar');
   }
 });

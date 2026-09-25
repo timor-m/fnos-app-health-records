@@ -404,14 +404,15 @@ it("shows OCR and AI progress and keeps the entry informative after closing the 
   expect(wrapper.text()).toContain("补充页面与整理结果均已保存");
 });
 
-it("shows that ready pages still need submission and OCR-only does not mean AI completion", async () => {
+it("clarifies the page-selection step and distinguishes OCR-only from AI completion", async () => {
   mocks.request.mockResolvedValue(structuredClone(batch));
   wrapper = mount(Panel, { props: { reportId: "report", oldPageCount: 2 } });
   await flushPromises();
-  expect(button("补充报告页").text()).toContain("待提交");
+  expect(button("补充报告页").text()).toContain("待选页");
   await button("补充报告页").trigger("click");
   await flushPromises();
-  expect(wrapper.text()).toContain("才会加入当前报告并开始整理");
+  expect(wrapper.text()).toContain("OCR 尚未开始");
+  expect(wrapper.text()).toContain("之后会自动进行 OCR 和 AI 整理");
   expect(button("补充并识别").classes()).toContain("primary-button");
   mocks.request.mockResolvedValue({
     ...structuredClone(batch),

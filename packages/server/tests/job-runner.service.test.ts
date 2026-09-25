@@ -1,3 +1,4 @@
+import {getReportExaminations,saveReportExamination} from '../services/report-examination.service';
 import { markDuplicateResultCurrent, buildDuplicateSnapshot } from "../services/report-duplicate-snapshot.service.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -1684,6 +1685,12 @@ test("manual AI rerun atomically replaces generated results, preserves manual fi
             modelVersion: "test-v1",
             lines: [
               {
+                id: "synthetic_examination_number",
+                text: "报告编号：SYNTHETIC",
+                confidence: 0.99,
+                box: [0, -10, 180, -2],
+              },
+              {
                 id: "page_1_line_1",
                 text: "空腹血糖 5.8 mmol/L",
                 confidence: 0.99,
@@ -1939,6 +1946,33 @@ test("manual AI rerun atomically replaces generated results, preserves manual fi
       visibleJobs.find((job) => job.id === oldJobId)?.batchKind,
       "manual_ai",
     );
+    const concurrent = queueManualAiExtraction(manager, upload.reportId);
+    let concurrentEdited = false;
+    await assert.rejects(processNextJob(worker, async (...args) => {
+      if (!concurrentEdited) {
+        concurrentEdited = true;
+        const state = getReportExaminations(manager, upload.reportId);
+        saveReportExamination(manager, upload.reportId, {
+          version:state.version,reportVersion:state.reportVersion,requestKey:'concurrent-time-edit',
+          id:state.examinations[0].id,observationIds:[replacement.id],
+          examination:{examinationType:'检验',sampledAt:'2026-08-05',timeText:'人工核对合成时间'}
+        });
+      }
+      return ai(...args);
+    }), /报告在整理期间已修改/);
+    assert.equal(concurrentEdited,true,'the manual change must occur while the AI executor is running');
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM report_extractions WHERE job_id=?').get(concurrent.id)!.n,0,'stale AI output cannot publish');
+    assert.equal(db.prepare('SELECT numeric_value FROM observations WHERE id=?').get(replacement.id)!.numeric_value,5.8);
+    assert.equal(getReportExaminations(manager,upload.reportId).examinations[0].occurredAt,'2026-08-05');
+    const blockedJob = listProcessingJobs(manager,upload.reportId).find(job=>job.id===concurrent.id)!;
+    assert.notEqual(blockedJob.status,'completed');
+    if (blockedJob.status === 'failed') retryProcessingJob(manager,concurrent.id);
+    db.prepare("UPDATE processing_jobs SET next_retry_at=NULL WHERE id=?").run(concurrent.id);
+    await processNextJob(worker,ai);
+    assert.equal(listProcessingJobs(manager,upload.reportId).find(job=>job.id===concurrent.id)?.status,'completed');
+    assert.equal(getReportExaminations(manager,upload.reportId).examinations.find(exam=>exam.confirmationStatus==='confirmed')?.occurredAt,'2026-08-05');
+
+
   });
 });
 
@@ -1962,6 +1996,7 @@ test("keeps the current report usable until reprocessed OCR and AI atomically re
             engine: "test-ocr",
             modelVersion: `test-v${aiRound + 1}`,
             lines: [
+              {text: "报告编号：SYNTHETIC 报告日期：2026-07-21",confidence:0.99},
               {
                 text:
                   aiRound === 0
@@ -2248,7 +2283,7 @@ test("keeps the previous OCR, observations, and trend when reprocessing exhausts
             ok: true,
             engine: "test-ocr",
             modelVersion: "stable-v1",
-            lines: [{ text: "检验结果 血糖 4.9 mmol/L", confidence: 0.99 }],
+            lines: [{text: "报告编号：SYNTHETIC 报告日期：2026-07-22",confidence:0.99}, { text: "检验结果 血糖 4.9 mmol/L", confidence: 0.99 }],
             elapsedMs: 6,
           };
     const initialAi: AiExecutor = async () => {

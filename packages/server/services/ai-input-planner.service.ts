@@ -113,6 +113,7 @@ export type LocalObservationSourceMap = {
 };
 
 export type LocalObservationFact = {
+  examination?: { timeText: string };
   pageNumber: number;
   sourceLineId: string;
   sectionName: string | null;
@@ -263,11 +264,18 @@ const tableHeaderContentPattern =
   /\d|[。；;]|建议|随诊|复查|诊治|(?:^|[|｜\s(（:：])(?:阴性|阳性|弱阳性|正常|异常|未见|偏高|偏低)(?=[|｜\s)）:：]|$)/;
 
 function isTableHeaderRow(text: string) {
+  const cells = splitTableCells(text);
+  if (/^(?:项目|项目名称|名称|检测项目|检验项目)$/.test(cells[0] || '') && cells.filter(isTemporalResultHeader).length >= 2) return true;
   if (isExplicitOcrTableHeader(text)) return true;
   return (
     (tableHeaderPattern.test(text) || tcdTableHeaderPattern.test(text)) &&
     !tableHeaderContentPattern.test(text)
   );
+}
+
+function isTemporalResultHeader(value: string) {
+  return /^(?:(?:采样|检查|检验|报告)(?:日期|时间)?\s*[:：]?\s*)?(?:19|20|21)\d{2}[-/.年]\d{1,2}[-/.月]\d{1,2}日?(?:[ T]\d{1,2}[:：]\d{2}(?:[:：]\d{2})?)?$/.test(value.trim())
+    || /^(?:入院时|出院时|入院前|出院后)$/.test(value.trim());
 }
 
 const morphologyPattern =
@@ -4521,6 +4529,23 @@ function parseLocalObservations(
   patientSex?: PatientSex | null,
 ) {
   if (line.tableStructureUnsafe) return [];
+  // Reuse the existing conservative scalar parser for each explicitly dated column.
+  // Preserve the original row/cell evidence; only the temporary selection header changes.
+  if (tableHeader && tableHeader.length === splitTableCells(line.text).length && tableHeader.filter(isTemporalResultHeader).length >= 2) {
+    const temporalHeaders = tableHeader.filter(isTemporalResultHeader);
+    if (new Set(temporalHeaders).size !== temporalHeaders.length) return [];
+    const values = splitTableCells(line.text);
+    let unresolved = false;
+    const facts = tableHeader.flatMap((header,index) => {
+      if (!isTemporalResultHeader(header)) return [];
+      const selectedHeader = tableHeader.map((cell,column) => column === index ? '本次结果' : isTemporalResultHeader(cell) ? '历史结果' : cell);
+      const fact = parseLocalObservation(line,pageNumber,section,selectedHeader,tableHeaderCells,disambiguationSection,aliases,unitPattern,patientSex);
+      if (!fact && values[index]?.trim()) unresolved = true;
+      return fact ? [{...fact,examination:{timeText:header}}] : [];
+    });
+    // A partially parsed row must still reach AI and the unresolved-candidate review.
+    return unresolved ? [] : facts;
+  }
   const bloodPressure = parseExplicitBloodPressureObservations(
     line,
     pageNumber,
@@ -5904,11 +5929,6 @@ export function rebuildOcrPages(
     );
     const parsedLines = annotated.lines;
     lineContext = annotated.context;
-    const historicalIndex = parsedLines.findIndex((line) =>
-      historicalSectionPattern.test(
-        line.text.replace(/^【\s*|\s*】$/g, "").trim(),
-      ),
-    );
     const startsEducation = isEducationPage(parsedLines);
     const restartsReportContent = parsedLines
       .slice(0, 12)
@@ -5923,10 +5943,9 @@ export function rebuildOcrPages(
     if (educationContinuation && restartsReportContent)
       educationContinuation = false;
     if (startsEducation) educationContinuation = true;
-    let lines =
-      historicalIndex >= 0
-        ? parsedLines.slice(0, historicalIndex)
-        : parsedLines;
+    // Historical measurements are separate examinations, not disposable noise.
+    // Keep their headings as source context so extraction can bind their dates.
+    let lines = parsedLines;
     if (educationContinuation) {
       lines = startsEducation
         ? parsedLines

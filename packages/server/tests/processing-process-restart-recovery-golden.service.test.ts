@@ -264,7 +264,7 @@ function controlledWorker(
       lines: [
         {
           id: `restart_header_${pageNumber}`,
-          text: `匿名进程重启检验报告 第${pageNumber}页`,
+          text: `匿名进程重启检验报告 第${pageNumber}页 报告编号：SYNTHETIC 报告日期：2026-08-06`,
           confidence: 0.99,
           box: [0, 0, 180, 10],
         },

@@ -75,9 +75,9 @@ onBeforeUnmount(cleanup);
 .indicator-hint .indicator-hint-anchor { display: inline-flex; }
 .indicator-hint .indicator-hint-toggle {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 28px; height: 28px; min-width: 28px; padding: 0; border: 1px solid var(--line);
+  width: 22px; height: 22px; min-width: 22px; padding: 0; border: 1px solid var(--line);
   border-radius: 50%; background: var(--fill-2); color: var(--muted); font-weight: 700;
-  font-size: 15px; cursor: pointer; box-shadow: none;
+  font-size: 12px; cursor: pointer; box-shadow: none;
 }
 .indicator-hint-toggle:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .indicator-hint-panel {

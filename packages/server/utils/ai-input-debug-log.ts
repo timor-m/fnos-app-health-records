@@ -75,6 +75,7 @@ async function rotateIfNeeded(
 }
 
 export type AiInputDebugEntry = {
+  requestId?: string;
   provider: string;
   model: string;
   promptVersion: string;
@@ -95,41 +96,32 @@ export type AiInputDebugEntry = {
   requestBody: Record<string, unknown>;
 };
 
-export async function writeAiInputDebugLog(entry: AiInputDebugEntry) {
+export type AiOutputDebugEntry = {
+  requestId: string;
+  provider: string;
+  model: string;
+  status: "completed" | "failed";
+  responseContent?: string;
+  finishReason?: string | null;
+  promptTokens?: number | null;
+  completionTokens?: number | null;
+  elapsedMs?: number | null;
+  errorCode?: string;
+  upstreamStatus?: number;
+};
+
+async function appendDebugBlock(kind: "AI INPUT" | "AI OUTPUT", entry: Record<string, unknown>, summary: Record<string, unknown>) {
   if (!isAiInputDebugLogEnabled()) return;
-
-  const output = [
-    `===== AI INPUT ${new Date().toISOString()} =====`,
-    JSON.stringify(entry, null, 2),
-    "===== END AI INPUT =====",
-    ""
-  ].join("\n");
-
   const operation = async () => {
     try {
       const policy = getAiInputDebugLogPolicy();
-      let content = output;
-      let incomingBytes = Buffer.byteLength(content, "utf8");
-      if (incomingBytes > policy.maxFileBytes) {
-        content = [
-          `===== AI INPUT ${new Date().toISOString()} =====`,
-          JSON.stringify({
-            provider: entry.provider,
-            model: entry.model,
-            promptVersion: entry.promptVersion,
-            inputCharacters: entry.inputCharacters,
-            pageCount: entry.pageCount,
-            plannedUnits: entry.plannedUnits,
-            planHash: entry.planHash,
-            compatibilityTruncated: entry.compatibilityTruncated,
-            omitted: true,
-            reason: "单次 AI 入参超过调试日志单文件上限"
-          }, null, 2),
-          "===== END AI INPUT =====",
-          ""
-        ].join("\n");
-        incomingBytes = Buffer.byteLength(content, "utf8");
+      const timestamp = new Date().toISOString();
+      let serialized = JSON.stringify(entry, null, 2);
+      if (Buffer.byteLength(serialized, "utf8") > policy.maxFileBytes) {
+        serialized = JSON.stringify(summary, null, 2);
       }
+      const content = [`===== ${kind} ${timestamp} =====`, serialized, `===== END ${kind} =====`, ""].join("\n");
+      const incomingBytes = Buffer.byteLength(content, "utf8");
       await mkdir(dirname(policy.filePath), { recursive: true });
       await rotateIfNeeded(policy, incomingBytes);
       await appendFile(policy.filePath, content, { encoding: "utf8", mode: 0o600 });
@@ -138,8 +130,28 @@ export async function writeAiInputDebugLog(entry: AiInputDebugEntry) {
       // Debug logging must never interrupt report processing.
     }
   };
-
   const result = debugLogQueue.then(operation, operation);
   debugLogQueue = result.then(() => undefined, () => undefined);
   await result;
+}
+
+export async function writeAiInputDebugLog(entry: AiInputDebugEntry) {
+  await appendDebugBlock("AI INPUT", entry as unknown as Record<string, unknown>, {
+    requestId: entry.requestId, provider: entry.provider, model: entry.model,
+    promptVersion: entry.promptVersion, inputCharacters: entry.inputCharacters,
+    pageCount: entry.pageCount, plannedUnits: entry.plannedUnits,
+    planHash: entry.planHash, compatibilityTruncated: entry.compatibilityTruncated,
+    omitted: true, reason: "AI 请求体超过调试日志单条大小上限"
+  });
+}
+
+export async function writeAiOutputDebugLog(entry: AiOutputDebugEntry) {
+  await appendDebugBlock("AI OUTPUT", entry as unknown as Record<string, unknown>, {
+    requestId: entry.requestId, provider: entry.provider, model: entry.model,
+    status: entry.status, finishReason: entry.finishReason,
+    promptTokens: entry.promptTokens, completionTokens: entry.completionTokens,
+    elapsedMs: entry.elapsedMs, errorCode: entry.errorCode,
+    upstreamStatus: entry.upstreamStatus, omitted: true,
+    reason: "AI 响应内容超过调试日志单条大小上限"
+  });
 }

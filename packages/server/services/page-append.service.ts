@@ -269,7 +269,7 @@ export function getPageAppend(user: RequestUser, reportId: string, id: string) {
         : null,
     error: b.error_message,
     reviewWarnings:
-      b.state === "complete" ? appendReviewWarnings(b.job_id) : [],
+      [...JSON.parse(b.conflicts_json).filter((message: string) => message.startsWith("新增页与已有页文字高度相似")), ...(b.state === "complete" ? appendReviewWarnings(b.job_id) : [])],
     conflicts: JSON.parse(b.conflicts_json) as string[],
     files: files(id).map((f) => ({
       id: f.id,
@@ -655,7 +655,7 @@ export function confirmPageAppend(
   );
   return getPageAppend(user, reportId, id);
 }
-// Only compare within this report. Cross-format near-duplicates are advisory, never discarded.
+// Similar templates are advisory; only identity conflicts and unreadable content block publication.
 function findConflicts(b: Batch) {
   const old = getDatabase()
     .prepare(
@@ -674,22 +674,16 @@ function findConflicts(b: Batch) {
       messages.add("新增页未识别到文字，请核对原件清晰度或页面内容");
     if (oldTexts.some((t) => similarText(t, next)))
       messages.add("新增页与已有页文字高度相似，请核对是否重复");
-    for (const label of [
-      "姓名",
-      "报告编号",
-      "报告单号",
-      "检验单号",
-      "标本号",
-      "检查日期",
-      "报告日期",
-    ]) {
+    // A member's archive can contain multiple examinations; only identity differences
+    // require confirmation here. Examination dates and numbers are resolved per result.
+    for (const label of ["姓名"]) {
       const re = new RegExp(`${label}[：: ]+([^\\s，,;；]+)`, "g");
       const before = new Set(
         oldTexts.flatMap((t) => [...t.matchAll(re)].map((m) => m[1])),
       );
       const after = [...next.matchAll(re)].map((m) => m[1]);
       if (before.size && after.some((v) => !before.has(v)))
-        messages.add(`${label}与已有原件不一致，请确认属于同一份报告`);
+        messages.add(`${label}与已有原件不一致，请确认属于当前成员`);
     }
     oldTexts.push(next);
   }
@@ -886,14 +880,15 @@ export async function processPageAppendJob(
         ).run(JSON.stringify(response), p.id);
       }
       const conflicts = findConflicts(b);
+      const requiresReview = conflicts.some(message => !message.startsWith("新增页与已有页文字高度相似"));
       db.prepare(
         "UPDATE report_page_appends SET conflicts_json=?,state=? WHERE id=?",
       ).run(
         JSON.stringify(conflicts),
-        conflicts.length ? "review" : "ocr",
+        requiresReview ? "review" : "ocr",
         b.id,
       );
-      if (!conflicts.length) publish(b);
+      if (!requiresReview) publish(b);
     } else {
       if (!isAiExtractionConfigured()) {
         db.prepare(

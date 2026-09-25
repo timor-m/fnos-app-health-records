@@ -1,4 +1,6 @@
 import { evaluateDuplicatePair } from "./report-duplicate-evidence";
+import { getReportExaminations } from "./report-examination.service";
+import { examinationDuplicateResolver } from "./examination-duplicate.service";
 import { buildDuplicateSnapshot } from "./report-duplicate-snapshot.service";
 import { appendReviewWarnings } from "./page-append-result-guard.service";
 import { assertNoPageAppend } from "./page-append-lock.service";
@@ -770,13 +772,17 @@ export function listReports(
     where.push("r.report_type = ?");
     params.push(filters.reportType);
   }
-  if (filters.dateFrom) {
-    where.push(`COALESCE(${reportDisplayDateSql}, r.created_at) >= ?`);
-    params.push(filters.dateFrom);
-  }
-  if (filters.dateTo) {
-    where.push(`COALESCE(${reportDisplayDateSql}, r.created_at) <= ?`);
-    params.push(filters.dateTo);
+  if (filters.dateFrom || filters.dateTo) {
+    const dateConditions:string[]=[];
+    if(filters.dateFrom){dateConditions.push('substr(measurement_date,1,10)>=?');params.push(filters.dateFrom.slice(0,10));}
+    if(filters.dateTo){dateConditions.push('substr(measurement_date,1,10)<=?');params.push(filters.dateTo.slice(0,10));}
+    where.push(`EXISTS (SELECT 1 FROM (
+      SELECT ex.occurred_at AS measurement_date FROM report_examinations ex
+      WHERE ex.report_id=r.id AND ex.occurred_at IS NOT NULL AND EXISTS(SELECT 1 FROM observation_examinations oe WHERE oe.examination_id=ex.id)
+      UNION ALL SELECT COALESCE(${reportDisplayDateSql},r.created_at)
+      WHERE NOT EXISTS(SELECT 1 FROM report_examinations ex JOIN observation_examinations oe ON oe.examination_id=ex.id WHERE ex.report_id=r.id)
+         OR EXISTS(SELECT 1 FROM observations legacy LEFT JOIN observation_examinations le ON le.observation_id=legacy.id WHERE legacy.report_id=r.id AND le.observation_id IS NULL)
+    ) WHERE ${dateConditions.join(' AND ')})`);
   }
   const query = normalizeContentKey(filters.query);
   if (query) {
@@ -1239,7 +1245,9 @@ export function getReportDetail(
   const observations = suppressDuplicateMeasurementCandidates(getDatabase()
     .prepare(
       `
-    SELECT o.id, o.report_id AS reportId, o.section_name AS sectionName, o.item_code AS itemCode,
+    SELECT ex.id AS examinationId,ex.occurred_at AS examinationTime,ex.time_kind AS examinationTimeKind,
+      ex.confirmation_status AS examinationTimeStatus,
+      o.id, o.report_id AS reportId, o.section_name AS sectionName, o.item_code AS itemCode,
       o.item_name AS itemName, o.normalized_name AS normalizedName, o.result_text AS resultText,
       o.numeric_value AS numericValue, o.unit,
       o.reference_low AS referenceLow, o.reference_high AS referenceHigh,
@@ -1258,7 +1266,9 @@ export function getReportDetail(
     LEFT JOIN observation_normalizations n ON n.observation_id = o.id
     LEFT JOIN indicator_catalog c ON c.id = n.indicator_id
     LEFT JOIN observation_field_overrides manual_override ON manual_override.observation_id = o.id
-    WHERE o.report_id = ? ORDER BY o.section_name, o.id LIMIT 200
+    LEFT JOIN observation_examinations oe ON oe.observation_id=o.id
+    LEFT JOIN report_examinations ex ON ex.id=oe.examination_id
+    WHERE o.report_id = ? ORDER BY o.section_name, ex.occurred_at, o.id
   `,
     )
     .all(reportId)
@@ -1369,20 +1379,23 @@ export function getReportDetail(
   const morphologyFindings = getDatabase()
     .prepare(
       `
-    SELECT id, report_id AS reportId, section_name AS sectionName, organ, region, laterality,
-      finding_type AS findingType, finding_name AS findingName, presence,
-      finding_count AS findingCount, size_length AS sizeLength, size_width AS sizeWidth,
-      size_height AS sizeHeight, size_unit AS sizeUnit, measurements_json AS measurementsJson,
-      morphology_text AS morphology, attributes_json AS attributesJson,
-      classification_system AS classificationSystem,
-      classification_value AS classificationValue,
-      classification_text AS classificationText, comparison_text AS comparisonText,
-      raw_text AS rawText, evidence_json AS evidenceJson, confidence,
-      tracking_group_id AS trackingGroupId, match_confidence AS matchConfidence,
-      source, manual_fields_json AS manualFieldsJson
-    FROM morphology_findings
-    WHERE report_id = ?
-    ORDER BY section_name, organ, finding_type, id
+    SELECT f.id, f.report_id AS reportId, f.section_name AS sectionName, f.organ, f.region, f.laterality,
+      f.finding_type AS findingType, f.finding_name AS findingName, f.presence,
+      f.finding_count AS findingCount, f.size_length AS sizeLength, f.size_width AS sizeWidth,
+      f.size_height AS sizeHeight, f.size_unit AS sizeUnit, f.measurements_json AS measurementsJson,
+      f.morphology_text AS morphology, f.attributes_json AS attributesJson,
+      f.classification_system AS classificationSystem,
+      f.classification_value AS classificationValue,
+      f.classification_text AS classificationText, f.comparison_text AS comparisonText,
+      f.raw_text AS rawText, f.evidence_json AS evidenceJson, f.confidence,
+      f.tracking_group_id AS trackingGroupId, f.match_confidence AS matchConfidence,
+      f.source, f.manual_fields_json AS manualFieldsJson,
+      l.examination_id AS examinationId,e.occurred_at AS examinationTime
+    FROM morphology_findings f
+    LEFT JOIN morphology_finding_examinations l ON l.finding_id=f.id
+    LEFT JOIN report_examinations e ON e.id=l.examination_id
+    WHERE f.report_id = ?
+    ORDER BY f.section_name, f.organ, f.finding_type, f.id
     LIMIT 200
   `,
     )
@@ -1417,6 +1430,8 @@ export function getReportDetail(
         matchConfidence: number | null;
         source: MorphologyFinding["source"];
         manualFieldsJson: string;
+        examinationId: string | null;
+        examinationTime: string | null;
       };
       const hasClassification = Boolean(
         finding.classificationSystem ||
@@ -1426,7 +1441,9 @@ export function getReportDetail(
       return {
         id: finding.id,
         reportId: finding.reportId,
-        examDate: row.examinedAt || row.reportIssuedAt,
+        examDate: finding.examinationId ? finding.examinationTime : row.examinedAt || row.reportIssuedAt,
+        examinationId: finding.examinationId,
+        examinationTime: finding.examinationTime,
         sectionName: finding.sectionName,
         organ: finding.organ,
         region: finding.region,
@@ -3877,6 +3894,16 @@ function remapReportEvidencePageNumbers(
   reportId: string,
   pageNumbers: Map<number, number | null>,
 ) {
+  const examinations = db.prepare('SELECT id,evidence_json AS evidenceJson,confirmation_status AS status FROM report_examinations WHERE report_id=?').all(reportId) as Array<{id:string;evidenceJson:string;status:string}>;
+  for (const examination of examinations) {
+    const remapped = remapEvidenceValue(JSON.parse(examination.evidenceJson),pageNumbers);
+    db.prepare('UPDATE report_examinations SET evidence_json=? WHERE id=?').run(JSON.stringify(remapped.value),examination.id);
+    if (examination.status !== 'confirmed' && remapped.originalReferenceCount > 0 && remapped.remainingReferenceCount === 0) {
+      // Keep the original date text, but do not keep a verified trend date after its only source was removed.
+      db.prepare("UPDATE report_examinations SET occurred_at=NULL,time_kind='unknown',time_precision='unknown',confirmation_status='pending' WHERE id=?").run(examination.id);
+    }
+  }
+  if (examinations.length) db.prepare('UPDATE report_examination_state SET version=version+1 WHERE report_id=?').run(reportId);
   for (const table of reportEvidenceTables) {
     const rows = db
       .prepare(
@@ -4924,14 +4951,19 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       r.title AS reportTitle,
       r.report_type AS reportType,
       r.status AS reportStatus,
-      ${reportDisplayDateSql} AS reportIssuedAt,
-      COALESCE(${reportDisplayDateSql}, r.created_at) AS sortDate,
+      CASE WHEN ex.id IS NULL THEN ${reportDisplayDateSql} ELSE ex.occurred_at END AS reportIssuedAt,
+      CASE WHEN ex.id IS NULL THEN COALESCE(${reportDisplayDateSql}, r.created_at) ELSE ex.occurred_at END AS sortDate,
+      ex.id AS examinationId,ex.specimen AS examinationSpecimen,ex.method AS examinationMethod,COALESCE(ex.time_kind,'report') AS timeKind,
+      COALESCE(ex.time_precision,'unknown') AS timePrecision,COALESCE(ex.confirmation_status,'legacy') AS timeStatus,
+      ex.time_text AS timeText,
       r.hospital_name_raw AS hospitalName,
       hm.birth_date AS memberBirthDate
     FROM observations o
     LEFT JOIN observation_normalizations n ON n.observation_id = o.id
     LEFT JOIN indicator_catalog c ON c.id = n.indicator_id
     JOIN reports r ON r.id = o.report_id
+    LEFT JOIN observation_examinations oe ON oe.observation_id=o.id
+    LEFT JOIN report_examinations ex ON ex.id=oe.examination_id
     JOIN health_members hm ON hm.id = r.member_id
     JOIN member_permissions mp ON mp.member_id = r.member_id AND mp.user_id = ?
     WHERE COALESCE(NULLIF(TRIM(o.normalized_name), ''), NULLIF(TRIM(o.item_name), '')) IS NOT NULL
@@ -4979,6 +5011,8 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     reportTitle: string;
     reportType: string;
     reportStatus: string;
+    examinationId: string | null; timeKind: string; timePrecision: string; timeStatus: string; timeText: string | null;
+    examinationSpecimen: string | null; examinationMethod: string | null;
     reportIssuedAt: string | null;
     sortDate: string | null;
     hospitalName: string | null;
@@ -4990,7 +5024,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
   );
   const enrichedRows = rows.map((row) => {
     const admission = assessTrendAdmission(row);
-    const rawContext = comparisonContexts.get(row.reportId);
+    const rawContext = row.examinationId ? {method:row.examinationMethod,specimen:row.examinationSpecimen} : comparisonContexts.get(row.reportId);
     const rawMethod = row.method && !/^(?:ai|ocr|manual)$/i.test(row.method.trim()) ? row.method.trim() : rawContext?.method?.trim() || '';
     const rawSpecimen = rawContext?.specimen?.trim() || '';
     const numericValue =
@@ -5102,9 +5136,9 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       referenceStatus: trendReferenceStatus,
       referenceReason: trendReferenceReason,
       comparisonMethod:
-        admission.kind === 'institution' ? rawMethod || null : row.method || comparisonContexts.get(row.reportId)?.method || null,
+        admission.kind === 'institution' ? rawMethod || null : row.method || rawContext?.method || null,
       comparisonSpecimen:
-        comparisonContexts.get(row.reportId)?.specimen || null,
+        rawContext?.specimen || null,
       trendReferenceText:
         usesCanonical &&
         rawTrendUnit &&
@@ -5121,7 +5155,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
   const evidenceEntries = (value: string): unknown[] => { const parsed = parseJson<unknown>(value, []); return Array.isArray(parsed) ? parsed : []; };
   const standardAnchors = new Set(enrichedRows.filter(row => row.admission.kind === 'standard').flatMap(row =>
     evidenceEntries(row.evidenceJson).map(entry => `${row.reportId}:${duplicateMeasurementAnchorKey(row.numericValue!, entry)}`)));
-  const pointsWithEvidence = enrichedRows.filter(row => row.admission.eligible && !(row.admission.kind === 'institution'
+  const pointsWithEvidence = enrichedRows.filter(row => row.admission.eligible && row.timeStatus !== "pending" && !(row.admission.kind === 'institution'
     && evidenceEntries(row.evidenceJson).some(entry => {
       const key = duplicateMeasurementAnchorKey(row.numericValue!, entry);
       return key !== null && standardAnchors.has(`${row.reportId}:${key}`);
@@ -5280,6 +5314,10 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
         } | null;
       }>;
       points: Array<{
+        examinationConflict?: boolean;
+        timeOrderAmbiguous?: boolean;
+        duplicateSources?: Array<{observationId:string;reportId:string;reportTitle:string;examinationId:string|null;pageNumber:number|null}>;
+        examinationId: string | null; timeKind: string; timePrecision: string; timeStatus: string; timeText: string | null;
         observationId: string;
         reportId: string;
         reportTitle: string;
@@ -5388,6 +5426,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       : null;
     const lineEvidence = lineEvidenceForRow(row);
     group.points.push({
+      examinationId:row.examinationId,timeKind:row.timeKind,timePrecision:row.timePrecision,timeStatus:row.timeStatus,timeText:row.timeText,
       observationId: row.observationId,
       reportId: row.reportId,
       reportTitle: row.reportTitle,
@@ -5425,6 +5464,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     });
   }
 
+  const sameExamination = examinationDuplicateResolver();
   const reportCollapseCache = new Map<string, boolean>();
   const shouldCollapseReports = (
     leftReportId: string,
@@ -5440,7 +5480,8 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
 
   return Array.from(groups.values())
     .map((group) => {
-      /* P0：同一份报告对同一 canonical identity 最多发布一个点。
+      /* Legacy rows retain the existing representative rule. Linked examinations retain each measurement.
+       同一份历史报告对同一 canonical identity 最多发布一个点。
        优先已确认状态、强章节、原始项目名精确命中和更高归一化置信度；内容键负责稳定决胜，ID 只处理完全等价项。 */
       const qualityRank = (quality: string | null) =>
         ({ high: 0, medium: 1, low: 2 })[quality || ""] ?? 3;
@@ -5504,11 +5545,16 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
         left.observationId.localeCompare(right.observationId);
       const pointByReport = new Map<string, (typeof group.points)[number]>();
       for (const point of group.points) {
-        const key = JSON.stringify([point.reportId, point.comparisonMethod?.trim() || "", point.comparisonSpecimen?.trim() || ""]);
+        const key = JSON.stringify([point.examinationId ? point.observationId : point.reportId, point.comparisonMethod?.trim() || "", point.comparisonSpecimen?.trim() || ""]);
         const current = pointByReport.get(key);
         if (!current || comparePointPreference(point, current) < 0) {
           pointByReport.set(key, point);
         }
+      }
+      const sameContext=(a:(typeof group.points)[number],b:(typeof group.points)[number])=>a.comparisonMethod===b.comparisonMethod && a.comparisonSpecimen===b.comparisonSpecimen;
+      const candidates=[...pointByReport.values()];
+      for(const point of candidates){
+        point.examinationConflict=Boolean(point.examinationId && candidates.some(other=>other.examinationId && other.numericValue!==point.numericValue && sameContext(point,other) && sameExamination(point.examinationId!,other.examinationId)));
       }
       const sortedPoints = [...pointByReport.values()].sort(
         (left, right) =>
@@ -5522,18 +5568,33 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
           left.reportId.localeCompare(right.reportId) ||
           left.observationId.localeCompare(right.observationId),
       );
-      /* 重复报告与趋势发布解耦：只有上传原件完全一致，或人工治理明确确认为重复时，
-       才折叠跨报告趋势点。医院、日期、标题和指标重合仅用于生成治理候选，
-       不再直接删除趋势数据；人工标记为“不同报告”时始终保留。 */
-      const points = sortedPoints.filter(
-        (point, index) =>
-          !sortedPoints.some(
-            (other, otherIndex) =>
-              otherIndex < index &&
-              other.reportId !== point.reportId &&
-              shouldCollapseReports(other.reportId, point.reportId),
-          ),
-      );
+      // Keep all sources. Requiring pairwise agreement prevents an A↔B↔C chain from
+      // silently undoing an explicit A↔C "different examination" decision.
+      const retained:Array<Array<(typeof group.points)[number]>>=[];
+      const canFold=(a:(typeof group.points)[number],b:(typeof group.points)[number])=>
+        a.examinationId && b.examinationId
+          ? sameExamination(a.examinationId,b.examinationId) && sameContext(a,b) && a.reportIssuedAt===b.reportIssuedAt && a.numericValue===b.numericValue && a.resultText===b.resultText
+            && a.referenceLow===b.referenceLow && a.referenceHigh===b.referenceHigh
+            && a.referenceText===b.referenceText && a.abnormalFlag===b.abnormalFlag
+          : !a.examinationId && !b.examinationId && a.reportId!==b.reportId && shouldCollapseReports(a.reportId,b.reportId);
+      for(const point of sortedPoints){
+        const existing=retained.find(sources=>sources.every(other=>canFold(other,point)));
+        if(existing)existing.push(point);else retained.push([point]);
+      }
+      const points=retained.map(sources=>{
+        const point=sources[0];
+        point.examinationConflict=sources.some(source=>source.examinationConflict);
+        point.duplicateSources=sources.map(source=>({observationId:source.observationId,reportId:source.reportId,reportTitle:source.reportTitle,examinationId:source.examinationId,pageNumber:source.sourcePage?.pageNumber || null}));
+        return point;
+      });
+      for (const point of points) {
+        point.timeOrderAmbiguous = Boolean(point.examinationId && points.some(other => {
+          if (!other.examinationId || other === point || other.examinationId === point.examinationId) return false;
+          const left = point.reportIssuedAt || '', right = other.reportIssuedAt || '';
+          const precision = Math.min(left.length, right.length);
+          return precision >= 10 && left.slice(0, precision) === right.slice(0, precision);
+        }));
+      }
       const values = points.map((point) => point.numericValue);
       const metadataRepresentative =
         [...points].sort(
@@ -5546,6 +5607,10 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
         )[0] || null;
       const latest = points.at(-1) || null;
       const previous = points.length > 1 ? points.at(-2) || null : null;
+      const hasExaminationConflict=points.some(point=>point.examinationConflict);
+      const hasTimeOrderAmbiguity=points.some(point=>point.timeOrderAmbiguous);
+      const chronologyReliable=!hasExaminationConflict && !hasTimeOrderAmbiguity;
+      const chronologyReason=hasExaminationConflict ? '同次检查存在不同结果，请先核对原件' : hasTimeOrderAmbiguity ? '同日检查的先后顺序不明确，请核对检查时刻' : null;
       const placement =
         group.fixedPlacement ||
         [...group.placementVotes.values()].sort(
@@ -5585,15 +5650,15 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
           referenceHigh: point.referenceHigh,
         })),
         {
-          latestComparisonAllowed: comparability.changeAssessmentAllowed,
-          seriesComparisonAllowed: !unverifiedRawContext && ![
+          latestComparisonAllowed: chronologyReliable && comparability.changeAssessmentAllowed,
+          seriesComparisonAllowed: chronologyReliable && !unverifiedRawContext && ![
             "range_drift",
             "condition_mismatch",
           ].includes(comparability.status),
         },
       );
       const outlierPointIds = new Set(changeAssessment.outlierPointIds);
-      const attention = latest
+      const attention = latest && !latest.timeOrderAmbiguous
         ? classifyTrendAttention({
             numericValue: latest.numericValue,
             referenceLow: latest.referenceLow,
@@ -5601,8 +5666,8 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
             abnormalFlag: latest.abnormalFlag,
             displayAbnormalFlag: latest.displayAbnormalFlag,
             abnormalStatus: latest.abnormalStatus,
-            abnormalConflict: latest.abnormalConflict,
-            abnormalReason: latest.abnormalReason,
+            abnormalConflict: latest.abnormalConflict || latest.examinationConflict,
+            abnormalReason: latest.examinationConflict ? '同次检查存在不同结果，请核对原件' : latest.abnormalReason,
           })
         : { level: null, boundary: null, reason: null, conflict: false };
       const abnormalContinuity = assessTrendAbnormalContinuity(
@@ -5613,7 +5678,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
           referenceStatus: point.referenceStatus,
           displayAbnormalFlag: point.displayAbnormalFlag,
           abnormalStatus: point.abnormalStatus,
-          abnormalConflict: point.abnormalConflict,
+          abnormalConflict: point.abnormalConflict || point.examinationConflict,
         })),
         {
           latestNearBoundary: attention.level === "near_boundary",
@@ -5650,14 +5715,14 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
         attentionReason: attention.reason,
         attentionBoundary: attention.boundary,
         attentionConflict: attention.conflict,
-        abnormalContinuityStatus: abnormalContinuity.status,
-        abnormalContinuityReason: abnormalContinuity.reason,
-        latestAbnormal: abnormalContinuity.latestAbnormal,
-        latestAbnormalDirection: abnormalContinuity.latestDirection,
-        consecutiveAbnormalCount: abnormalContinuity.consecutiveAbnormalCount,
+        abnormalContinuityStatus: hasTimeOrderAmbiguity ? 'insufficient_evidence' as const : abnormalContinuity.status,
+        abnormalContinuityReason: hasTimeOrderAmbiguity ? '同日检查先后不明，暂不判断连续异常或恢复' : latest?.examinationConflict ? '最新检查存在不同结果，异常连续性待核对' : abnormalContinuity.reason,
+        latestAbnormal: !latest?.timeOrderAmbiguous && abnormalContinuity.latestAbnormal,
+        latestAbnormalDirection: latest?.timeOrderAmbiguous ? "unknown" as const : abnormalContinuity.latestDirection,
+        consecutiveAbnormalCount: hasTimeOrderAmbiguity ? 0 : abnormalContinuity.consecutiveAbnormalCount,
         totalAbnormalCount: abnormalContinuity.totalAbnormalCount,
         previousAbnormalCount: abnormalContinuity.previousAbnormalCount,
-        recoveredFromAbnormal: abnormalContinuity.recoveredFromAbnormal,
+        recoveredFromAbnormal: !hasTimeOrderAmbiguity && abnormalContinuity.recoveredFromAbnormal,
         abnormalConflictPointCount: abnormalContinuity.conflictPointCount,
         attentionPriority: abnormalContinuity.attentionPriority,
         comparable: comparability.comparable,
@@ -5666,17 +5731,17 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
         referenceProfileKey: comparability.referenceProfileKey,
         referenceProfileCount: comparability.referenceProfileCount,
         latestPairComparabilityStatus: comparability.latestPairStatus,
-        changeAssessmentAllowed: comparability.changeAssessmentAllowed,
+        changeAssessmentAllowed: chronologyReliable && comparability.changeAssessmentAllowed,
         latestChangeStatus: changeAssessment.latestChangeStatus,
         latestChangeMagnitude: changeAssessment.latestChangeMagnitude,
-        latestChangeReason: changeAssessment.latestChangeReason,
+        latestChangeReason: chronologyReason || changeAssessment.latestChangeReason,
         latestChangeConclusionAllowed:
-          changeAssessment.latestChangeConclusionAllowed,
+          chronologyReliable && changeAssessment.latestChangeConclusionAllowed,
         latestIntervalDays: changeAssessment.latestIntervalDays,
         latestIntervalBucket: changeAssessment.latestIntervalBucket,
         trendStatus: changeAssessment.trendStatus,
-        trendReason: changeAssessment.trendReason,
-        trendConclusionAllowed: changeAssessment.trendConclusionAllowed,
+        trendReason: chronologyReason || changeAssessment.trendReason,
+        trendConclusionAllowed: chronologyReliable && changeAssessment.trendConclusionAllowed,
         trendDurationDays: changeAssessment.trendDurationDays,
         trendIntervalRegularity: changeAssessment.trendIntervalRegularity,
         analysisPointCount: changeAssessment.analysisPointCount,
@@ -5710,9 +5775,9 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
         pointCount: points.length,
         firstDate: points[0]?.reportIssuedAt || null,
         lastDate: latest?.reportIssuedAt || null,
-        latestValue: latest?.numericValue ?? null,
-        previousValue: previous?.numericValue ?? null,
-        delta: changeAssessment.latestDelta,
+        latestValue: latest?.examinationConflict || latest?.timeOrderAmbiguous ? null : latest?.numericValue ?? null,
+        previousValue: previous?.examinationConflict || previous?.timeOrderAmbiguous ? null : previous?.numericValue ?? null,
+        delta: !chronologyReliable ? null : changeAssessment.latestDelta,
         minValue: values.length ? Math.min(...values) : null,
         maxValue: values.length ? Math.max(...values) : null,
         points: points.map(
@@ -6756,9 +6821,13 @@ export function getAiAuditSummary(
 
 export function buildMemberExportManifest(user: RequestUser, memberId: string) {
   assertMemberAccess(user, memberId);
-  const reports = listReports(user, 50, { memberId }).items.map((report) =>
-    getReportDetail(user, report.id),
-  );
+  const reports: ReturnType<typeof getReportDetail>[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = listReports(user, 50, { memberId, cursor });
+    reports.push(...page.items.map((report) => getReportDetail(user, report.id)));
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor);
   return {
     exportedAt: new Date().toISOString(),
     memberId,
@@ -6773,6 +6842,7 @@ export function buildMemberExportManifest(user: RequestUser, memberId: string) {
       reportIssuedAt: report.reportIssuedAt,
       pages: report.pages,
       observations: report.observations,
+      examinationData: getReportExaminations(user, report.id),
       morphologyFindings: report.morphologyFindings,
       diagnoses: report.diagnoses,
       medications: report.medications,

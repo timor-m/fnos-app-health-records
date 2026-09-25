@@ -77,7 +77,8 @@ function configureWorker(scriptPath: string) {
   process.env.OCR_PYTHON_BIN = process.execPath;
   process.env.OCR_WORKER_SCRIPT = scriptPath;
   process.env.OCR_WORKER_TIMEOUT_MS = "1000";
-  process.env.OCR_WORKER_STARTUP_TIMEOUT_MS = "500";
+  // Normal process startup is not the boundary under test; allow parallel-suite scheduling.
+  process.env.OCR_WORKER_STARTUP_TIMEOUT_MS = "10000";
 }
 
 test("serializes worker requests and isolates startup, protocol, recycle, and stop races", async () => {
@@ -238,9 +239,10 @@ input.on("line", (line) => {
     configureWorker(stopScript);
     const heldRequest = requestWorker({ action: "ocr", imagePath: "hold" });
     const queuedRequest = requestWorker({ action: "ocr", imagePath: "queued" });
-    await waitFor(() => linesFromFile(stopRequests).includes("hold"));
+    const stopped = Promise.allSettled([heldRequest, queuedRequest]);
+    await waitFor(() => linesFromFile(stopRequests).includes("hold"), 10_000);
     stopWorker();
-    const stoppedResults = await Promise.allSettled([heldRequest, queuedRequest]);
+    const stoppedResults = await stopped;
     assert.equal(
       stoppedResults.filter((result) => result.status === "rejected").length,
       expected.stopRejectedRequestCount,

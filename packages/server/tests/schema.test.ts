@@ -26,6 +26,7 @@ test("initializes the health records schema with WAL", () => {
       "users", "user_identities", "health_members", "member_permissions", "reports",
       "report_pages", "observations", "processing_jobs", "reminders", "local_accounts",
       "morphology_findings",
+      "morphology_finding_examinations",
       "auth_sessions", "audit_logs", "report_extractions", "processing_job_events", "app_notifications",
       "ai_extraction_units", "ai_extraction_unit_routes", "ai_extraction_attempts", "ai_extraction_candidates",
       "report_diagnoses", "report_medications", "report_procedures",
@@ -395,6 +396,7 @@ test("upgrades an early v16 database through AI candidate tracking and governanc
   const legacy = new DatabaseSync(databasePath);
   legacy.exec(schemaSql);
   legacy.exec("DROP INDEX reports_organization_idx");
+  legacy.exec("DROP TRIGGER morphology_finding_examination_same_report_insert; DROP TRIGGER morphology_finding_examination_same_report_update; DROP TABLE morphology_finding_examinations;");
   legacy.exec("DROP TABLE morphology_findings");
   legacy.exec("DROP TABLE ai_extraction_unit_routes");
   legacy.exec("DROP TABLE ai_extraction_attempts");
@@ -781,6 +783,23 @@ test('unreleased duplicate runtime migration backs up old v17 without queueing o
   assert.ok(db.prepare("SELECT id FROM users WHERE id='synthetic-migration'").get());
   assert.deepEqual(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),versions);
   assert.equal((db.prepare('SELECT COUNT(*) AS n FROM processing_jobs').get() as {n:number}).n,0);
+  assert.ok(readdirSync(join(storageDir,'backups','db')).length>=1);
+ }finally{closeDatabaseForTests();delete process.env.STORAGE_DIR;rmSync(storageDir,{recursive:true,force:true});}
+});
+
+test('examination draft upgrade backs up legacy rows without inferring dates or enqueueing jobs',()=>{
+ const storageDir=mkdtempSync(join(tmpdir(),'health-examination-draft-'));process.env.STORAGE_DIR=storageDir;
+ try {
+  let db=getDatabase();
+  db.exec("INSERT INTO users(id,display_name) VALUES('exam-user','synthetic'); INSERT INTO health_members(id,display_name,created_by) VALUES('exam-member','synthetic','exam-user'); INSERT INTO reports(id,member_id,created_by,report_type,title,report_issued_at) VALUES('exam-report','exam-member','exam-user','laboratory','synthetic','2026-09-01'); INSERT INTO observations(id,report_id,item_name,result_text) VALUES('exam-observation','exam-report','synthetic','120')");
+  const versions=db.prepare('SELECT version FROM schema_migrations ORDER BY version').all();
+  db.exec('DROP TABLE observation_examinations; DROP TABLE report_examinations; DROP TABLE report_examination_state');
+  closeDatabaseForTests();db=getDatabase();
+  assert.equal(db.prepare('SELECT result_text FROM observations WHERE id=?').get('exam-observation')?.result_text,'120');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM report_examinations').get()?.n,0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM observation_examinations').get()?.n,0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM processing_jobs').get()?.n,0);
+  assert.deepEqual(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),versions);
   assert.ok(readdirSync(join(storageDir,'backups','db')).length>=1);
  }finally{closeDatabaseForTests();delete process.env.STORAGE_DIR;rmSync(storageDir,{recursive:true,force:true});}
 });
