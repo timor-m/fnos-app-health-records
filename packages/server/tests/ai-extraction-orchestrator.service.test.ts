@@ -1346,7 +1346,7 @@ test("merges duplicate indicator variants that resolve to the same OCR source ro
   ]);
 });
 
-test("preserves separate same-examination source rows during persistence", async () => {
+test("merges same-examination source rows with matching indicator values during persistence", async () => {
   await withReport(9, async ({ reportId, jobId }) => {
     const executor: AiExecutor = async (input) => {
       const variants = [
@@ -1390,13 +1390,14 @@ test("preserves separate same-examination source rows during persistence", async
       referenceHigh: number | null;
       evidenceJson: string;
     }>;
-    assert.equal(stored.length, 2);
-    assert.ok(stored.every(item => item.numericValue === 5));
-    const byPage = new Map(stored.map(item => [JSON.parse(item.evidenceJson)[0].pageNumber, item]));
-    assert.equal(byPage.get(1)?.referenceLow, null);
-    assert.equal(byPage.get(9)?.referenceLow, 3.5);
-    assert.equal(byPage.get(9)?.referenceHigh, 9.5);
-    assert.deepEqual([...byPage.keys()].sort((a,b)=>a-b), [1,9]);
+    assert.equal(stored.length, 1);
+    assert.equal(stored[0].numericValue, 5);
+    assert.equal(stored[0].referenceLow, 3.5);
+    assert.equal(stored[0].referenceHigh, 9.5);
+    assert.deepEqual(
+      JSON.parse(stored[0].evidenceJson).map((entry: { pageNumber: number }) => entry.pageNumber).sort((a: number, b: number) => a - b),
+      [1, 9],
+    );
   }, (pageNumber) => [
     "报告编号：SYNTHETIC-EXAM", "采样时间：2026-09-01",
     pageNumber === 1
