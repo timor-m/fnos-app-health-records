@@ -443,7 +443,6 @@ export type ReportDuplicateDecisionRecord = {
 };
 
 export type ReportDetail = ReportSummary & {
-  unverifiedPreviousObservations?: UnverifiedPreviousObservation[];
   pageAppend?: {originalRevision:number;recognizedRevision:number|null;state:string;reviewWarnings?:string[]};
   createdAt: string;
   updatedAt: string;

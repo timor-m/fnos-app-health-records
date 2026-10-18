@@ -298,6 +298,8 @@ function compactIndicatorKey(value: string | null | undefined) {
     .normalize("NFKC")
     .replace(/[(]\s*([GT])\s*[)]/gi, "§$1§")
     .replace(/[（(]\s*(\d+)\s*\/\s*s\s*[）)]/gi, "§$1/s§")
+    // A parenthesized percent is a measurement qualifier, not a footnote.
+    .replace(/[（(]\s*%\s*[）)]/g, "%")
     .toLocaleLowerCase("zh-CN")
     .replace(/[（(].*?[）)]/g, "")
     .replace(/§([gt])§/g, "($1)")
@@ -1013,7 +1015,8 @@ function observationEvidenceQualityIssue(row: ObservationRow) {
   if (!anchorBypassed && rawUnit) {
     // A printed multiplication sign before a power-of-ten unit is notation, not a unit prefix.
     const compactUnit = (text: string | null) => compactObservationEvidence((text || '')
-      .replace(/(?<![a-z0-9])([×x*]?)10[°˚~^"'’]([1-9]\d?)(?=\/)/gi, '$110^$2'))
+      .replace(/(?<![a-z0-9])([×x*]?)10[°˚~^"'’]([1-9]\d?)(?=\/)/gi, '$110^$2')
+      .replace(/1[.]73m[~^]2\b/gi, '1.73m²'))
       .replace(/(?<![a-z])x(?=10\^\d+\/)/gi, '');
     /* 矫正后的规范单位需容忍原文中的 OCR 变体（fL 被识别为 f1 等），
        否则矫正越成功、单位越无法回指证据。变体从单位别名表反向生成，新增别名自动生效；
@@ -2297,7 +2300,12 @@ export function normalizeReportObservations(reportId: string): IndicatorNormaliz
   db.exec('SAVEPOINT normalize_report_evidence');
   try {
     repairLegacyObservationUnitEvidence(reportId);
-    const result = collectNormalizationResult(observationRowsForReport(reportId));
+    let result = collectNormalizationResult(observationRowsForReport(reportId));
+    // Fresh AI observations have no normalization row until the first pass.
+    // Re-evaluate only when that pass made newly excluded rows repairable.
+    if (repairLegacyObservationUnitEvidence(reportId) > 0) {
+      result = collectNormalizationResult(observationRowsForReport(reportId));
+    }
     db.exec('RELEASE normalize_report_evidence');
     return result;
   } catch (error) {

@@ -117,6 +117,51 @@ test("table structure restores cells that OCR never emitted without fabricating 
   assert.equal(unsafeLine?.localObservation?.unit, null);
 });
 
+test("recovers a dictionary item whose value is glued to its name only with aligned high-confidence table evidence", () => {
+  const header = [
+    ["项目", [0, 0, 92, 16]],
+    ["结果", [100, 0, 172, 16]],
+    ["参考范围", [185, 0, 265, 16]],
+    ["单位", [280, 0, 330, 16]],
+  ] as const;
+  const row = [
+    ["★平均血红蛋白含量30.6", [0, 30, 165, 46]],
+    ["27.0-34.0", [185, 30, 265, 46]],
+    ["pg", [280, 30, 330, 46]],
+  ] as const;
+  const build = (changes: Record<string, Partial<{text: string; confidence: number; box: number[]}>> = {}) =>
+    rebuildOcrPages([{pageId:"glued-mch",pageNumber:1,linesJson:JSON.stringify(
+      [...header,...row].map(([text,box],index)=>({
+        id:`cell-${index}`,text,box,confidence:.99,...changes[`cell-${index}`]
+      }))
+    )}])[0].lines.find(line=>line.sourceLineIds.includes("cell-4"));
+
+  const recovered = build();
+  assert.ok(recovered);
+  assert.equal(recovered.tableStructureUnsafe, false);
+  assert.equal(recovered.localObservations.length, 1);
+  const fact = recovered.localObservations[0];
+  assert.equal(fact.itemName, "平均血红蛋白含量");
+  assert.equal(fact.numericValue, 30.6);
+  assert.equal(fact.unit, "pg");
+  assert.deepEqual(fact.sourceMap.item.sourceLineIds, ["cell-4"]);
+  assert.deepEqual(fact.sourceMap.result.sourceLineIds, ["cell-4"]);
+  assert.deepEqual(fact.sourceMap.reference?.sourceLineIds, ["cell-5"]);
+  assert.deepEqual(fact.sourceMap.unit?.sourceLineIds, ["cell-6"]);
+
+  const rejectedRows: Array<Record<string, Partial<{text: string; confidence: number; box: number[]}>>> = [
+    {"cell-4":{text:"未知指标30.6"}},
+    {"cell-4":{text:"★平均血红蛋白含量30.6/31.0"}},
+    {"cell-4":{confidence:.7}},
+    {"cell-5":{text:""}},
+    {"cell-6":{text:""}},
+    {"cell-6":{box:[430,30,480,46]}},
+  ];
+  for (const changed of rejectedRows) {
+    assert.equal(build(changed)?.localObservations.length || 0,0,JSON.stringify(changed));
+  }
+});
+
 test("structured result columns qualify unknown numeric and textual items after abbreviation", () => {
   const raw = [
     ["项目名称", "缩写", "结果", "单位", "异常", "参考范围"],

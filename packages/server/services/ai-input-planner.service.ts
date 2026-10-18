@@ -4817,8 +4817,84 @@ export function observationFieldConfidenceIssue(
   return { fields: [...fields], referenceConfidence: minimumKnownConfidence(references) };
 }
 
+/** A high-confidence table row may contain the result at the end of its name OCR box. */
+function recoverGluedNameResult(
+  line: PlannedOcrLine,
+  pageNumber: number,
+  section: string | null,
+  tableHeader: string[] | null,
+  tableHeaderCells: PlannedOcrCell[] | null,
+  disambiguationSection: string | null,
+  aliases: PreparedDictionaryAliases,
+  unitPattern: RegExp,
+  patientSex?: PatientSex | null,
+) {
+  const sourceCells = line.sourceCells.filter(cell => cell.sourceLineIds.length);
+  if (!line.tableStructureUnsafe || line.candidateKind !== 'scalar' || sourceCells.length !== 3
+    || line.sourceCells.some(cell => !cell.sourceLineIds.length && cell.text.trim())
+    || !tableHeader || !tableHeaderCells || tableHeader.length !== tableHeaderCells.length) return null;
+  const [nameCell, referenceCell, unitCell] = sourceCells;
+  if ([nameCell, referenceCell, unitCell].some(cell => typeof cell.confidence !== 'number' || cell.confidence < .9)
+    || new Set(sourceCells.flatMap(cell => cell.sourceLineIds)).size !== 3
+    || sourceCells.some(cell => cell.sourceLineIds.length !== 1)) return null;
+  const glued = nameCell.text.trim().match(/^★?(.{3,36}?)(\d{1,4}\.\d{1,4})$/u);
+  if (!glued) return null;
+  const name = glued[1].trim(), value = glued[2];
+  const matches = exactDictionaryFactsForName(name, aliases);
+  if (matches.length !== 1 || !Number.isFinite(Number(value))) return null;
+  const reference = parseReferenceCell(referenceCell.text, unitPattern, patientSex);
+  const unit = credibleRepeatedTableUnit(unitCell.text, unitPattern);
+  if (!unit || reference.low === null || reference.high === null || reference.low > reference.high) return null;
+  const sourceBoxes = sourceCells.map(cell => boxRect(cell.box));
+  if (sourceBoxes.some(box => !box)) return null;
+  const [nameBox, referenceBox, unitBox] = sourceBoxes as Array<NonNullable<ReturnType<typeof boxRect>>>;
+  if (!(nameBox.left < referenceBox.left && referenceBox.right < unitBox.left)
+    || verticalOverlap(nameBox, referenceBox) < .5 || verticalOverlap(nameBox, unitBox) < .5) return null;
+  const nextNameHeader = (index: number) => tableHeader.findIndex((text, offset) => offset > index
+    && /(?:项目|名称|参数)/.test(text) && !/(?:结果|单位|参考)/.test(text));
+  for (let start = 0; start < tableHeader.length; start += 1) {
+    if (!/(?:项目|名称|参数)/.test(tableHeader[start]) || /(?:结果|单位|参考)/.test(tableHeader[start])) continue;
+    const end = nextNameHeader(start);
+    const stop = end < 0 ? tableHeader.length : end;
+    const resultIndex = tableHeader.findIndex((text,index) => index > start && index < stop && isCurrentResultColumn(text));
+    const referenceIndex = tableHeader.findIndex((text,index) => index > start && index < stop && referenceColumnRole(text) === 'explicit');
+    const unitIndex = tableHeader.findIndex((text,index) => index > start && index < stop && normalizeOcrTableHeader(text) === '单位');
+    if (!(start < resultIndex && resultIndex < referenceIndex && referenceIndex < unitIndex)) continue;
+    const headerBoxes = [start,resultIndex,referenceIndex,unitIndex].map(index => boxRect(tableHeaderCells[index].box));
+    if (headerBoxes.some(box => !box)) continue;
+    const [nameHeader,resultHeader,referenceHeader,unitHeader] = headerBoxes as Array<NonNullable<ReturnType<typeof boxRect>>>;
+    const tolerance = Math.max(35, resultHeader.bottom - resultHeader.top);
+    if (Math.abs(nameBox.left-nameHeader.left) > tolerance
+      || nameBox.right < resultHeader.left - tolerance || nameBox.right > resultHeader.right + tolerance
+      || Math.abs(referenceBox.left-referenceHeader.left) > tolerance
+      || Math.abs(unitBox.left-unitHeader.left) > tolerance) continue;
+    const cells = [
+      {...nameCell,index:0,text:name},
+      {...nameCell,index:1,text:value},
+      {...referenceCell,index:2},
+      {...unitCell,index:3},
+    ];
+    const headers = [start,resultIndex,referenceIndex,unitIndex].map((index, position) =>
+      ({...tableHeaderCells[index],index:position}));
+    const virtualLine = {...line,tableStructureUnsafe:false,sourceCells:cells,
+      projectHeaderCells:headers,text:cells.map(cell=>cell.text).join(' | ')};
+    const fact = parseLocalObservation(virtualLine,pageNumber,section,headers.map(cell=>cell.text),headers,
+      disambiguationSection,aliases,unitPattern,patientSex);
+    if (fact && fact.itemName === name && fact.resultText === value && fact.unit === unit) {
+      return {...fact,sourceText:line.text};
+    }
+  }
+  return null;
+}
+
 function parseLocalObservations(...args: Parameters<typeof parseLocalObservationsUnchecked>) {
   const [line] = args;
+  const glued = recoverGluedNameResult(...args);
+  if (glued) {
+    line.tableStructureUnsafe = false;
+    line.localObservationCandidates = [glued];
+    return [glued];
+  }
   // Parsing determines field ownership before acceptance. A low row mean must
   // not erase that ownership, and uncertain layout facts never get admitted.
   const inspectionArgs: Parameters<typeof parseLocalObservationsUnchecked> = [...args];

@@ -1162,11 +1162,6 @@ export type ReportStructuredSection = {
 };
 
 export type ReportDetail = ReportSummary & {
-  unverifiedPreviousObservations?: Array<{
-    itemName: string; itemCode: string | null; sectionName: string | null;
-    resultText: string; unit: string | null; pageNumber: number | null;
-    sourceLineIds: string[]; sourceText: string; examinationSourceKey?: string | null; reason: string;
-  }>;
   sourceVersion: number;
   pageAppend?: {originalRevision:number;recognizedRevision:number|null;state:string;reviewWarnings?:string[]};
   createdAt: string;

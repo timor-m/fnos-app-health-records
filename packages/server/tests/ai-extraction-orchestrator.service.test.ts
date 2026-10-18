@@ -15,6 +15,7 @@ import {
 } from "../services/ai-extraction-orchestrator.service.ts";
 import { buildAiExtractionPlan, rebuildOcrPages, planRebuiltOcrPages, type AiExtractionPlan, type PlannedOcrLine } from "../services/ai-input-planner.service.ts";
 import { listProcessingJobs } from "../services/upload.service.ts";
+import { installRemoteDictionarySnapshotForTests } from "../services/indicator-dictionary.service.ts";
 import { buildProcessingJobDiagnostics } from "../services/processing-job-diagnostics.service.ts";
 import { medicationLayouts } from "./fixtures/medication-layouts.ts";
 import {
@@ -3065,6 +3066,38 @@ test("keeps every deterministic observation from one multi-value row while audit
   }, () => [
     "身高: 170 cm | 体重: 65 kg"
   ]);
+});
+
+test("persists a recovered name-and-result OCR box with its original field evidence", async () => {
+  await withReport(1, async ({reportId,jobId}) => {
+    installRemoteDictionarySnapshotForTests();
+    const raw = [
+      ["项目", [0,0,92,16]], ["结果", [100,0,172,16]],
+      ["参考范围", [185,0,265,16]], ["单位", [280,0,330,16]],
+      ["★平均血红蛋白含量30.6", [0,30,165,46]],
+      ["27.0-34.0", [185,30,265,46]], ["pg", [280,30,330,46]],
+    ].map(([text,box],index)=>({id:`cell-${index}`,text,box,confidence:.99}));
+    getDatabase().prepare("UPDATE ocr_results SET lines_json = ?").run(JSON.stringify(raw));
+    const executor: AiExecutor = async () => ({
+      provider:"test",model:"test",promptVersion:"test",
+      ...normalizeAiExtraction({reportType:"physical_exam",observations:[]}),
+      rawResponseJson:"{}",promptTokens:1,completionTokens:1,elapsedMs:1
+    });
+    const execution = await executeAiExtractionPlan(jobId,reportId,executor);
+    const fact = execution.result.fields.observations.find(item=>item.itemName==="平均血红蛋白含量");
+    assert.ok(fact);
+    assert.equal(fact.numericValue,30.6);
+    assert.equal(fact.unit,"pg");
+    assert.equal(execution.unmatchedCandidates,0);
+    persistAiExtraction(reportId,jobId,execution.result,execution.inputCharacters);
+    const stored = getDatabase().prepare(`SELECT numeric_value AS value, unit, evidence_json AS evidence
+      FROM observations WHERE report_id = ? AND item_name = ?`).get(reportId,"平均血红蛋白含量") as
+      {value:number;unit:string;evidence:string}|undefined;
+    assert.ok(stored);
+    assert.equal(stored.value,30.6);
+    assert.equal(stored.unit,"pg");
+    assert.ok(JSON.parse(stored.evidence).length);
+  });
 });
 
 test("reconciles a combined blood-pressure summary with both deterministic component observations", async () => {

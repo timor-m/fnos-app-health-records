@@ -175,6 +175,8 @@ test("splits report codes from names without removing medical qualifiers", () =>
   assert.ok(indicatorNameCandidates("白细胞(WhiteCell)").includes("whitecell"));
   assert.ok(indicatorNameCandidates("WBC-白细胞计数").includes("白细胞计数"));
   assert.ok(indicatorNameCandidates("中性粒细胞比率 NEUT%").includes("中性粒细胞比率"));
+  assert.ok(indicatorNameCandidates("中性粒细胞(%)").includes("中性粒细胞%"));
+  assert.ok(!indicatorNameCandidates("中性粒细胞(#)").includes("中性粒细胞%"));
   assert.notDeepEqual(
     indicatorNameCandidates("中性粒细胞比率 NEUT%"),
     indicatorNameCandidates("中性粒细胞绝对值 NEUT#")

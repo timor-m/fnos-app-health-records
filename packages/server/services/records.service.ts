@@ -1,4 +1,3 @@
-import { readUnverifiedPreviousObservations } from './extraction-review.service';
 import { listFeedbackNotifications, updateFeedbackNotification } from './feedback-sync.service';
 import { splitMeasurementBound, type MeasurementComparator } from '../../shared/measurement-result';
 import { preserveFeedbackInstallation } from './feedback-installation.service';
@@ -1756,7 +1755,6 @@ export function getReportDetail(
     clinicians: parseJson(row.cliniciansJson, {}),
     pages,
     observations,
-    unverifiedPreviousObservations: readUnverifiedPreviousObservations(reportId),
     morphologyFindings,
     diagnoses,
     medications,

@@ -1010,11 +1010,6 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 }
 .extraction-unmatched-hint > svg { color: var(--amber); flex: 0 0 auto; }
 .extraction-unmatched-hint > span { flex: 1 1 auto; min-width: 0; }
-.extraction-unmatched-hint > button {
-  flex: 0 0 auto; padding: 2px 12px; border: 1px solid currentColor; border-radius: 999px;
-  background: transparent; color: var(--brand); font-size: 12px; cursor: pointer;
-}
-.extraction-unmatched-hint > button:active { transform: scale(.96); }
 
 .report-detail-modal { width: min(680px, 100%); height: 88dvh; max-height: 88dvh; display: flex; flex-direction: column; }
 .report-detail-floating-header { position: sticky; top: 0; z-index: 2; background: var(--surface); border-bottom: 1px solid var(--line); }
@@ -1360,10 +1355,6 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
   font-size: 10px; white-space: nowrap;
 }
 .observation-tier-section { display: grid; gap: 8px; }
-.extraction-comparison > summary { cursor: pointer; font-weight: 600; }
-.extraction-comparison > p { color: var(--muted); font-size: 12px; margin: 10px 0; }
-.extraction-comparison > article { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
-.extraction-comparison > article > small { flex-basis: 100%; color: var(--muted); }
 .observation-tier-section > header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .observation-tier-section > header strong { color: var(--ink); font-size: 13px; }
 .observation-tier-section > header span { color: var(--muted); font-size: 11px; }

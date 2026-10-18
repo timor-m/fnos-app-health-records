@@ -625,7 +625,7 @@ export function buildProcessingJobDiagnostics(
     const withdrawn = fields.unverifiedPreviousObservations;
     const recoveryReasons: ProcessingDiagnosticReason[] = [];
     if (Array.isArray(withdrawn) && withdrawn.length) recoveryReasons.push({code:'POSTPROCESS_UNVERIFIED',severity:'warning',message:
-      `${withdrawn.length} 项上次识别值本次未能核实，已退出正常指标和趋势，保留原件对照`,pages:uniquePages(withdrawn.map(item=>item.pageNumber))});
+      `${withdrawn.length} 项上次识别值本次未能核实，已退出正常指标和趋势`,pages:uniquePages(withdrawn.map(item=>item.pageNumber))});
     const vision = fields.recovery?.visionStatus;
     if (['not_configured','budget','partial','failed'].includes(vision)) recoveryReasons.push({code:'POSTPROCESS_UNVERIFIED',severity:'warning',message:
       vision === 'not_configured' ? '视觉增强未启用或未配置，本轮未复核原图'

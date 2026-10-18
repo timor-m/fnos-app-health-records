@@ -254,13 +254,13 @@ describe("ReportDetail 核对指标模式", () => {
     } finally {wrapper.unmount();}
   });
 
-  it('人工核对后更新原图补提取待核对数量，同时保留其他解析提示', async () => {
+  it('只展示当前待核对指标，不把历史整理诊断当作报告现状', async () => {
     let reviewed = false;
     fetchMock.mockImplementation(async (input:RequestInfo|URL,init?:RequestInit) => {
       const url = String(input);
       if (url.endsWith('/observations/obs-1') && init?.method === 'PUT') reviewed = true;
       if (url.endsWith('/api/reports/r1') || url.endsWith('/observations/obs-1')) return jsonResponse({...detailPayload,observations:[{...observation,requiresVisualReview:!reviewed,manualReviewed:reviewed}]});
-      if (url.includes('jobs')) return jsonResponse([{id:'ai',reportId:'r1',jobType:'ai_extract',status:'completed',createdAt:'2026-01-01',batchId:'batch',batchKind:'manual_ai',batchStartedAt:'2026-01-01',batchSequence:1,layoutWarnings:[{pageNumber:1,pendingVisualResults:1,uncertainRows:1,ocrUnresolved:2,ocrUnretried:1}]}]);
+      if (url.includes('jobs')) return jsonResponse([{id:'ai',reportId:'r1',jobType:'ai_extract',status:'completed',createdAt:'2026-01-01',batchId:'batch',batchKind:'manual_ai',batchStartedAt:'2026-01-01',batchSequence:1,unmatchedCandidates:11,layoutWarnings:[{pageNumber:1,pendingVisualResults:1,uncertainRows:1,ocrUnresolved:2,ocrUnretried:1}]}]);
       if (url.includes('indicator-catalog')) return jsonResponse([]);
       return jsonResponse({});
     });
@@ -268,14 +268,14 @@ describe("ReportDetail 核对指标模式", () => {
     try {
       await flushPromises(); await flushPromises();
       expect(wrapper.text()).toContain('1 个指标需对照原图核对');
-      expect(wrapper.text()).toContain('仍有识别疑点或未完成的局部复核');
+      expect(wrapper.text()).not.toContain('11 个原文候选');
+      expect(wrapper.text()).not.toContain('行列归属不明');
       await wrapper.findAll('button').find(button => button.text().includes('查看全部'))!.trigger('click'); await flushPromises();
       await wrapper.get('.observation-all-list [title="编辑指标"]').trigger('click'); await flushPromises();
       await wrapper.get('.observation-editor-form').trigger('submit'); await flushPromises(); await flushPromises();
       expect(reviewed).toBe(true);
       expect(wrapper.text()).not.toContain('1 个指标需对照原图核对');
-      // The historical job still contains pendingVisualResults=1.
-      expect(wrapper.text()).toContain('行列归属不明');
+      expect(wrapper.find('.extraction-unmatched-hint').exists()).toBe(false);
     } finally {wrapper.unmount();}
   });
 
@@ -398,35 +398,22 @@ describe('重复报告当前暂停状态',()=>{
  });
 });
 
-it('keeps withdrawn values collapsed and requires explicit original review and save before reentry',async()=>{
+it('does not show withdrawn extraction values or ask users to compare them',async()=>{
   const previous={itemName:'合成旧项',itemCode:null,sectionName:null,resultText:'12',unit:'U/L',pageNumber:null,sourceLineIds:[],sourceText:'合成旧项 12 U/L',reason:'本次未能核实'};
   fetchMock.mockImplementation(async(input:RequestInfo|URL,init?:RequestInit)=>{
     const url=String(input);
     if(url.endsWith('/api/reports/r1'))return jsonResponse({...detailPayload,observations:[],unverifiedPreviousObservations:[previous]});
-    if(url.endsWith('/observations')&&init?.method==='POST')return jsonResponse({...detailPayload,observations:[],unverifiedPreviousObservations:[]});
     if(url.includes('jobs')||url.includes('indicator-catalog'))return jsonResponse([]);
     return jsonResponse({});
   });
   const wrapper=mount(ReportDetail,{attachTo:document.body,props:{reportId:'r1',variant:'panel'},global:{stubs:{teleport:true,RouterLink:true,ReportNotesPanel:true,ReportPageAppend:true}}});
   try{
     await flushPromises();await flushPromises();
-    const comparison=wrapper.findAll('details').find(item=>item.text().includes('上次识别对照'))!;
-    expect(comparison.exists()).toBe(true);
-    expect(comparison.attributes('open')).toBeUndefined();
+    expect(wrapper.find('.extraction-comparison').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('上次识别对照');
+    expect(wrapper.text()).not.toContain('合成旧项');
+    expect(wrapper.text()).not.toContain('对照后补录');
     expect(wrapper.find('.observation-editor-form').exists()).toBe(false);
     expect(fetchMock.mock.calls.some(([,init])=>init?.method==='POST')).toBe(false);
-    await comparison.findAll('button').find(button=>button.text()==='对照后补录')!.trigger('click');
-    await flushPromises();
-    const form=wrapper.get('.observation-editor-form');
-    expect(wrapper.text()).toContain('请对照原件确认后保存');
-    const inputs=form.findAll('.observation-core-fields input');
-    expect((inputs[0].element as HTMLInputElement).value).toBe('合成旧项');
-    expect((inputs[1].element as HTMLInputElement).value).toBe('12');
-    expect((inputs[2].element as HTMLInputElement).value).toBe('');
-    expect(fetchMock.mock.calls.some(([,init])=>init?.method==='POST')).toBe(false);
-    await form.trigger('submit');await flushPromises();
-    const call=fetchMock.mock.calls.find(([input,init])=>String(input).endsWith('/observations')&&init?.method==='POST')!;
-    expect(JSON.parse(call[1].body)).toMatchObject({previousObservationIndex:0,expectedSourceVersion:7,itemName:'合成旧项',numericValue:null});
-    expect(wrapper.text()).not.toContain('上次识别对照');
   }finally{wrapper.unmount();}
 });

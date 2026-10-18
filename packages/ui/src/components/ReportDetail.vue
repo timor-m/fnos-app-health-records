@@ -115,7 +115,6 @@ const clinicalFactEditor = ref<{
 const structuredSectionEditor = ref<ReportDetail["structuredSections"][number] | null | "create">(null);
 const allObservationsOpen = ref(false);
 const observationEditorOpen = ref(false);
-const previousObservationIndex = ref<number | null>(null);
 const editingObservationId = ref<string | null>(null);
 const selectedObservationId = ref<string | null>(null);
 const observationSourcePageIndex = ref(0);
@@ -358,39 +357,13 @@ const aiJobs = computed(() => currentJobs.value.filter((job) => job.jobType === 
 const runningAiJobs = computed(() => aiJobs.value.filter((job) => ["queued", "processing"].includes(job.status)));
 const failedAiJobs = computed(() => aiJobs.value.filter((job) => job.status === "failed"));
 const completedAiJobs = computed(() => aiJobs.value.filter((job) => job.status === "completed"));
-/* 失败可见性：最近一次 AI 整理结束后的弱信号合并为一行提示（克制，不逐条弹）。
-   - 未闭环候选：AI 看到了疑似指标但证据核验没过；
-   - 序号断档：表格有序号但进入提取的行数少于最大序号，说明规划阶段就丢了整行。 */
-const latestCompletedAiJob = computed(() =>
-  [...completedAiJobs.value].sort((left, right) =>
-    String(right.createdAt).localeCompare(String(left.createdAt))
-  )[0] || null
-);
 const extractionNoticeText = computed(() => {
-  const job = latestCompletedAiJob.value;
-  if (!job) return "";
-  const parts: string[] = [];
-  const unmatched = job.unmatchedCandidates || 0;
-  if (unmatched > 0) {
-    parts.push(`${unmatched} 个原文候选尚未完成核对，请对照原件确认`);
-  }
-  const gapPages = job.tableSerialGapPages || [];
-  if (gapPages.length) {
-    parts.push(`第 ${gapPages.join("、")} 页表格序号不连续，可能有整行未参与解析`);
-  }
-  const layoutPages = (job.layoutWarnings || []).filter(item => item.uncoveredResults || item.uncertainRows).map(item=>item.pageNumber);
-  if (layoutPages.length) {
-    parts.push(`第 ${layoutPages.join("、")} 页存在未解析结果或行列归属不明，请对照原件核对`);
-  }
-  const ocrPages = (job.layoutWarnings || []).filter(item => item.ocrUnresolved || item.ocrUnretried).map(item => item.pageNumber);
-  if (ocrPages.length) parts.push(`第 ${ocrPages.join("、")} 页仍有识别疑点或未完成的局部复核，请对照原图核对`);
+  // Job diagnostics describe the extraction at that time; later review and
+  // corrections do not update those counters. Only current observations can
+  // support a report-level warning.
   const pendingVisual = (detail.value?.observations || []).filter(item => item.requiresVisualReview).length;
-  if (pendingVisual) parts.push(`${pendingVisual} 个指标需对照原图核对后进入趋势`);
-  return parts.join("；");
+  return pendingVisual ? `${pendingVisual} 个指标需对照原图核对后进入趋势` : "";
 });
-function openUnmatchedCandidatesLog() {
-  if (latestCompletedAiJob.value) openJobEvents(latestCompletedAiJob.value);
-}
 const aiTriggerState = computed(() => resolveAiTriggerState({
   triggeringAi: triggeringAi.value,
   pageMutationPending: savingPages.value || pageRefreshAwaitingJobs.value,
@@ -508,14 +481,12 @@ function jobDetail(job: ProcessingJob) {
       || job.aiElapsedMs != null
       || job.promptTokens != null
       || job.completionTokens != null
-      || Boolean(job.unmatchedCandidates)
     )
   ) {
     const tokens = [job.promptTokens, job.completionTokens].some((value) => value != null)
       ? `${job.promptTokens || 0}/${job.completionTokens || 0} tokens`
       : "";
-    const quality = job.unmatchedCandidates ? `${job.unmatchedCandidates} 项待核对` : "";
-    return [job.aiModel, formatMs(job.aiElapsedMs), tokens, quality].filter(Boolean).join(" · ");
+    return [job.aiModel, formatMs(job.aiElapsedMs), tokens].filter(Boolean).join(" · ");
   }
   if (job.jobType === "ai_extract" && job.plannedUnits) {
     const pages = job.currentPages?.length ? `当前第 ${job.currentPages.join("、")} 页` : "";
@@ -565,7 +536,7 @@ function eventDetail(event: ProcessingJobEvent) {
     typeof payload.characterCount === "number" ? `${payload.characterCount} 字符` : "",
     typeof payload.candidateCount === "number" ? `${payload.candidateCount} 个候选行` : "",
     typeof payload.unmatchedCandidates === "number" && payload.unmatchedCandidates > 0
-      ? `${payload.unmatchedCandidates} 项待核对`
+      ? `整理时 ${payload.unmatchedCandidates} 个原文候选未闭环`
       : ""
   ].filter(Boolean);
   return parts.join(" · ");
@@ -787,7 +758,6 @@ function selectObservation(item: ReportDetail["observations"][number]) {
 }
 const observationEditVersion = ref<number>();
 function openObservationEditor(item?: ReportDetail["observations"][number]) {
-  previousObservationIndex.value = null;
   selectedObservationId.value = item?.id || null;
   const evidencePageIndex = item?.evidence?.pageId
     ? detail.value?.pages.findIndex((page) => page.id === item.evidence?.pageId) ?? -1
@@ -821,17 +791,6 @@ function openObservationEditor(item?: ReportDetail["observations"][number]) {
   if (item?.itemName) void searchObservationCatalog();
 }
 
-function reviewPreviousObservation(index: number) {
-  const item = detail.value?.unverifiedPreviousObservations?.[index];
-  if (!item) return;
-  allObservationsOpen.value = true;
-  openObservationEditor();
-  previousObservationIndex.value = index;
-  observationSourcePageIndex.value = Math.max(0,detail.value?.pages.findIndex(page=>page.pageNumber===item.pageNumber) ?? 0);
-  observationForm.value = {...observationForm.value,itemName:item.itemName,itemCode:item.itemCode || '',
-    sectionName:item.sectionName || '',resultText:item.resultText,unit:item.unit || ''};
-}
-
 function closeObservationEditor() {
   if (props.reviewObservationId) emit("close");
   observationEditorOpen.value = false;
@@ -857,8 +816,7 @@ async function saveObservation() {
       : `reports/${encodeURIComponent(props.reportId)}/observations`;
     detail.value = await request<ReportDetail>(path, {
       method: editingObservationId.value ? "PUT" : "POST",
-      body: JSON.stringify({ ...observationForm.value, expectedSourceVersion: observationEditVersion.value,
-        ...(previousObservationIndex.value !== null ? {previousObservationIndex:previousObservationIndex.value} : {}) })
+      body: JSON.stringify({ ...observationForm.value, expectedSourceVersion: observationEditVersion.value })
     });
     observationEditorOpen.value = false;
     emit("updated");
@@ -2325,7 +2283,7 @@ onActivated(() => {
             </article>
           </div>
         </section>
-        <section v-if="detail && (detail.observations.length || detail.unverifiedPreviousObservations?.length)" class="observation-panel">
+        <section v-if="detail?.observations.length" class="observation-panel">
           <header>
             <strong>指标总览</strong>
             <span>
@@ -2357,22 +2315,9 @@ onActivated(() => {
       <div v-else class="preview-hint">{{ aiEmptyHint }}</div>
       <p v-if="extractionNoticeText" class="extraction-unmatched-hint">
         <CircleAlert :size="15" />
-        <span>{{ extractionNoticeText }}；可在整理日志中核对，或开启视觉增强后重新整理。</span>
-        <button type="button" @click="openUnmatchedCandidatesLog">查看整理日志</button>
+        <span>{{ extractionNoticeText }}</span>
       </p>
     </article>
-
-    <details v-if="detail?.unverifiedPreviousObservations?.length" class="panel-card extraction-comparison">
-      <summary>上次识别对照 · {{ detail.unverifiedPreviousObservations.length }} 项未能核实</summary>
-      <p>这些上次识别值已退出正常指标和趋势，仅供对照原件；核实后可补充录入。</p>
-      <article v-for="(item,index) in detail.unverifiedPreviousObservations" :key="index" class="observation-list-item">
-        <strong>{{ item.itemName }}</strong>
-        <span>上次识别：{{ item.resultText }} {{ item.unit }}</span>
-        <small>{{ item.reason }}</small>
-        <button v-if="item.pageNumber" class="soft-action-button" type="button" @click="openMorphologyEvidencePage(item.pageNumber)">查看原件第 {{ item.pageNumber }} 页</button>
-        <button v-if="canManageReport" class="soft-action-button" type="button" :disabled="hasRunningJobs" @click="reviewPreviousObservation(index)">对照后补录</button>
-      </article>
-    </details>
 
     <MorphologyFindingEditor
       :open="Boolean(morphologyEditItem)"
@@ -2698,7 +2643,7 @@ onActivated(() => {
             <section class="observation-edit-panel" :class="{ 'is-open': observationEditorOpen }">
               <span class="sheet-grabber observation-edit-grabber" aria-hidden="true"></span>
               <header>
-                <div><h4>{{ editingObservationId ? "编辑指标" : "补充指标" }}</h4><p>{{ previousObservationIndex !== null ? "仅带入上次识别原文，请对照原件确认后保存" : editingObservationId ? "已提取内容已自动带入" : "填写后加入当前报告" }}</p></div>
+                <div><h4>{{ editingObservationId ? "编辑指标" : "补充指标" }}</h4><p>{{ editingObservationId ? "已提取内容已自动带入" : "填写后加入当前报告" }}</p></div>
                 <button v-if="observationEditorOpen" class="plain-icon-button" type="button" title="取消编辑" @click="closeObservationEditor"><X :size="16" /></button>
               </header>
               <div v-if="!observationEditorOpen" class="observation-edit-empty">

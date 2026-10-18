@@ -91,8 +91,8 @@ test('a completed extraction withdraws old points into one comparison snapshot, 
     persistAiExtraction('report','ai',output.result,output.inputCharacters);
     assert.equal(db.prepare('SELECT count(*) n FROM observations').get()?.n,0);
     assert.equal(listTrendSeries(user,'member').length,0);
-    const detail=getReportDetail(user,'report');assert.equal(detail.unverifiedPreviousObservations?.length,1);
-    assert.equal(detail.unverifiedPreviousObservations?.[0].resultText,'12');
+    const detail=getReportDetail(user,'report');assert.equal('unverifiedPreviousObservations' in detail,false);
+    assert.equal(readUnverifiedPreviousObservations('report')[0].resultText,'12');
     db.exec("INSERT INTO processing_jobs(id,report_id,job_type,status,pipeline_version,deduplication_key) VALUES('again','report','ai_extract','processing','test','again')");
     const again=await executeAiExtractionPlan('again','report',async()=>result(),{visionReview:async()=>null});
     persistAiExtraction('report','again',again.result,again.inputCharacters);
