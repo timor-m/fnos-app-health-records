@@ -98,13 +98,19 @@ npm run build
 
 开发者发布、fnOS 打包、Docker 镜像和数据库迁移要求见 [应用发布流程](./docs/RELEASE_PROCESS.md)。
 
+## 问题反馈与进度
+
+遇到应用 BUG，**推荐优先在应用内提交反馈**：进入「我的」→「反馈与进度」→「提交反馈」。请描述出现的问题和复现步骤；需要说明界面情况时，可附上截图，并在提交前使用涂鸦或打码遮挡隐私信息。反馈会附带应用版本及运行环境信息，方便定位问题。
+
+提交后会生成反馈编号。你可以在「反馈与进度」查看处理进展、补充说明，以及确认修复结果。如需在 QQ 群紧急跟进，请提供反馈编号，便于对应同一个问题；不要在群聊中发送报告原件、OCR 正文、检查结果、成员信息或凭据。
+
 ## 项目链接
 
 - 开源仓库：[github.com/timor-m/fnos-app-health-records](https://github.com/timor-m/fnos-app-health-records)
 - Docker Hub：[timorm/fnos-app-health-records](https://hub.docker.com/r/timorm/fnos-app-health-records)
 - QQ 交流群：`1085626763`
 
-交流群用于安装问题、功能建议和指标字典反馈。反馈时请只提供脱敏后的错误信息和未命中指标名称，不要发送报告原件、OCR 正文、结果值或成员信息。
+交流群可用于安装交流、功能建议和指标字典反馈。应用 BUG 请优先使用上述应用内入口；群聊中只提供反馈编号、脱敏后的错误信息或未命中指标名称，不要发送报告原件、OCR 正文、结果值或成员信息。
 
 <img src="./snapshot/qq-group-qr.jpeg" alt="健康档案 QQ 交流群二维码" width="260">
 
