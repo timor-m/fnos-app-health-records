@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
+import { useRouter } from "vue-router";
 import {
   AlertTriangle,
   BarChart3,
@@ -7,7 +8,7 @@ import {
   CheckCircle2,
   Copy,
   Database,
-  ExternalLink,
+  MessageSquare,
   History,
   Link2,
   Power,
@@ -24,12 +25,14 @@ import ReportDetail from "../../components/ReportDetail.vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import { request } from "../../utils/api";
 import { useToast } from "../../composables/useToast";
+import { setFeedbackDraft } from "../../utils/feedback-service";
 import { copyTextToClipboard } from "../../utils/clipboard";
 import { formatRawIndicatorResult } from "../../utils/indicator-display";
 import {
-  buildIndicatorDictionaryIssueUrl,
   buildIndicatorFeedbackText,
   feedbackQqGroup,
+  maxIndicatorFeedbackNames,
+  validateIndicatorFeedbackNames,
   sanitizeIndicatorFeedbackName
 } from "../../utils/indicator-feedback";
 import type {
@@ -61,7 +64,7 @@ const loading = ref(false);
 const error = ref("");
 const notice = ref("");
 const noticeDetails = ref("");
-const maxFeedbackNames = 40;
+const maxFeedbackNames = maxIndicatorFeedbackNames;
 
 type IssueEditor = {
   open: boolean;
@@ -106,8 +109,10 @@ const selectableNames = computed(() => [...new Set(displayedIssues.value
   .filter(Boolean))]);
 const allSelected = computed(() => selectableNames.value.length > 0
   && selectableNames.value.slice(0, maxFeedbackNames).every((key) => selectedNames.value.includes(key)));
-const feedbackUrl = computed(() => buildIndicatorDictionaryIssueUrl(selectedIssueNames.value));
 const toast = useToast();
+const router = useRouter();
+const feedbackBusy = ref(false);
+const feedbackError = ref('');
 
 /* 反馈内容附应用与数据库版本，便于按字典运行环境排查；读取失败不阻塞反馈 */
 const aboutInfo = ref<{ appVersion?: string; schemaVersion?: number }>({});
@@ -124,12 +129,25 @@ async function loadAboutInfo() {
   } catch { /* 版本信息缺失不影响复制 */ }
 }
 
-const feedbackText = computed(() => buildIndicatorFeedbackText(selectedIssueNames.value, {
-  appVersion: aboutInfo.value.appVersion,
-  schemaVersion: aboutInfo.value.schemaVersion
-}));
+const feedbackText = computed(() => {
+  try { return buildIndicatorFeedbackText(selectedIssueNames.value, aboutInfo.value); }
+  catch { return ''; }
+});
 
-/** 无法访问 GitHub 的国内用户：复制同一份脱敏名单，粘贴到 QQ 群即可反馈。 */
+async function applyForIndicators() {
+  if (feedbackBusy.value) return;
+  feedbackError.value = '';
+  try {
+    const names = validateIndicatorFeedbackNames(selectedIssueNames.value);
+    const description = buildIndicatorFeedbackText(names, aboutInfo.value);
+    feedbackBusy.value = true;
+    setFeedbackDraft({category:'other',title:`指标字典收录申请（${names.length} 项）`,description});
+    await router.push({path:'/me/feedback',query:{compose:'indicator'}});
+  } catch (cause) { feedbackError.value = cause instanceof Error ? cause.message : '无法打开反馈，请稍后重试'; }
+  finally { feedbackBusy.value = false; }
+}
+
+/** 复制名单作为反馈服务不可用时的备用方式。 */
 async function copyFeedback() {
   if (!feedbackText.value) return;
   const copied = await copyTextToClipboard(feedbackText.value);
@@ -516,21 +534,18 @@ onMounted(() => {
           >
             <Copy :size="15" />{{ selectedIssueNames.length ? `复制 ${selectedIssueNames.length} 项` : '复制' }}
           </button>
-          <a
+          <button
             class="soft-action-button compact-soft"
-            :class="{ disabled: !feedbackUrl }"
-            :href="feedbackUrl || undefined"
-            target="_blank"
-            rel="noreferrer"
-            :aria-disabled="!feedbackUrl"
-            title="打开预填的 GitHub Issue（需要 GitHub 账号）"
-            @click="!feedbackUrl && $event.preventDefault()"
+            type="button"
+            :disabled="!selectedIssueNames.length || feedbackBusy"
+            @click="applyForIndicators"
           >
-            <ExternalLink :size="15" />{{ selectedIssueNames.length ? `反馈 ${selectedIssueNames.length} 项` : '反馈' }}
-          </a>
+            <MessageSquare :size="15" />{{ feedbackBusy ? '打开中' : selectedIssueNames.length ? `申请收录 ${selectedIssueNames.length} 项` : '申请收录' }}
+          </button>
         </div>
       </div>
-      <p class="indicator-feedback-note">仅“未命中字典”的项目可提交收录反馈；低可信候选和保守排除项需在本地核对，不会重复申请收录。反馈不包含报告数据；无法访问 GitHub 时点击“复制”，粘贴到 QQ 交流群 {{ feedbackQqGroup }} 即可。</p>
+      <p class="indicator-feedback-note">仅“未命中字典”的项目可申请收录，打开反馈表单后按“其他反馈”提交，并附系统环境信息。疑似夹带结果或个人信息的名称需先在本地核对；服务不可用时可复制名单到 QQ 交流群 {{ feedbackQqGroup }}。</p>
+      <p v-if="feedbackError" class="inline-panel-error" role="alert">{{ feedbackError }}</p>
       <div class="maintenance-issue-rows">
         <p v-if="!displayedIssues.length" class="indicator-feedback-note">{{ showEligible ? '暂无已可用但未标准化的指标。' : '当前列表暂无待核对指标；已可用记录可在“可选标准化”中查看，无需重复处理。' }}</p>
         <article v-for="issue in displayedIssues" :key="issue.fingerprint" class="indicator-issue-row indicator-governance-row">
@@ -538,7 +553,7 @@ onMounted(() => {
             <input
               type="checkbox"
               :checked="selectedNames.includes(issueKey(issue.rawName))"
-              :disabled="issue.status !== 'unknown' || (!selectedNames.includes(issueKey(issue.rawName)) && selectedNames.length >= maxFeedbackNames)"
+              :disabled="feedbackBusy || !issueKey(issue.rawName) || issue.status !== 'unknown' || (!selectedNames.includes(issueKey(issue.rawName)) && selectedNames.length >= maxFeedbackNames)"
               @change="toggleIssue(issueKey(issue.rawName))"
             />
           </label>

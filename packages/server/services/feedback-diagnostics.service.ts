@@ -4,7 +4,7 @@ import { getAppConfig } from "../utils/runtime-config";
 import type { RequestAccessMode } from "../utils/access-mode";
 import { getAboutSummary } from "./system.service";
 import { getOcrStatus } from "./ocr-runtime.service";
-import { getAiSettings } from "./ai-settings.service";
+import { getAiTaskSettings } from "./ai-settings.service";
 import { diagnosticFeatures } from "./feedback-diagnostics-summary";
 
 export function getFeedbackDiagnostics(accessMode: RequestAccessMode) {
@@ -15,7 +15,7 @@ export function getFeedbackDiagnostics(accessMode: RequestAccessMode) {
   let ai: Parameters<typeof diagnosticFeatures>[1] = null;
   // A broken optional service must not prevent users from reporting its failure.
   try { ocr = getOcrStatus(); } catch { /* returned as unavailable */ }
-  try { ai = getAiSettings(); } catch { /* returned as unavailable */ }
+  try { ai = getAiTaskSettings('report_extraction'); } catch { /* returned as unavailable */ }
   return {
     appVersion: about.appVersion,
     accessMode,

@@ -2,14 +2,14 @@
 import { useRoute } from "vue-router";
 import { useAppContext } from "../../composables/useAppContext";
 import { computed, nextTick, onMounted, watch, onDeactivated, onBeforeUnmount, ref } from "vue";
-import { ArrowLeft, CircleHelp, Lightbulb, Check, ChevronRight, Copy, MessageSquare, ImagePlus, Plus, Search, X, LoaderCircle } from "@lucide/vue";
+import { ArrowLeft, CircleHelp, Lightbulb, Check, ChevronRight, Copy, MessageSquare, ImagePlus, Plus, Search, X, LoaderCircle, RefreshCw } from "@lucide/vue";
 import FeedbackImageEditor from "../../components/FeedbackImageEditor.vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import { copyTextToClipboard } from "../../utils/clipboard";
 import { useScrollLock } from "../../composables/useScrollLock";
 import { request } from "../../utils/api";
 import { feedbackEnvironment, feedbackEnvironmentPayload, feedbackSnapshotDisplay, type FeedbackAbout, type FeedbackEnvironment } from "../../utils/feedback-environment";
-import { requestFeedback, feedbackStatus, feedbackCategory, feedbackImageUrl, createFeedbackOperation, postFeedback, type FeedbackTicket } from "../../utils/feedback-service";
+import { requestFeedback, feedbackStatus, feedbackCategory, feedbackImageUrl, createFeedbackOperation, postFeedback, takeFeedbackDraft, type FeedbackDraft, type FeedbackTicket } from "../../utils/feedback-service";
 import { createUuid } from "../../utils/uuid";
 import { useToast } from "../../composables/useToast";
 
@@ -20,11 +20,12 @@ type Feedback = { raw:FeedbackTicket; images?: {url:string}[]; id:string; title:
 const mine = ref<Feedback[]>([]);
 const query=ref("");
 const loading=ref(false), listError=ref(''), detailError=ref(''), submitting=ref(false), actionBusy=ref(false);
+const detailLoading=ref(false);
 const page=ref(1), total=ref(0), eventPage=ref(1);
 const message=ref('');
 const operation=createFeedbackOperation();
 const uploaded=new WeakMap<File,{key:string;id?:number;at?:number}>();
-function present(raw:FeedbackTicket):Feedback {return {raw,id:raw.number,title:raw.title,category:feedbackCategory[raw.category]||raw.category,status:feedbackStatus[raw.status]||raw.status,description:raw.description||'',reply:raw.fixedVersion?'修复版本 '+raw.fixedVersion:'更新于 '+new Date(raw.updatedAt).toLocaleString(),images:(raw.attachments||[]).map(i=>({url:feedbackImageUrl(i.url)})).filter(i=>i.url)};}
+function present(raw:FeedbackTicket):Feedback {return {raw,id:raw.number,title:raw.title,category:feedbackCategory[raw.category]||raw.category,status:feedbackStatus[raw.status]||raw.status,description:raw.description||'',reply:raw.fixedVersion?'修复版本 '+raw.fixedVersion:'更新于 '+new Date(raw.updatedAt).toLocaleString(),images:(raw.attachments||[]).map(i=>({url:feedbackImageUrl(i)})).filter(i=>i.url)};}
 let listSequence=0, detailSequence=0;
 async function loadList() {
   const seq=++listSequence;loading.value=true;listError.value='';
@@ -36,9 +37,14 @@ async function loadList() {
 }
 async function loadDetail() {
   if(!selected.value) return;
-  const number=selected.value.id,seq=++detailSequence;detailError.value='';
-  try {const result=await requestFeedback<FeedbackTicket>('tickets/'+number+'?eventPage='+eventPage.value+'&eventPageSize=10');if(seq===detailSequence&&selected.value?.id===number)selected.value=present(result);}
+  const number=selected.value.id,seq=++detailSequence;detailError.value='';detailLoading.value=true;
+  try {const result=await requestFeedback<FeedbackTicket>('tickets/'+number+'?eventPage='+eventPage.value+'&eventPageSize=10');if(seq===detailSequence&&selected.value?.id===number){selected.value=present(result);return true;}}
   catch(e){if(seq===detailSequence)detailError.value=e instanceof Error?e.message:'详情加载失败';}
+  finally {if(seq===detailSequence)detailLoading.value=false;}
+}
+async function refreshDetail() {
+  if(actionBusy.value || detailLoading.value) return;
+  if(await loadDetail() && screen.value==='detail') toast.show('处理进度已刷新');
 }
 let searchTimer:ReturnType<typeof setTimeout>;
 watch(query,()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{page.value=1;void loadList();},300);});
@@ -115,6 +121,7 @@ const title = ref("");
 const description = ref("");
 const steps = ref("");
 const error = ref("");
+const incomingDraft = ref<FeedbackDraft | null>(null);
 const toast = useToast();
 const items = computed(() => mine.value);
 const environment = ref<FeedbackEnvironment>([]);
@@ -144,6 +151,28 @@ function openForm() {
   void loadEnvironment();
   void nextTick(() => modalPanel.value?.focus());
 }
+function fillIncomingDraft() {
+  if (!incomingDraft.value || submitting.value) return;
+  category.value = '其他反馈';
+  title.value = incomingDraft.value.title;
+  description.value = incomingDraft.value.description;
+  steps.value = '';
+  for (const image of attachments.value) { URL.revokeObjectURL(image.url); objectUrls.delete(image.url); }
+  attachments.value = []; expandedImage.value = null; attachmentError.value = '';
+  operation.clear('submit');
+  incomingDraft.value = null;
+  error.value = '';
+}
+function openIncomingDraft() {
+  if (route?.path !== '/me/feedback' || route.query.compose !== 'indicator' || submitting.value) return;
+  const draft = takeFeedbackDraft();
+  if (!draft) return;
+  incomingDraft.value = draft;
+  const hasDraft = Boolean(title.value.trim() || description.value.trim() || steps.value.trim() || attachments.value.length);
+  if (!hasDraft) fillIncomingDraft();
+  openForm();
+}
+watch(() => [route?.path, route?.query.compose, submitting.value], openIncomingDraft, {immediate:true});
 function viewSubmitted() { closeModal(); screen.value = "detail"; void loadDetail(); }
 async function submit() {
   if(environmentLoading.value || submitting.value) return;
@@ -232,7 +261,7 @@ function openDetail(item: Feedback) { selected.value = item; screen.value = "det
         <div class="detail-section"><h4>问题描述</h4><p class="description">{{ selected.description }}</p></div>
         <div v-if="selected.images?.length" class="detail-section"><h4>问题截图 · {{ selected.images.length }} 张</h4><div class="attachment-grid"><a v-for="(image, index) in selected.images" :key="image.url" :href="image.url" target="_blank" rel="noopener" :aria-label="`查看截图 ${index + 1}`"><img :src="image.url" :alt="`问题截图 ${index + 1}`" /></a></div></div>
         <div v-if="selected.raw.reproductionSteps" class="detail-section"><h4>复现步骤</h4><p class="description">{{ selected.raw.reproductionSteps }}</p></div>
-        <div class="detail-section"><h4>处理进度</h4><p v-if="selected.raw.fixedVersion">修复版本：{{ selected.raw.fixedVersion }}</p><button class="feedback-secondary" :disabled="actionBusy" @click="loadDetail">刷新进度</button><p v-if="detailError" role="alert">{{ detailError }}</p><ol class="feedback-timeline"><li v-for="event in selected.raw.events" :key="event.id"><strong>{{ event.actorType==='admin'?'管理员':event.actorType==='user'?'用户':'系统' }} · {{ event.toStatus ? feedbackStatus[event.toStatus] : '补充回复' }}</strong><p>{{ new Date(event.createdAt).toLocaleString() }}<span v-if="event.fixedVersion"> · 修复版本 {{ event.fixedVersion }}</span></p><p class="description">{{ event.content }}</p><div v-if="event.attachments?.length" class="attachment-grid"><a v-for="image in event.attachments" :key="image.id" :href="feedbackImageUrl(image.url)" target="_blank" rel="noopener"><img :src="feedbackImageUrl(image.url)" alt="补充截图" /></a></div></li></ol><div v-if="(selected.raw.eventTotal||0)>10" class="list-toolbar"><button :disabled="eventPage===1||actionBusy" @click="eventPage--;loadDetail()">上一页</button><span>第 {{ eventPage }} 页</span><button :disabled="eventPage*10>=(selected.raw.eventTotal||0)||actionBusy" @click="eventPage++;loadDetail()">下一页</button></div></div>
+        <div class="detail-section"><h4 class="feedback-progress-heading">处理进度<button type="button" class="plain-icon-button" :disabled="actionBusy || detailLoading" :aria-busy="detailLoading" :aria-label="detailLoading ? '正在刷新进度' : '刷新进度'" :title="detailLoading ? '正在刷新进度' : '刷新进度'" @click="refreshDetail"><RefreshCw :size="15" :class="{ 'spin-icon': detailLoading }" aria-hidden="true" /></button></h4><p v-if="selected.raw.fixedVersion">修复版本：{{ selected.raw.fixedVersion }}</p><p v-if="detailError" role="alert">{{ detailError }}</p><ol class="feedback-timeline"><li v-for="event in selected.raw.events" :key="event.id"><strong>{{ event.actorType==='admin'?'管理员':event.actorType==='user'?'用户':'系统' }} · {{ event.toStatus ? feedbackStatus[event.toStatus] : '补充回复' }}</strong><p>{{ new Date(event.createdAt).toLocaleString() }}<span v-if="event.fixedVersion"> · 修复版本 {{ event.fixedVersion }}</span></p><p class="description">{{ event.content }}</p><div v-if="event.attachments?.length" class="attachment-grid"><a v-for="image in event.attachments" :key="image.id" :href="feedbackImageUrl(image)" target="_blank" rel="noopener"><img :src="feedbackImageUrl(image)" alt="补充截图" /></a></div></li></ol><div v-if="(selected.raw.eventTotal||0)>10" class="list-toolbar"><button :disabled="eventPage===1||actionBusy" @click="eventPage--;loadDetail()">上一页</button><span>第 {{ eventPage }} 页</span><button :disabled="eventPage*10>=(selected.raw.eventTotal||0)||actionBusy" @click="eventPage++;loadDetail()">下一页</button></div></div>
         <div class="detail-section"><h4>补充说明</h4><textarea v-model="message" aria-label="补充说明" rows="3" maxlength="3000" :disabled="actionBusy" placeholder="补充问题情况，请勿填写健康报告、检查结果或账号密钥" /><div class="modal-actions"><button class="feedback-secondary" :disabled="actionBusy||!message.trim()" @click="updateFeedback('message')">发送补充</button><button v-if="selected.raw.status==='released_pending_verification'" class="feedback-primary" :disabled="actionBusy" @click="updateFeedback('confirm')">确认已解决</button><button v-if="['released_pending_verification','resolved'].includes(selected.raw.status)" class="feedback-secondary" :disabled="actionBusy||!message.trim()" @click="updateFeedback('reopen')">仍未解决</button></div></div>
         <details v-if="selected.raw.environment" class="environment-info detail-section"><summary>提交时的环境信息</summary><dl><div v-for="item in feedbackSnapshotDisplay(selected.raw.environment)" :key="item.label"><dt>{{ item.label }}</dt><dd>{{ item.value }}</dd></div></dl></details>
         <footer><span>请通过反馈编号跟进问题；如需紧急了解处理进展，可在 QQ 群发送此编号进行跟进。</span><button class="feedback-secondary" @click="copyNumber"><Copy :size="15" />复制编号</button></footer>
@@ -244,6 +273,7 @@ function openDetail(item: Feedback) { selected.value = item; screen.value = "det
           <span class="sheet-grabber" aria-hidden="true"></span>
           <header class="modal-heading"><div><h3 id="feedback-modal-title">{{ modal === 'form' ? '提交反馈' : '提交成功' }}</h3><p>{{ modal === 'form' ? '描述问题，让我们更好地了解你的想法' : '请保存反馈编号，便于后续跟进' }}</p></div><button class="modal-close" aria-label="关闭反馈弹窗" @click="closeModal"><X :size="20" /></button></header>
       <form v-if="modal === 'form'" class="feedback-form" @submit.prevent="submit">
+        <p v-if="incomingDraft" class="feedback-error" role="status">已保留当前未提交的反馈，另有一份指标申请待填写。<button type="button" :disabled="submitting" @click="fillIncomingDraft">替换当前草稿为指标申请</button></p>
         <div class="feedback-form-body">
         <fieldset class="feedback-fields" :disabled="submitting">
         <fieldset><legend>反馈类型</legend><div class="type-options"><button v-for="kind in feedbackTypes" :key="kind.label" type="button" :aria-pressed="category === kind.label" @click="category = kind.label"><component :is="kind.icon" :size="15" aria-hidden="true" /><span>{{ kind.label }}</span></button></div></fieldset>
@@ -270,6 +300,7 @@ function openDetail(item: Feedback) { selected.value = item; screen.value = "det
           <summary>随反馈附带的信息<span class="environment-subtitle">附带版本与运行环境，便于定位问题，不包含健康档案、账号或密钥。</span></summary>
           <p v-if="environmentLoading" role="status">正在读取运行环境…</p>
           <p v-if="environmentFailed" role="status">应用环境读取失败，可重试或继续填写。<button type="button" @click="loadEnvironment">重试</button></p>
+          <p v-if="environmentPayload.ai?.enabled">AI 信息为提交时的报告整理配置，不代表历史报告当时使用的模型；私有接入点标识不会附带。</p>
           <dl><div v-for="item in environment" :key="item.label"><dt>{{ item.label }}</dt><dd>{{ item.value }}</dd></div></dl>
         </details>
         <p v-if="error" role="alert">{{ error }}</p>
@@ -333,7 +364,7 @@ button[aria-pressed="true"] { background: var(--brand-soft); color: var(--brand-
 .feedback-skeleton-row .skeleton-description { width: 75%; }
 .feedback-skeleton-row .skeleton-status { width: 62px; height: 26px; flex-shrink: 0; }
 @keyframes feedback-skeleton-pulse { 50% { opacity: .45; } }
-@media (prefers-reduced-motion: reduce) { .feedback-skeleton-row span,.feedback-list-loading .spin-icon { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .feedback-skeleton-row span,.feedback-list-loading .spin-icon,.feedback-progress-heading .spin-icon { animation: none; } }
 .feedback-empty { display: grid; justify-items: center; gap: 12px; padding: 55px 20px; text-align: center; }
 .feedback-empty > svg { color: var(--arrow-muted); margin-bottom: 4px; }
 .feedback-row { display: flex; align-items: center; gap: 18px; width: 100%; padding: 22px; border: 0; border-bottom: 1px solid var(--line); background: transparent; text-align: left; color: var(--ink); cursor: pointer; }
@@ -352,6 +383,7 @@ button[aria-pressed="true"] { background: var(--brand-soft); color: var(--brand-
 footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid var(--line); padding-top: 18px; }footer > span { font-size: 12px; color: var(--muted); }
 .success-card { display: grid; justify-items: center; gap: 16px; padding: 40px 24px; text-align: center; }.number-box { display: grid; justify-items: center; gap: 12px; width: min(100%, 320px); padding: 24px; border-radius: 14px; background: var(--fill-2); }.number-box > span { font-size: 12px; color: var(--muted); }.number-box strong { font-size: 28px; letter-spacing: .05em; }
 .feedback-detail { padding: 26px; }.feedback-detail header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }.feedback-detail h3 { margin-top: 7px; }.detail-section { margin-top: 26px; }.detail-section > p { margin-top: 10px; }.description { white-space: pre-wrap; overflow-wrap: anywhere; }.feedback-timeline { padding: 0 0 0 18px; margin: 18px 0 24px; border-left: 2px solid var(--brand-soft); list-style: none; }.feedback-timeline li { position: relative; margin-bottom: 20px; }.feedback-timeline li::before { content: ''; position: absolute; left: -24px; top: 5px; width: 10px; height: 10px; border-radius: 50%; background: var(--brand); border: 2px solid var(--surface); }.feedback-timeline strong { font-size: 13px; }
+.feedback-progress-heading { display: flex; align-items: center; gap: 6px; }
 button:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
 @media(max-width:600px) {
 .feedback-hero { flex-wrap: wrap; padding: 20px; gap: 12px; }.hero-symbol { display: none; }.feedback-hero > div:nth-child(2) { flex-basis: 100%; }.list-toolbar { flex-direction: column; align-items: stretch; padding: 14px; }.feedback-search input { width: 100%; }.feedback-row { padding: 18px 14px; gap: 10px; flex-wrap: wrap; }.feedback-row > div { flex-basis: 100%; }.feedback-row > svg { margin-left: auto; }.feedback-detail { padding: 20px 16px; }footer { flex-direction: column; align-items: stretch; }.feedback-detail header { align-items: flex-start; }.number-box { box-sizing: border-box; }

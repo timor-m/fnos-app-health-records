@@ -3,14 +3,22 @@ import { getAppConfig } from '../utils/runtime-config';
 import { getFeedbackInstallation } from './feedback-installation.service';
 import { deploymentType, feedbackUserAgent } from '../utils/deployment';
 export const feedbackServiceBase = 'https://gateway.lby.link/health/v1';
-export async function sendFeedbackRequest(path: string, options: {method?:'GET'|'POST';body?:BodyInit;key?:string;json?:boolean;signal?:AbortSignal}={}, dependencies={fetch:globalThis.fetch,identity:getFeedbackInstallation}) {
+export async function sendFeedbackRequest(path: string, options: {method?:'GET'|'POST';body?:BodyInit;key?:string;json?:boolean;image?:boolean;signal?:AbortSignal}={}, dependencies={fetch:globalThis.fetch,identity:getFeedbackInstallation}) {
   const config = getAppConfig();
   const headers: Record<string,string>={'x-client-id':dependencies.identity(),'x-version':config.appVersion,'User-Agent':feedbackUserAgent(config.appVersion,deploymentType(config.authMode))};
   if(options.key) headers['Idempotency-Key']=options.key;
   if(options.json) headers['Content-Type']='application/json';
   let response: Response;
-  try {response=await dependencies.fetch(feedbackServiceBase+(path === '/upload' ? '/feedback-attachments' : path.replace(/^\/tickets(?=\/|\?|$)/, '/feedbacks')),{method:options.method||'GET',headers,body:options.body,redirect:'error',signal:options.signal ? AbortSignal.any([options.signal,AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000)});}
+  try {response=await dependencies.fetch(feedbackServiceBase+(path === '/upload' ? '/feedback-attachments' : path.startsWith('/attachments/') ? '/feedback-attachments/'+path.slice('/attachments/'.length) : path.replace(/^\/tickets(?=\/|\?|$)/, '/feedbacks')),{method:options.method||'GET',headers,body:options.body,redirect:'error',signal:options.signal ? AbortSignal.any([options.signal,AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000)});}
   catch {throw createError({statusCode:502,statusMessage:'暂时无法连接反馈服务，请稍后重试，填写内容已保留'});}
+  if(options.image && response.ok) {
+    const type=response.headers.get('content-type')?.split(';')[0];
+    if(!type || !['image/jpeg','image/png','image/webp'].includes(type) || Number(response.headers.get('content-length')||0)>10*1024*1024) {await response.body?.cancel();throw createError({statusCode:502,statusMessage:'截图响应异常'});}
+    const reader=response.body?.getReader(),chunks:Uint8Array[]=[];let size=0;
+    if(!reader) throw createError({statusCode:502,statusMessage:'截图响应异常'});
+    try {while(true){const {value,done}=await reader.read();if(done)break;size+=value.length;if(size>10*1024*1024){await reader.cancel();throw createError({statusCode:502,statusMessage:'截图响应异常'});}chunks.push(value);}}catch{throw createError({statusCode:502,statusMessage:'截图响应异常'});}finally{reader.releaseLock();}
+    return {bytes:Buffer.concat(chunks),mimeType:type};
+  }
   let payload: {success?:boolean;data?:unknown};
   try {payload=await response.json();} catch {throw createError({statusCode:502,statusMessage:'反馈服务响应异常，请稍后重试'});}
   if(!response.ok || payload.success!==true) {

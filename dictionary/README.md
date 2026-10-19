@@ -31,7 +31,7 @@
 - 远程指标不能重新定义核心 `canonicalKey`；需要补充核心别名时写入顶层 `extensions`。
 - 已发布 Key 确需合并时写入顶层 `redirects`，普通指标不维护状态和空合并字段。
 - AI 不得写入该目录，也不得自动创建正式字典条目。
-- 应用问题池通过预填 GitHub Issue 仅提交指标名称；维护者不得要求用户附带报告、结果值或身份信息。
+- 应用问题池预填指标收录申请名单，打开正常反馈弹窗并默认选择“其他反馈”，用户检查后提交并附带白名单系统环境信息；预填内容不带报告或检查结果。维护者不得要求用户附带报告、结果值或身份信息。提交后可在“反馈与进度”跟踪，服务不可用时可复制名单备用。
 
 每个指标必须声明 `kind`：
 
@@ -74,7 +74,7 @@ npm run dictionary:release
 
 推荐发布链路：
 
-1. 从 GitHub Issue 汇总未命中名称，确认医学含义后修改远程 `taxonomy.json` 或 `indicators.json`。
+1. 从“其他反馈”中标题为“指标字典收录申请”的工单汇总未命中名称，逐项确认医学含义、已有别名及单位边界后修改远程 `taxonomy.json` 或 `indicators.json`；历史 GitHub Issue 仍可作为来源。同一申请可部分收录，回复说明各项结论和发布的字典 revision，不将应用版本当作字典版本。
 2. 运行 `npm run dictionary:release`。命令会拒绝无内容变更的空发布，自动递增两个 JSON 的 revision，完成校验并生成本地 manifest。
 3. 提交远程字典源码并创建 PR；`Dictionary Validate` 工作流只针对字典相关变更执行轻量 Schema 和跨文件一致性校验，通用 CI 继续执行完整发布校验。
 4. 合并并推送 `main`；`Dictionary Pages` 工作流会重新校验，将三个运行时 JSON 同步到 Gitee 国内镜像，然后发布相同快照到 GitHub Pages。

@@ -2,14 +2,34 @@ import { mount,flushPromises } from '@vue/test-utils';
 import { describe,it,expect,vi,beforeEach } from 'vitest';
 import FeedbackImageEditor from '../src/components/FeedbackImageEditor.vue';
 import Page from '../src/pages/settings/FeedbackSettingsPage.vue';
-import { createFeedbackOperation } from '../src/utils/feedback-service';
+import { createFeedbackOperation, feedbackImageUrl } from '../src/utils/feedback-service';
 import { feedbackEnvironmentPayload } from '../src/utils/feedback-environment';
 const request=vi.hoisted(()=>vi.fn());
-vi.mock('../src/utils/api',()=>({request:(path:string,...args:unknown[])=>path==='feedback/identity'?Promise.resolve({clientId:'a'.repeat(43)}):request(path,...args)}));
+vi.mock('../src/utils/api',()=>({apiUrl:(path:string)=>'/app/api/'+path,request:(path:string,...args:unknown[])=>path==='feedback/identity'?Promise.resolve({clientId:'a'.repeat(43)}):request(path,...args)}));
 const ticket={number:'B0001',title:'测试反馈',category:'problem',status:'released_pending_verification',version:2,fixedVersion:'0.2.12',description:'合成描述',createdAt:'2026-01-01T00:00:00Z',updatedAt:'2026-01-01T00:00:00Z',events:[{id:1,actorType:'admin',content:'已更新',toStatus:'released_pending_verification',fixedVersion:'0.2.12',createdAt:'2026-01-01T00:00:00Z',attachments:[]}],eventTotal:1};
 function render(){return mount(Page,{global:{stubs:{SubPageHeader:true,Teleport:true,FeedbackImageEditor:true}}});}
 beforeEach(()=>{request.mockReset();request.mockImplementation(async(path:string)=>path==='feedback-diagnostics'?{}:path.includes('?page=')?{items:[],total:0}:ticket);});
 describe('live feedback workflows',()=>{
+ it('always uses the local authenticated attachment route and ignores stored public URLs',()=>{
+  for(const url of ['https://s.lby.link/health/feedback/synthetic.png','/health/feedback/synthetic.png','https://untrusted.example.test/image.png','']) expect(feedbackImageUrl({id:42,url})).toBe('/app/api/feedback/attachments/42');
+  for(const id of [0,-1,NaN,1.5,Number.MAX_SAFE_INTEGER+1]) expect(feedbackImageUrl({id,url:'https://s.lby.link/synthetic.png'})).toBe('');
+ });
+ it('shows original and follow-up screenshots from relative URLs and keeps the section after refresh',async()=>{
+  const detail={...ticket,attachments:[{id:1,url:'/health/feedback/original.png'},{id:2,url:'https://s.lby.link/health/feedback/complete.png'}],events:[{...ticket.events[0],attachments:[{id:3,url:'/health/feedback/reply.png'}]}]};
+  request.mockImplementation(async(path:string)=>path.includes('?page=')?{items:[ticket],total:1}:detail);
+  const page=render();
+  try {
+   await flushPromises();await page.get('.feedback-row').trigger('click');await flushPromises();
+   const assertScreenshots=()=>{
+    const section=page.findAll('.detail-section').find(section=>section.find('h4').text().startsWith('问题截图'));
+    expect(section?.get('h4').text()).toBe('问题截图 · 2 张');
+    expect(section?.findAll('img').map(image=>image.attributes('src'))).toEqual(['/app/api/feedback/attachments/1','/app/api/feedback/attachments/2']);
+    expect(section?.findAll('a').map(link=>link.attributes('href'))).toEqual(['/app/api/feedback/attachments/1','/app/api/feedback/attachments/2']);
+    expect(page.get('.feedback-timeline img').attributes('src')).toBe('/app/api/feedback/attachments/3');
+   };
+   assertScreenshots();await page.get('button[aria-label="刷新进度"]').trigger('click');await flushPromises();assertScreenshots();
+  }finally{page.unmount();}
+ });
  it('loads feedback lazily on page mount and submits only approved fields without exposing installation identity',async()=>{
   const page=render();await flushPromises();expect(request).toHaveBeenCalledWith('feedback/tickets?page=1&pageSize=20',expect.objectContaining({headers:{}}));
   await page.get('.feedback-primary').trigger('click');await flushPromises();

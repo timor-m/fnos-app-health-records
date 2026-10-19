@@ -15,6 +15,12 @@ export default defineEventHandler(async event => {
   const path='/'+(getRouterParam(event,'path') || '');
   const ticket='/tickets/(?:[BSO]\\d{4,20}|FB-\\d{4}-\\d{6,20})';
   const get=event.req.method==='GET';
+  if(get && /^\/attachments\/[1-9]\d{0,15}$/.test(path) && Number.isSafeInteger(Number(path.split('/').at(-1)))) {
+    if(Object.keys(getQuery(event)).length) throw createError({statusCode:400,statusMessage:'截图参数无效'});
+    const image=await sendFeedbackRequest(path,{image:true}) as {bytes:Buffer;mimeType:string};
+    setHeader(event,'Cache-Control','private, no-store');
+    return new Response(new Uint8Array(image.bytes),{headers:{'Content-Type':image.mimeType,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Disposition':'inline'}});
+  }
   if(get && path==='/identity') return ok({clientId:getFeedbackInstallation()});
   if(get && (path==='/tickets' || new RegExp('^'+ticket+'$').test(path))) {
     const query=getQuery(event); const allowed=path==='/tickets'?['page','pageSize','number','q','status','category']:['eventPage','eventPageSize'];

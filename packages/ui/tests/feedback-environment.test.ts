@@ -17,3 +17,22 @@ describe("feedback environment allowlist", () => {
     expect(result).toContainEqual({ label: "浏览器", value: "未获取" });
   });
 });
+
+describe('AI environment snapshots',()=>{
+ it('shows the same current configuration in preview, payload and saved detail',async()=>{
+  const {feedbackEnvironmentPayload,feedbackSnapshotDisplay}=await import('../src/utils/feedback-environment');
+  const ai={enabled:true,visionEnabled:true,provider:'custom',model:'namespace/text:8b',visionModel:'vision-v1',extractionDepth:'detailed' as const};
+  const client={userAgent:'unknown',width:800,height:600};
+  const payload=feedbackEnvironmentPayload({ai},client);
+  expect(payload.ai).toEqual(ai);
+  for(const item of [{label:'AI 服务商',value:'自定义'},{label:'AI 提取模型（提交时配置）',value:ai.model},{label:'AI 视觉模型（提交时配置）',value:ai.visionModel},{label:'AI 解析程度',value:'详细'}]) {
+   expect(feedbackEnvironment({ai},client)).toContainEqual(item);
+   expect(feedbackSnapshotDisplay(payload)).toContainEqual(item);
+  }
+  expect(feedbackEnvironmentPayload({ai:{...ai,enabled:false}},client).ai).toEqual({enabled:false,visionEnabled:true});
+  expect(feedbackEnvironmentPayload({ai:{...ai,visionEnabled:false}},client).ai).not.toHaveProperty('visionModel');
+  expect(feedbackSnapshotDisplay({ai:{enabled:true,visionEnabled:false}})).toHaveLength(2);
+  expect(JSON.stringify(feedbackSnapshotDisplay({ai:{...ai,model:'sk-synthetic'}}))).not.toContain('sk-synthetic');
+  expect(feedbackSnapshotDisplay({ai:{...ai,model:'port'}})).toContainEqual({label:'AI 提取模型（提交时配置）',value:'port'});
+ });
+});
