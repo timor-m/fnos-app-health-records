@@ -331,6 +331,10 @@ export function indicatorNameCandidates(value: string | null | undefined) {
     if (compact) candidates.add(compact);
   };
   add(cleaned.code);
+  // An exactly repeated Chinese label may carry footnotes on both copies.
+  // Generate a lookup candidate only; retain the source name and all qualifiers.
+  const repeatedLabel = raw.match(/^([\p{Script=Han}]{2,30})[*﹡★☆]*\(\1[*﹡★☆]*\)$/u);
+  if (repeatedLabel) add(repeatedLabel[1]);
   // 部分报告会把表格序号 OCR 到指标名称前，序号不是指标语义的一部分。
   // 同时覆盖「3.项目」「3、项目」「（3）项目」「No.3 项目」和「3 项目」等变体。
   const withoutLeadingOrdinal = raw
@@ -1272,7 +1276,7 @@ function exclusionReason(row: ObservationRow, indicator: AliasRow, unitCompatibl
  * 已命中字典、但按指标定义（状态/文本型或非数值型）不进入折线趋势的结果。
  * 这是字典的既定守门而非待治理缺口，与 OCR 证据失败一样豁免出治理池。
  */
-function isDesignGatedQualitativeExclusion(excludedReason: string | null | undefined) {
+export function isDesignGatedQualitativeExclusion(excludedReason: string | null | undefined) {
   return Boolean(excludedReason && excludedReason.includes("不默认进入折线趋势"));
 }
 

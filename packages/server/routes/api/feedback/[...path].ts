@@ -42,11 +42,11 @@ export default defineEventHandler(async event => {
   if(event.req.method!=='POST' || !(path==='/upload' || path==='/tickets' || new RegExp('^'+ticket+'/(messages|resolution)$').test(path))) throw createError({statusCode:404,statusMessage:'反馈接口不存在'});
   const key=getHeader(event,'idempotency-key') || '';
   if(!/^[A-Za-z0-9_-]{8,80}$/.test(key)) throw createError({statusCode:400,statusMessage:'缺少有效请求标识'});
-  if(path==='/upload') return withMultipartUpload(event,{requestBytes:10*1024*1024+65536,fileBytes:10*1024*1024,files:1,sizeMessage:'截图不能超过 10 MB'},async ({files})=>{
+  if(path==='/upload') return withMultipartUpload(event,{requestBytes:10*1024*1024+65536,fileBytes:10*1024*1024,files:1,sizeMessage:'附件不能超过 10 MB'},async ({files})=>{
     const file=files[0];
-    const suffix:Record<string,string>={'image/jpeg':'jpg','image/png':'png','image/webp':'webp'};
-    if(!file || file.name!=='file' || !suffix[file.type] || file.size===0) throw createError({statusCode:400,statusMessage:'请选择 JPG、PNG 或 WebP 截图'});
-    const body=new FormData();body.set('appKey','health-records');body.set('file',new Blob([new Uint8Array(await readFile(file.path))],{type:file.type}),'screenshot.'+suffix[file.type]);
+    const suffix:Record<string,string>={'image/jpeg':'jpg','image/png':'png','image/webp':'webp','application/pdf':'pdf'};
+    if(!file || file.name!=='file' || !suffix[file.type] || file.size===0) throw createError({statusCode:400,statusMessage:'请选择 JPG、PNG、WebP 图片或 PDF'});
+    const body=new FormData();body.set('appKey','health-records');body.set('file',new Blob([new Uint8Array(await readFile(file.path))],{type:file.type}),(file.type==='application/pdf'?'report.':'screenshot.')+suffix[file.type]);
     const result=await sendFeedbackRequest('/upload',{method:'POST',key,body}) as {id:number;url:string};
     return ok({id:result.id,url:result.url});
   });

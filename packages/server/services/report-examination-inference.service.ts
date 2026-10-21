@@ -85,10 +85,13 @@ export function inferObservationExamination(observation:AiObservation,pages:Exam
  const evidence=observation.evidence[0];
  const page=pages.find(p=>p.pageNumber===evidence?.pageNumber);
  const quote=evidence?.quote || '';
- // Extraction passes may quote a reconstructed table row with spaces instead of
- // pipes. Resolve that formatting difference before deriving its examination key.
+ // Extraction passes may use spaces instead of pipes or retain a flag arrow
+ // missing from OCR. Resolve only those differences before deriving its examination key.
  // Keep ambiguous rows ambiguous, and retain decimal signs, bounds and dates.
- const rowText=(value:string)=>compact(value).replace(/[|｜]/g,'');
+ const rowText=(value:string)=>compact(value).replace(/[|｜↑↓▲▼⬆⬇↗↘]/g,'')
+  // Only this fully spelled enzyme name supports the OCR gamma/Y/V variation.
+  // Never normalize letters in codes, other names, values or clinical qualifiers.
+  .replace(/[γyv][-－]?(?=谷氨酰(?:基)?转(?:肽|移)酶)/g,'γ-');
  let matchingRows=page?.lines.flatMap((line,index)=>compact(line.text).includes(compact(quote)) && !!compact(quote)?[index]:[]) || [];
  if(!matchingRows.length && rowText(quote)) {
   matchingRows=page?.lines.flatMap((line,index)=>rowText(line.text).includes(rowText(quote))?[index]:[]) || [];

@@ -7,7 +7,7 @@ export type FeedbackDraft = {category:'other';title:string;description:string};
 let pendingDraft: FeedbackDraft | null = null;
 export function setFeedbackDraft(draft: FeedbackDraft) { pendingDraft = {...draft}; }
 export function takeFeedbackDraft() { const draft=pendingDraft;pendingDraft=null;return draft; }
-export type FeedbackImage={id:number;url:string};
+export type FeedbackImage={id:number;url:string;mimeType?:string;size?:number};
 export type FeedbackEvent={id:number;type:string;actorType:string;content:string;fromStatus?:string;toStatus?:string;fixedVersion?:string;createdAt:string;attachments:FeedbackImage[]};
 export type FeedbackTicket={number:string;title:string;category:string;status:string;fixedVersion:string|null;version:number;createdAt:string;updatedAt:string;description?:string;reproductionSteps?:string;attachments?:FeedbackImage[];events?:FeedbackEvent[];eventTotal?:number;environment?:Record<string,Record<string,unknown>>};
 export function feedbackImageUrl(image:FeedbackImage) {

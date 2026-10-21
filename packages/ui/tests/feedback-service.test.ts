@@ -10,6 +10,18 @@ const ticket={number:'B0001',title:'测试反馈',category:'problem',status:'rel
 function render(){return mount(Page,{global:{stubs:{SubPageHeader:true,Teleport:true,FeedbackImageEditor:true}}});}
 beforeEach(()=>{request.mockReset();request.mockImplementation(async(path:string)=>path==='feedback-diagnostics'?{}:path.includes('?page=')?{items:[],total:0}:ticket);});
 describe('live feedback workflows',()=>{
+ it('renders primary and follow-up PDFs as private file links, preserving image previews',async()=>{
+  const pdf={id:8,url:'https://untrusted.example.test/report.pdf',mimeType:'application/pdf'};
+  const detail={...ticket,attachments:[pdf,{id:9,url:'ignored',mimeType:'image/png'}],events:[{...ticket.events[0],attachments:[pdf]}]};
+  request.mockImplementation(async(path:string)=>path.includes('?page=')?{items:[ticket],total:1}:detail);
+  const page=render();try {
+   await flushPromises();await page.get('.feedback-row').trigger('click');await flushPromises();
+   expect(page.findAll('.pdf-card')).toHaveLength(2);
+   expect(page.findAll('img')).toHaveLength(1);
+   for(const link of page.findAll('.pdf-card').map(card=>card.element.closest('a'))) expect(link?.getAttribute('href')).toBe('/app/api/feedback/attachments/8');
+   expect(page.html()).not.toContain('untrusted.example.test');
+  }finally{page.unmount();}
+ });
  it('always uses the local authenticated attachment route and ignores stored public URLs',()=>{
   for(const url of ['https://s.lby.link/health/feedback/synthetic.png','/health/feedback/synthetic.png','https://untrusted.example.test/image.png','']) expect(feedbackImageUrl({id:42,url})).toBe('/app/api/feedback/attachments/42');
   for(const id of [0,-1,NaN,1.5,Number.MAX_SAFE_INTEGER+1]) expect(feedbackImageUrl({id,url:'https://s.lby.link/synthetic.png'})).toBe('');
@@ -21,8 +33,8 @@ describe('live feedback workflows',()=>{
   try {
    await flushPromises();await page.get('.feedback-row').trigger('click');await flushPromises();
    const assertScreenshots=()=>{
-    const section=page.findAll('.detail-section').find(section=>section.find('h4').text().startsWith('问题截图'));
-    expect(section?.get('h4').text()).toBe('问题截图 · 2 张');
+    const section=page.findAll('.detail-section').find(section=>section.find('h4').text().startsWith('问题附件'));
+    expect(section?.get('h4').text()).toBe('问题附件 · 2 个');
     expect(section?.findAll('img').map(image=>image.attributes('src'))).toEqual(['/app/api/feedback/attachments/1','/app/api/feedback/attachments/2']);
     expect(section?.findAll('a').map(link=>link.attributes('href'))).toEqual(['/app/api/feedback/attachments/1','/app/api/feedback/attachments/2']);
     expect(page.get('.feedback-timeline img').attributes('src')).toBe('/app/api/feedback/attachments/3');

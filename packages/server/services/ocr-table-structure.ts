@@ -21,7 +21,7 @@ const prefixHeader = /^(序号|缩写|英文缩写|代码)$/;
 const headerLabel = /^(项目名称|项目|名称|参数|检验项目|检测项目|测定项目|序号|缩写|英文缩写|代码|结果|本次结果|检验结果|检查结果|测定值|实测值?|测量值|单位|异常|异常标志|标志|标记|参考范围|参考值|参考区间|历史结果|上次结果|前次结果|方法|方法学|检测方法)$/;
 const administrativeLabel = /(?:姓名|日期|时间|签名|审核|医生|标本|送检|检验者|备注|声明|报告单|报告编号|仅供|仅对)/;
 const recognitionMarker = /^(?:[【[]\s*(?:深圳|全国)?(?:HR|R)\s*[】\]]|(?:深圳|全国)\s*HR)$/i;
-const resultText = /^(?:[↑↓▲▼⬆⬇↗↘]?\s*(?:<=|>=|[<>≤≥])?\s*[-+]?\d+(?:\s*\.\s*\d+)?(?:[eE][-+]?\d+)?\s*[%‰↑↓▲▼⬆⬇↗↘]?|[-+]{1,3}|阴性|阳性|弱阳性|正常|异常|未见(?:异常)?|未检出|清亮|浑浊)$/;
+const resultText = /^(?:[↑↓▲▼⬆⬇↗↘]?\s*(?:<=|>=|[<>≤≥])?\s*[-+]?\d+(?:\s*\.\s*\d+)?(?:[eE][-+]?\d+)?(?:\s*[-~～]\s*\d+(?:\.\d+)?)?\s*[%‰↑↓▲▼⬆⬇↗↘]?|[-+]{1,3}|阴性|阳性|弱阳性|正常|异常|无|未见(?:异常)?|未查见|未检出|清亮|浑浊|[浅深棕褐黄红黑绿白灰淡]{1,3}色|稀便|糊状|软便|硬便|成形|不成形)$/;
 
 /** A single OCR box may contain the same code in both abbreviation/name columns. */
 export function duplicatedOcrCodeName(text: string): string | null {
@@ -93,14 +93,22 @@ export function recoverHeaderAlignedTable<T extends PositionedText>(
     if (joined.has(item.index)) return [];
     const continuation = originalItems.filter(next => next.index !== item.index && !joined.has(next.index)
       && !validOcrTableCell(item.line.tableCell) && !validOcrTableCell(next.line.tableCell)
-      && next.box.top >= item.box.bottom - item.box.height*.2 && next.box.top-item.box.bottom <= item.box.height*.8
-      && Math.abs(next.box.x-item.box.x) <= Math.max(next.box.height,item.box.height)
-      && /^(项目名称|检验项目|检验结果|参考范围|参考区间|ReferenceRange)$/i.test(item.text+next.text));
+      && ((next.box.top >= item.box.bottom - item.box.height*.2 && next.box.top-item.box.bottom <= item.box.height*.8
+        && Math.abs(next.box.x-item.box.x) <= Math.max(next.box.height,item.box.height))
+        // Letter-spaced headings may be separate boxes on the same baseline.
+        // Join only incomplete labels, with no intervening cell or model mapping.
+        || (!headerLabel.test(item.text) && !headerLabel.test(next.text)
+          && next.box.left >= item.box.right && next.box.left-item.box.right <= Math.max(item.box.height,next.box.height)*4
+          && Math.abs(next.box.y-item.box.y) <= Math.min(item.box.height,next.box.height)*.35
+          && !originalItems.some(between => between !== item && between !== next
+            && between.box.x > item.box.x && between.box.x < next.box.x
+            && Math.abs(between.box.y-item.box.y) < item.box.height*.65)))
+      && /^(项目|项目名称|检验项目|检验结果|结果|单位|参考范围|参考区间|ReferenceRange)$/i.test(item.text+next.text));
     if (continuation.length !== 1) return [item];
     const next=continuation[0]; joined.add(next.index);
-    const box=geometry([Math.min(item.box.left,next.box.left),item.box.top,Math.max(item.box.right,next.box.right),next.box.bottom])!;
+    const box=geometry([Math.min(item.box.left,next.box.left),Math.min(item.box.top,next.box.top),Math.max(item.box.right,next.box.right),Math.max(item.box.bottom,next.box.bottom)])!;
     return [{...item,members:[item.index,next.index],box,text:normalizeOcrTableHeader(item.text+next.text)}];
-  });
+  }).filter(item => !joined.has(item.index));
   const headings = items.filter(item => headerLabel.test(item.text));
   const anchors = headings.filter(item => nameHeader.test(item.text));
   const bands = new Map<string, typeof items>();
@@ -188,7 +196,7 @@ export function recoverHeaderAlignedTable<T extends PositionedText>(
       // A wrapped project name belongs to one row only when its full vertical
       // band contains one independent result. OCR boxes can overlap slightly.
       const namePieces = body.filter(item => column(item) === nameCol && !trusted(item)
-        && /^[\p{L}\p{N}（）().+%\/-]+$/u.test(item.text) && !administrativeLabel.test(item.text)
+        && /^[\p{L}\p{N}（）().+%\/-]+$/u.test(item.text) && !administrativeLabel.test(item.text.replace(/[（(][^）)]*[）)]/g,''))
         && !headerLabel.test(item.text));
       const wraps = wrappedTableNameGroups(namePieces, item => item.box, item => item.text,
         (first, second) => !/^(?:请|建议|备注|说明|参考|审核|签名|报告|咨询)/.test(second) && Boolean(canJoinName?.(first, second)),
@@ -224,7 +232,7 @@ export function recoverHeaderAlignedTable<T extends PositionedText>(
         return validOcrTableCell(cell) && cell.table === existingTable.table ? [cell.row] : [];
       })) + 1 : 1;
       const rowNames = body.filter(item => column(item) === nameCol && /\p{L}/u.test(item.text)
-        && !/[：:；;。]/.test(item.text) && !administrativeLabel.test(item.text))
+        && !/[：:；;。]/.test(item.text) && !administrativeLabel.test(item.text.replace(/[（(][^）)]*[）)]/g,'')))
         .sort((a, b) => y(a) - y(b));
       const rows = new Map<number, { row: number; column: number; unsafe: boolean }>();
       const conflicting = new Set<number>();

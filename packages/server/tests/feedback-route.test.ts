@@ -36,6 +36,10 @@ test('local authenticated route forwards only feedback operations and edited ima
   assert.equal(calls[1].headers.get('x-client-id'),id);assert.equal(calls[1].headers.get('cookie'),null);const file=(calls[1].body as FormData).get('file') as File;assert.equal(file.name,'screenshot.png');assert.equal(await file.text(),'edited-synthetic-image');assert.deepEqual(readdirSync(join(dir,'uploads')),[]);
   const submitted=await app.request('http://localhost/api/feedback/tickets',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':'submit-test'},body:JSON.stringify({category:'other',title:'合成标题',description:'合成说明',attachmentIds:[1],environment:{app:{version:'synthetic'},database:{schemaVersion:19},server:{platform:'linux'},ai:{enabled:true,visionEnabled:false,provider:'custom',model:'namespace/text:8b',extractionDepth:'detailed'}}})});assert.equal(submitted.status,200);assert.equal(JSON.parse(String(calls[2].body)).appKey,'health-records');assert.equal(JSON.parse(String(calls[2].body)).category,'other');assert.equal(JSON.parse(String(calls[2].body)).environment.server.platform,'linux');assert.equal(JSON.parse(String(calls[2].body)).environment.ai.model,'namespace/text:8b');
   const bad=await app.request('http://localhost/api/feedback/tickets',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':'submit-test'},body:JSON.stringify({clientId:'private'})});assert.equal(bad.status,400);assert.equal(calls.length,3);
+  const pdf=new FormData();pdf.set('file',new Blob(['%PDF-synthetic-original'],{type:'application/pdf'}),'private-name.pdf');
+  assert.equal((await app.request('http://localhost/api/feedback/upload',{method:'POST',headers:{'Idempotency-Key':'pdf-upload-test'},body:pdf})).status,200);
+  const forwarded=(calls.at(-1)!.body as FormData).get('file') as File;
+  assert.equal(forwarded.name,'report.pdf');assert.equal(forwarded.type,'application/pdf');assert.equal(await forwarded.text(),'%PDF-synthetic-original');
  }finally{globalThis.fetch=originalFetch;closeDatabaseForTests();process.env=env;rmSync(dir,{recursive:true,force:true});}
 });
 

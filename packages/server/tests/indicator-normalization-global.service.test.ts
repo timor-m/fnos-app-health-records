@@ -1021,3 +1021,30 @@ test('power unit OCR delimiters preserve the printed exponent and still require 
     rmSync(storageDir,{recursive:true,force:true});
   }
 });
+
+test('repeated Chinese labels with footnotes produce lookup candidates without losing qualifiers or operators',()=>{
+  assert.ok(indicatorNameCandidates('合成项目*(合成项目*)').includes('合成项目'));
+  assert.ok(indicatorNameCandidates('合成项目★（合成项目★）').includes('合成项目'));
+  assert.ok(indicatorNameCandidates('左侧合成项目*(左侧合成项目*)').includes('左侧合成项目'));
+  assert.ok(!indicatorNameCandidates('左侧合成项目*(左侧合成项目*)').includes('合成项目'));
+  assert.ok(!indicatorNameCandidates('合成项目*(另一项目*)').includes('另一项目'));
+  assert.ok(!indicatorNameCandidates('甲*乙').includes('甲乙'));
+  assert.ok(!indicatorNameCandidates('合成项目(定量)').includes('合成项目定性'));
+});
+
+test('repeated microscopy labels retain stool identity without becoming blood counts or numeric trends',()=>{
+  const dir=mkdtempSync(join(tmpdir(),'repeated-label-'));
+  const previous=process.env.STORAGE_DIR;process.env.STORAGE_DIR=dir;
+  try{
+    getDatabase();
+    const result=normalizeObservation({id:'synthetic',reportId:'synthetic',itemName:'红细胞*(红细胞*)',normalizedName:null,
+      sectionName:'便常规',itemCode:null,resultText:'4-8',numericValue:null,unit:'个/HP',referenceText:null,
+      reportType:'laboratory',hospitalName:null,performingDepartment:null,reportingDepartment:null});
+    assert.equal(result.canonicalKey,'stool_rbc');
+    assert.equal(result.quality,'excluded');
+    assert.equal(result.canonicalValue,null);
+  }finally{
+    closeDatabaseForTests();if(previous===undefined)delete process.env.STORAGE_DIR;else process.env.STORAGE_DIR=previous;
+    rmSync(dir,{recursive:true,force:true});
+  }
+});

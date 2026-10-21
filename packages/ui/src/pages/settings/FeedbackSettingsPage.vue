@@ -2,21 +2,22 @@
 import { useRoute } from "vue-router";
 import { useAppContext } from "../../composables/useAppContext";
 import { computed, nextTick, onMounted, watch, onDeactivated, onBeforeUnmount, ref } from "vue";
-import { ArrowLeft, CircleHelp, Lightbulb, Check, ChevronRight, Copy, MessageSquare, ImagePlus, Plus, Search, X, LoaderCircle, RefreshCw } from "@lucide/vue";
+import { ArrowLeft, CircleHelp, Lightbulb, Check, ChevronRight, Copy, MessageSquare, ImagePlus, FileText, Plus, Search, X, LoaderCircle, RefreshCw } from "@lucide/vue";
+import FeedbackAttachments from "../../components/FeedbackAttachments.vue";
 import FeedbackImageEditor from "../../components/FeedbackImageEditor.vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
 import { copyTextToClipboard } from "../../utils/clipboard";
 import { useScrollLock } from "../../composables/useScrollLock";
 import { request } from "../../utils/api";
 import { feedbackEnvironment, feedbackEnvironmentPayload, feedbackSnapshotDisplay, type FeedbackAbout, type FeedbackEnvironment } from "../../utils/feedback-environment";
-import { requestFeedback, feedbackStatus, feedbackCategory, feedbackImageUrl, createFeedbackOperation, postFeedback, takeFeedbackDraft, type FeedbackDraft, type FeedbackTicket } from "../../utils/feedback-service";
+import { requestFeedback, feedbackStatus, feedbackCategory, createFeedbackOperation, postFeedback, takeFeedbackDraft, type FeedbackDraft, type FeedbackTicket } from "../../utils/feedback-service";
 import { createUuid } from "../../utils/uuid";
 import { useToast } from "../../composables/useToast";
 
 const app = useAppContext();
 const route = useRoute();
 type Attachment = { file: File; url: string };
-type Feedback = { raw:FeedbackTicket; images?: {url:string}[]; id:string; title:string; category:string; status:string; description:string; reply:string };
+type Feedback = { raw:FeedbackTicket; id:string; title:string; category:string; status:string; description:string; reply:string };
 const mine = ref<Feedback[]>([]);
 const query=ref("");
 const loading=ref(false), listError=ref(''), detailError=ref(''), submitting=ref(false), actionBusy=ref(false);
@@ -25,7 +26,7 @@ const page=ref(1), total=ref(0), eventPage=ref(1);
 const message=ref('');
 const operation=createFeedbackOperation();
 const uploaded=new WeakMap<File,{key:string;id?:number;at?:number}>();
-function present(raw:FeedbackTicket):Feedback {return {raw,id:raw.number,title:raw.title,category:feedbackCategory[raw.category]||raw.category,status:feedbackStatus[raw.status]||raw.status,description:raw.description||'',reply:raw.fixedVersion?'修复版本 '+raw.fixedVersion:'更新于 '+new Date(raw.updatedAt).toLocaleString(),images:(raw.attachments||[]).map(i=>({url:feedbackImageUrl(i)})).filter(i=>i.url)};}
+function present(raw:FeedbackTicket):Feedback {return {raw,id:raw.number,title:raw.title,category:feedbackCategory[raw.category]||raw.category,status:feedbackStatus[raw.status]||raw.status,description:raw.description||'',reply:raw.fixedVersion?'修复版本 '+raw.fixedVersion:'更新于 '+new Date(raw.updatedAt).toLocaleString()};}
 let listSequence=0, detailSequence=0;
 async function loadList() {
   const seq=++listSequence;loading.value=true;listError.value='';
@@ -99,9 +100,8 @@ function addImages(event: Event) {
   const input = event.target as HTMLInputElement;
   const errors: string[] = [];
   for (const file of Array.from(input.files || [])) {
-    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) { errors.push("仅支持 JPG、PNG、WebP 图片"); continue; }
-    if (!file.size || file.size > 10 * 1024 * 1024) { errors.push("单张图片需大于 0 且不超过 10 MB"); continue; }
-    if (attachments.value.length >= 6) { errors.push("最多添加 6 张图片"); break; }
+    if (!["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(file.type)) { errors.push("仅支持 JPG、PNG、WebP 图片和 PDF"); continue; }
+    if (!file.size || file.size > 10 * 1024 * 1024) { errors.push("单个附件需大于 0 且不超过 10 MB"); continue; }
     const url = URL.createObjectURL(file);
     objectUrls.add(url);
     attachments.value.push({ file, url });
@@ -259,9 +259,9 @@ function openDetail(item: Feedback) { selected.value = item; screen.value = "det
       <section v-if="selected" class="feedback-card feedback-detail">
         <header><div><div class="row-meta"><span>{{ selected.id }}</span><span>{{ selected.category }}</span></div><h3>{{ selected.title }}</h3></div><span class="feedback-status">{{ selected.status }}</span></header>
         <div class="detail-section"><h4>问题描述</h4><p class="description">{{ selected.description }}</p></div>
-        <div v-if="selected.images?.length" class="detail-section"><h4>问题截图 · {{ selected.images.length }} 张</h4><div class="attachment-grid"><a v-for="(image, index) in selected.images" :key="image.url" :href="image.url" target="_blank" rel="noopener" :aria-label="`查看截图 ${index + 1}`"><img :src="image.url" :alt="`问题截图 ${index + 1}`" /></a></div></div>
+        <div v-if="selected.raw.attachments?.length" class="detail-section"><h4>问题附件 · {{ selected.raw.attachments.length }} 个</h4><FeedbackAttachments :attachments="selected.raw.attachments" /></div>
         <div v-if="selected.raw.reproductionSteps" class="detail-section"><h4>复现步骤</h4><p class="description">{{ selected.raw.reproductionSteps }}</p></div>
-        <div class="detail-section"><h4 class="feedback-progress-heading">处理进度<button type="button" class="plain-icon-button" :disabled="actionBusy || detailLoading" :aria-busy="detailLoading" :aria-label="detailLoading ? '正在刷新进度' : '刷新进度'" :title="detailLoading ? '正在刷新进度' : '刷新进度'" @click="refreshDetail"><RefreshCw :size="15" :class="{ 'spin-icon': detailLoading }" aria-hidden="true" /></button></h4><p v-if="selected.raw.fixedVersion">修复版本：{{ selected.raw.fixedVersion }}</p><p v-if="detailError" role="alert">{{ detailError }}</p><ol class="feedback-timeline"><li v-for="event in selected.raw.events" :key="event.id"><strong>{{ event.actorType==='admin'?'管理员':event.actorType==='user'?'用户':'系统' }} · {{ event.toStatus ? feedbackStatus[event.toStatus] : '补充回复' }}</strong><p>{{ new Date(event.createdAt).toLocaleString() }}<span v-if="event.fixedVersion"> · 修复版本 {{ event.fixedVersion }}</span></p><p class="description">{{ event.content }}</p><div v-if="event.attachments?.length" class="attachment-grid"><a v-for="image in event.attachments" :key="image.id" :href="feedbackImageUrl(image)" target="_blank" rel="noopener"><img :src="feedbackImageUrl(image)" alt="补充截图" /></a></div></li></ol><div v-if="(selected.raw.eventTotal||0)>10" class="list-toolbar"><button :disabled="eventPage===1||actionBusy" @click="eventPage--;loadDetail()">上一页</button><span>第 {{ eventPage }} 页</span><button :disabled="eventPage*10>=(selected.raw.eventTotal||0)||actionBusy" @click="eventPage++;loadDetail()">下一页</button></div></div>
+        <div class="detail-section"><h4 class="feedback-progress-heading">处理进度<button type="button" class="plain-icon-button" :disabled="actionBusy || detailLoading" :aria-busy="detailLoading" :aria-label="detailLoading ? '正在刷新进度' : '刷新进度'" :title="detailLoading ? '正在刷新进度' : '刷新进度'" @click="refreshDetail"><RefreshCw :size="15" :class="{ 'spin-icon': detailLoading }" aria-hidden="true" /></button></h4><p v-if="selected.raw.fixedVersion">修复版本：{{ selected.raw.fixedVersion }}</p><p v-if="detailError" role="alert">{{ detailError }}</p><ol class="feedback-timeline"><li v-for="event in selected.raw.events" :key="event.id"><strong>{{ event.actorType==='admin'?'管理员':event.actorType==='user'?'用户':'系统' }} · {{ event.toStatus ? feedbackStatus[event.toStatus] : '补充回复' }}</strong><p>{{ new Date(event.createdAt).toLocaleString() }}<span v-if="event.fixedVersion"> · 修复版本 {{ event.fixedVersion }}</span></p><p class="description">{{ event.content }}</p><FeedbackAttachments v-if="event.attachments?.length" :attachments="event.attachments" /></li></ol><div v-if="(selected.raw.eventTotal||0)>10" class="list-toolbar"><button :disabled="eventPage===1||actionBusy" @click="eventPage--;loadDetail()">上一页</button><span>第 {{ eventPage }} 页</span><button :disabled="eventPage*10>=(selected.raw.eventTotal||0)||actionBusy" @click="eventPage++;loadDetail()">下一页</button></div></div>
         <div class="detail-section"><h4>补充说明</h4><textarea v-model="message" aria-label="补充说明" rows="3" maxlength="3000" :disabled="actionBusy" placeholder="补充问题情况，请勿填写健康报告、检查结果或账号密钥" /><div class="modal-actions"><button class="feedback-secondary" :disabled="actionBusy||!message.trim()" @click="updateFeedback('message')">发送补充</button><button v-if="selected.raw.status==='released_pending_verification'" class="feedback-primary" :disabled="actionBusy" @click="updateFeedback('confirm')">确认已解决</button><button v-if="['released_pending_verification','resolved'].includes(selected.raw.status)" class="feedback-secondary" :disabled="actionBusy||!message.trim()" @click="updateFeedback('reopen')">仍未解决</button></div></div>
         <details v-if="selected.raw.environment" class="environment-info detail-section"><summary>提交时的环境信息</summary><dl><div v-for="item in feedbackSnapshotDisplay(selected.raw.environment)" :key="item.label"><dt>{{ item.label }}</dt><dd>{{ item.value }}</dd></div></dl></details>
         <footer><span>请通过反馈编号跟进问题；如需紧急了解处理进展，可在 QQ 群发送此编号进行跟进。</span><button class="feedback-secondary" @click="copyNumber"><Copy :size="15" />复制编号</button></footer>
@@ -279,19 +279,19 @@ function openDetail(item: Feedback) { selected.value = item; screen.value = "det
         <fieldset><legend>反馈类型</legend><div class="type-options"><button v-for="kind in feedbackTypes" :key="kind.label" type="button" :aria-pressed="category === kind.label" @click="category = kind.label"><component :is="kind.icon" :size="15" aria-hidden="true" /><span>{{ kind.label }}</span></button></div></fieldset>
         <label>问题标题 <span class="required">*</span><input v-model="title" maxlength="80" required placeholder="用一句话概括问题或建议" /></label>
         <label>详细描述 <span class="required">*</span><textarea v-model="description" rows="4" maxlength="3000" required placeholder="具体遇到了什么？期望是什么？请勿填写健康报告、检查结果或账号密钥。" /></label>
-        <section class="attachment-section" aria-label="问题截图">
-          <div class="attachment-heading"><h4>问题截图 <span class="optional">选填</span></h4><span>{{ attachments.length }}/6</span></div>
-          <p>支持 JPG、PNG、WebP，每张不超过 10 MB。请先遮挡姓名、报告内容等隐私信息。</p>
-          <input ref="imageInput" class="attachment-input" type="file" accept="image/jpeg,image/png,image/webp" multiple aria-label="选择问题截图" @change="addImages" />
+        <section class="attachment-section" aria-label="问题附件">
+          <div class="attachment-heading"><h4>问题附件 <span class="optional">选填</span></h4><span>已添加 {{ attachments.length }} 个</span></div>
+          <p>支持 JPG、PNG、WebP 和 PDF，每个不超过 10 MB。PDF 不支持在线打码，请上传前确认已遮挡隐私信息。</p>
+          <input ref="imageInput" class="attachment-input" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" multiple aria-label="选择问题附件" @change="addImages" />
           <div class="attachment-grid">
             <div v-for="(image, index) in attachments" :key="image.url" class="attachment-tile">
-              <button type="button" class="attachment-preview" :aria-label="`预览截图 ${index + 1}`" @click="expandedImage = expandedImage === image.url ? null : image.url"><img :src="image.url" :alt="`问题截图 ${index + 1}`" /></button>
-              <button type="button" class="attachment-edit" :aria-label="`编辑截图 ${index + 1}`" @click="editingImage = image">涂鸦 / 打码</button>
-              <button type="button" class="attachment-remove" :aria-label="`删除截图 ${index + 1}`" @click="removeImage(index)"><X :size="14" /></button>
+              <button type="button" class="attachment-preview" :aria-label="`预览附件 ${index + 1}`" @click="expandedImage = expandedImage === image.url ? null : image.url"><span v-if="image.file.type === 'application/pdf'" class="pdf-card"><FileText :size="28" /><span>{{ image.file.name }}</span><small>PDF · {{ Math.ceil(image.file.size / 1024) }} KB</small></span><img v-else :src="image.url" :alt="`问题截图 ${index + 1}`" /></button>
+              <button type="button" v-if="image.file.type !== 'application/pdf'" class="attachment-edit" :aria-label="`编辑截图 ${index + 1}`" @click="editingImage = image">涂鸦 / 打码</button>
+              <button type="button" class="attachment-remove" :aria-label="`删除附件 ${index + 1}`" @click="removeImage(index)"><X :size="14" /></button>
             </div>
-            <button v-if="attachments.length < 6" type="button" class="attachment-add" @click="imageInput?.click()"><ImagePlus :size="24" /><span>添加图片</span></button>
+            <button type="button" class="attachment-add" @click="imageInput?.click()"><ImagePlus :size="24" /><span>添加附件</span></button>
           </div>
-          <div v-if="expandedImage" class="attachment-expanded"><img :src="expandedImage" alt="截图预览" /><button type="button" class="feedback-secondary" @click="expandedImage = null">收起预览</button></div>
+          <div v-if="expandedImage" class="attachment-expanded"><iframe v-if="attachments.some(a => a.url === expandedImage && a.file.type === 'application/pdf')" :src="expandedImage" title="PDF 附件预览" class="pdf-preview" /><img v-else :src="expandedImage" alt="截图预览" /><a v-if="attachments.some(a => a.url === expandedImage && a.file.type === 'application/pdf')" :href="expandedImage" target="_blank" rel="noopener">在新窗口查看 PDF</a><button type="button" class="feedback-secondary" @click="expandedImage = null">收起预览</button></div>
           <p v-if="attachmentError" role="alert" class="attachment-error">{{ attachmentError }}</p>
 
         </section>
@@ -306,7 +306,7 @@ function openDetail(item: Feedback) { selected.value = item; screen.value = "det
         <p v-if="error" role="alert">{{ error }}</p>
         </fieldset>
         </div>
-        <footer class="modal-footer"><span>提交前请确认截图已遮挡隐私信息</span><div class="modal-actions"><button type="button" class="feedback-secondary" @click="closeModal">取消</button><button type="submit" class="feedback-primary" :disabled="environmentLoading || submitting">{{ submitting ? '正在提交…' : '提交反馈' }}<ChevronRight :size="16" /></button></div></footer>
+        <footer class="modal-footer"><span>提交前请确认附件已遮挡隐私信息</span><div class="modal-actions"><button type="button" class="feedback-secondary" @click="closeModal">取消</button><button type="submit" class="feedback-primary" :disabled="environmentLoading || submitting">{{ submitting ? '正在提交…' : '提交反馈' }}<ChevronRight :size="16" /></button></div></footer>
       </form>
       <section v-else-if="selected" class="success-card">
         <div class="success-icon"><Check :size="28" /></div><h3>反馈已提交</h3><p>可以凭此编号在群里询问或跟进。</p>
@@ -433,4 +433,8 @@ details.environment-info { padding: 11px 12px; border: 0; border-radius: 10px; }
 .attachment-edit { position: absolute; bottom: 5px; left: 5px; right: 5px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); min-height: 30px; font-size: 11px; cursor: pointer; }
 .attachment-section .attachment-grid { grid-template-columns: repeat(3, minmax(0, 120px)); gap: 8px; margin: 8px 0; }
 .attachment-section h4 { font-size: 12px; }
+.pdf-card { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; padding: 8px; height: 100%; box-sizing: border-box; color: var(--brand-strong); }
+.pdf-card span { max-width: 100%; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; font-size: 12px; }
+.pdf-card small { color: var(--muted); }
+.pdf-preview { width: 100%; height: 60vh; border: 0; }
 </style>

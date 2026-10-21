@@ -2702,3 +2702,37 @@ test("merges decimal and five-point vision records into one decimal-scale trend 
     rmSync(storageDir, { recursive: true, force: true });
   }
 });
+
+test('verified qualitative table results stay in report detail without suppressing review guards', () => {
+  const make=(resultText:string,unit:string|null=null)=>({
+    normalizationQuality:'low' as const, normalizationMatchedBy:'none',normalizationExcludedReason:'未命中内置指标字典',canonicalName:null,
+    itemName:'合成项目',sectionName:'合成检验',numericValue:null,unit,resultText,
+    evidence:[{pageNumber:1,quote:`合成项目 | ${resultText} | | ${unit||''} | 无`,table:{
+      headerText:'项目 | 结果 | 提示 | 单位 | 参考范围',headerSourceLineIds:['header'],rowSourceLineIds:['row'],
+    }}],
+  });
+  for(const [value,unit] of [['深褐色',null],['不成形',null],['未查见',null],['无','个/HP'],['+++','/HP'],['4-8','个/HP']] as const){
+    const input=make(value,unit);
+    assert.equal(classifyObservationDisplay(input).displayCategory,'qualitative_finding');
+    for(const flag of ['imageOnly','nameCorrected','ocrLowConfidence']){
+      assert.equal(classifyObservationDisplay({...input,evidence:input.evidence.map(e=>({...e,[flag]:true}))}).displayCategory,'medical_candidate');
+    }
+    assert.equal(classifyObservationDisplay({...input,trendAdmission:{eligible:false,kind:null,reason:'请先确认检查时间'}}).displayCategory,'medical_candidate');
+  }
+  const base=make('深褐色');
+  for(const evidence of [
+    [{pageNumber:1,quote:base.evidence[0].quote}],
+    base.evidence.map(e=>({...e,quote:'另一项目 | 深褐色 | | | 无'})),
+    base.evidence.map(e=>({...e,quote:'合成项目 | 浑浊 | | | 无'})),
+    base.evidence.map(e=>({...e,table:{...e.table,headerText:'项目 | 上次结果 | 本次结果 | 单位 | 参考范围'}})),
+    base.evidence.map(e=>({...e,table:{...e.table,headerText:'项目 | 结果 | 结果 | 单位 | 参考范围'}})),
+    base.evidence.map(e=>({...e,table:{...e.table,rowSourceLineIds:[]}})),
+  ]) assert.notEqual(classifyObservationDisplay({...base,evidence}).displayCategory,'qualitative_finding');
+  assert.notEqual(classifyObservationDisplay(make('无','g/L')).displayCategory,'qualitative_finding');
+  const known={...make('阳性'),canonicalName:'合成定性项目',normalizationQuality:'excluded' as const,normalizationMatchedBy:'builtin_alias',
+    normalizationExcludedReason:'该指标属于状态型或文本型结果，不默认进入折线趋势'};
+  assert.equal(classifyObservationDisplay(known).displayCategory,'qualitative_finding');
+  assert.equal(classifyObservationDisplay({...known,normalizationMatchedBy:'manual_exclusion'}).displayTier,'governance_only');
+  assert.equal(classifyObservationDisplay({...known,evidence:[]}).displayTier,'governance_only');
+  assert.equal(classifyObservationDisplay({...known,numericValue:8,resultText:'8'}).displayTier,'governance_only');
+});

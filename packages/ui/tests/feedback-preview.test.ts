@@ -12,6 +12,37 @@ beforeEach(() => { request.mockReset(); request.mockImplementation(async (path:s
 afterEach(() => vi.restoreAllMocks());
 function render() { return mount(FeedbackSettingsPage, { global: { stubs: { SubPageHeader: true, Teleport: true, FeedbackImageEditor: true } } }); }
 describe("feedback service UI", () => {
+  it("mixes PDFs and images without a count limit, edits only images and submits the original PDF", async () => {
+    let counter=0;
+    vi.spyOn(URL,'createObjectURL').mockImplementation(()=>`blob:mixed-${++counter}`);
+    vi.spyOn(URL,'revokeObjectURL').mockImplementation(()=>{});
+    const files=[new File(['original-pdf-bytes'],'report.pdf',{type:'application/pdf'}),
+      ...Array.from({length:7},(_,i)=>new File(['image'],`image-${i}.png`,{type:'image/png'}))];
+    const wrapper=render();await wrapper.get('.feedback-primary').trigger('click');
+    const input=wrapper.get('input[type="file"]');
+    expect(input.attributes('accept')).toContain('application/pdf');
+    Object.defineProperty(input.element,'files',{value:files});await input.trigger('change');
+    expect(wrapper.findAll('.attachment-tile')).toHaveLength(8);
+    expect(wrapper.findAll('.attachment-edit')).toHaveLength(7);
+    expect(wrapper.get('.attachment-add').exists()).toBe(true);
+    await wrapper.get('.attachment-preview').trigger('click');
+    expect(wrapper.get('iframe[title="PDF 附件预览"]').attributes('src')).toBe('blob:mixed-1');
+    expect(wrapper.text()).toContain('PDF 不支持在线打码');
+    let uploads=0;const received:File[]=[];
+    request.mockImplementation(async(path:string,init:any)=>{
+      if(path==='feedback/upload'){received.push(init.body.get('file'));return{id:++uploads};}
+      if(path==='feedback/tickets'&&init?.method==='POST'){
+        expect(JSON.parse(init.body).attachmentIds).toHaveLength(8);
+        return{number:'B0001',status:'received',version:1,createdAt:'2026-01-03'};
+      }
+      return{items:[],total:0};
+    });
+    await wrapper.get('form input').setValue('合成附件反馈');await wrapper.get('form textarea').setValue('合成描述');
+    await flushPromises();await wrapper.get('form').trigger('submit');await flushPromises();
+    expect(uploads).toBe(8);expect(received[0].name).toBe(files[0].name);expect(received[0].type).toBe('application/pdf');
+    expect(await received[0].text()).toBe('original-pdf-bytes');
+    wrapper.unmount();
+  });
   it("preserves draft and avoids success when the service fails", async () => {
     const wrapper = render();
     expect(wrapper.text()).not.toContain("UI 预览");
@@ -84,26 +115,26 @@ describe("feedback service UI", () => {
     Object.defineProperty(oversized, "size", { value: 11 * 1024 * 1024 });
     Object.defineProperty(input.element, "files", { configurable: true, value: [invalid, oversized, ...Array(7).fill(valid)] });
     await input.trigger("change");
-    expect(wrapper.findAll(".attachment-tile")).toHaveLength(6);
+    expect(wrapper.findAll(".attachment-tile")).toHaveLength(7);
     expect(wrapper.get(".attachment-error").text()).toContain("10 MB");
-    expect(wrapper.get(".attachment-error").text()).toContain("最多添加 6");
+    expect(wrapper.get(".attachment-add").exists()).toBe(true);
     await wrapper.get(".attachment-preview").trigger("click");
     expect(wrapper.find(".attachment-expanded img").exists()).toBe(true);
     await wrapper.get(".attachment-remove").trigger("click");
     expect(revoke).toHaveBeenCalledWith("blob:preview-1");
     await wrapper.get(".modal-close").trigger("click");
     await wrapper.get(".feedback-primary").trigger("click");
-    expect(wrapper.findAll(".attachment-tile")).toHaveLength(5);
+    expect(wrapper.findAll(".attachment-tile")).toHaveLength(6);
     await wrapper.get("form input").setValue("截图反馈");
     await wrapper.get("form textarea").setValue("布局问题");
     await flushPromises();
     await wrapper.get("form").trigger("submit");
     await flushPromises();
-    expect(wrapper.findAll(".attachment-tile")).toHaveLength(5);
+    expect(wrapper.findAll(".attachment-tile")).toHaveLength(6);
     expect(wrapper.find(".success-card").exists()).toBe(false);
     expect(request.mock.calls.every(call => typeof call[0] === "string" && (call[0] === "feedback-diagnostics" || call[1]?.headers?.["x-client-id"] === undefined))).toBe(true);
     wrapper.unmount();
-    expect(revoke).toHaveBeenCalledTimes(6);
+    expect(revoke).toHaveBeenCalledTimes(7);
   });
   it("replaces the original attachment with the edited file", async () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValueOnce("blob:original").mockReturnValueOnce("blob:edited");

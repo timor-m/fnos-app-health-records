@@ -2466,6 +2466,9 @@ function isTimestampLabelOnlyRow(cells: string[]) {
 function isMetadataRow(text: string) {
   const cells = splitTableCells(text).filter(Boolean);
   if (cells.length < 2) return false;
+  if (cells.length === 2
+    && /^(?:报告(?:单)?号|报告编号|检验单号|检查单号|样本编号|标本编号|条码号)\s*[:：]?$/.test(cells[0])
+    && businessNumberOnlyPattern.test(cells[1])) return true;
   if (isTimestampLabelOnlyRow(cells)) return true;
   if (
     isAdministrativeDevicePresetRow(cells) ||
@@ -5996,7 +5999,12 @@ function parseLines(
     const row = mergeVisualRow(sources, Math.min(...sources.map(line => line.index)), aliases, unitPattern);
     const sourceCells = Array.from({ length: count }, (_, index) => {
       const members = group.filter(item => item.cell.column === index).map(item => item.line)
-        .sort((a, b) => (boxRect(a.box)?.top ?? a.index) - (boxRect(b.box)?.top ?? b.index));
+        .sort((a, b) => {
+          const left = boxRect(a.box), right = boxRect(b.box);
+          return group[0].cell.row === (group[0].cell.headerRow ?? 0)
+            && left && right && verticalOverlap(left,right) >= .5
+            ? left.left-right.left : (left?.top ?? a.index)-(right?.top ?? b.index);
+        });
       return { index, text: members.map(item => item.text).join(" "),
         sourceLineIds: members.flatMap(item => item.sourceLineIds), box: members[0]?.box ?? null,
         confidence: members.some(item => item.confidence !== null)
@@ -6012,7 +6020,7 @@ function parseLines(
     });
     const headerCells = headerGroup && Array.from({ length: count }, (_, index) => {
       const members = headerGroup.filter(item => item.cell.column === index).map(item => item.line);
-      return { index, text: members.map(item => item.text).join(' '), sourceLineIds: members.flatMap(item => item.sourceLineIds), box: members[0]?.box ?? null };
+      return { index, text: normalizeOcrTableHeader(members.map(item => item.text).join(' ')), sourceLineIds: members.flatMap(item => item.sourceLineIds), box: members[0]?.box ?? null };
     });
     if (headerCells && headerGroup !== group) {
       // Split a printed unit/reference comparator without inventing source text.

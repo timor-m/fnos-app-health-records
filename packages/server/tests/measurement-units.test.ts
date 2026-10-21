@@ -38,3 +38,11 @@ test("result cell units canonicalize OCR lookalike variants", () => {
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('microscopy short units retain their entire printed token',()=>{
+  const directory=mkdtempSync(join(tmpdir(),'microscopy-units-'));process.env.STORAGE_DIR=directory;
+  try{
+    for(const unit of ['/HP','/LP','/HPF','/LPF','个/HP','个/LP']) assert.equal(unitFromResultCell(`4-8 ${unit}`),unit);
+    assert.equal(unitFromResultCell('8 Cell/HP'),'Cell/HP');
+  }finally{closeDatabaseForTests();delete process.env.STORAGE_DIR;rmSync(directory,{recursive:true,force:true});}
+});

@@ -1424,6 +1424,9 @@ def retry_replacement_allowed(row: dict[str, Any], best_value: float | None) -> 
     original_line = row.get('result') or {}
     original_text = normalized_ocr_text(original_line.get('text'))
     original = table_result_value(original_text)
+    if re.fullmatch(r'[-+]?\d+(?:\.\d+)?[tT]', original_text):
+        # Flag rereading can never authorize changing the original digits.
+        return best_value is not None and float(original_text[:-1]) == best_value
     if (original is not None and float(original_line.get('confidence', 0)) >= .90
             and not CORRUPTED_DECIMAL_PATTERN.match(original_text)) or (row.get("resultExtreme") and not row.get("resultCorrupt")):
         if best_value is None:
@@ -1453,6 +1456,88 @@ def consensus_retry_result(lines: list[dict[str, Any]]) -> dict[str, Any] | None
     if len(qualified) != 1:
         return None
     return max(qualified[0],key=lambda line:retry_result_score(line,None))
+
+
+def microscopy_interval_rows(lines, image):
+    """An isolated dash between digits contradicts a scalar microscopy reading."""
+    import cv2
+    height, width = image.shape[:2]
+    positioned = [(line, line_rect(line)) for line in lines if line_rect(line)]
+    headers = [(line, box) for line, box in positioned
+               if normalized_ocr_text(line.get('text')) in ('结果', '检验结果', '本次结果', 'Result', 'Results')]
+    rows = []
+    for unit, ub in positioned:
+        if not re.fullmatch(r'(?:个|cells?)?/[HL]PF?', normalized_ocr_text(unit.get('text')), re.I):
+            continue
+        h = ub[3]-ub[1]
+        same_row = [(line,b) for line,b in positioned
+                    if b[2] < ub[0] and abs((b[1]+b[3]-ub[1]-ub[3])/2) < h*.5]
+        values = [(line,b) for line,b in same_row if re.fullmatch(r'\d{2,4}', normalized_ocr_text(line.get('text')))]
+        if len(values) != 1:
+            continue
+        result, b = values[0]
+        heading = [(line,hb) for line,hb in headers if hb[3] < b[1]
+                   and hb[0]-h <= (b[0]+b[2])/2 <= hb[2]+h]
+        if not heading:
+            continue
+        _, hb = max(heading, key=lambda item:item[1][3])
+        band = [(line,box) for line,box in positioned
+                if abs((box[1]+box[3]-hb[1]-hb[3])/2) < h*.7]
+        if sum(line in [entry[0] for entry in headers] for line,_ in band) != 1:
+            continue
+        if any(re.search(r'历史|上次|前次|(?:19|20|21)\d{2}[-/.年]', str(line.get('text',''))) for line,_ in band):
+            continue
+        if not any(normalized_ocr_text(line.get('text')) == '单位' and box[0]-h <= ub[0] <= box[2]+h for line,box in band):
+            continue
+        names = [(line,box) for line,box in same_row if box[2] < b[0]
+                 and re.search(r'[\u3400-\u9fffA-Za-z]{2}', str(line.get('text','')))
+                 and not re.search(r'姓名|日期|时间|编号|备注', str(line.get('text','')))]
+        if len(names) != 1:
+            continue
+        x1,y1,x2,y2 = map(int,b)
+        patch = image[max(0,y1):min(height,y2),max(0,x1):min(width,x2)]
+        if not patch.size:
+            continue
+        gray = cv2.cvtColor(patch,cv2.COLOR_BGR2GRAY)
+        _,binary = cv2.threshold(gray,0,255,cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+        _,_,stats,_ = cv2.connectedComponentsWithStats(binary)
+        rh = y2-y1
+        components = [tuple(map(int,s[:4])) for s in stats[1:]]
+        dash = any(w >= 3 and w >= dh*2.5 and dh <= rh*.2 and rh*.2 <= y+dh/2 <= rh*.8
+                   and any(lx+lw <= x and lh >= rh*.35 for lx,ly,lw,lh in components)
+                   and any(rx >= x+w and rheight >= rh*.35 for rx,ry,rw,rheight in components)
+                   for x,y,w,dh in components)
+        if not dash:
+            continue
+        rh = max(8,rh)
+        crop = (max(0,int(x1-rh*.6)),max(0,int(y1-rh*.4)),min(width,int(x2+rh*.6)),min(height,int(y2+rh*.4)))
+        rows.append({'name':names[0][0],'nameRect':names[0][1],'reference':None,
+                     'referenceRect':(x2+rh,y1,x2+rh*2,y2),'result':result,
+                     'resultSuspicious':True,'resultCorrupt':True,'resultExtreme':False,
+                     'units':[],'crop':crop,'tightCrop':crop,'slope':0,'intervalCandidate':True})
+    return rows
+
+
+def consensus_retry_interval(lines, original):
+    """Restore only a separator independently read twice, never guessed digits."""
+    groups = {}
+    box = line_rect(original)
+    for line in lines:
+        rect = line_rect(line)
+        if not rect or not box or abs((rect[1]+rect[3]-box[1]-box[3])/2) > (box[3]-box[1])*.6:
+            continue
+        if rect[0] < box[0]-(box[3]-box[1])*.5 or rect[2] > box[2]+(box[3]-box[1])*.5:
+            continue
+        if float(line.get('confidence',0)) < .8:
+            continue
+        match = re.fullmatch(r'(\d+)\s*[-–—~～]\s*(\d+)',normalized_ocr_text(line.get('text')))
+        if not match or ''.join(match.groups()) != normalized_ocr_text(original.get('text')):
+            return None  # A competing confident reading cannot resolve the cell.
+        groups.setdefault(match.groups(),[]).append(line)
+    if len(groups) != 1:
+        return None
+    agreed = next(iter(groups.values()))
+    return max(agreed,key=lambda line:float(line.get('confidence',0))) if len({line.get('variant') for line in agreed}) >= 2 else None
 
 
 def folded_unit_text(value: str) -> str:
@@ -1587,6 +1672,12 @@ def retry_suspicious_table_rows(
     budget = context.budget
     merged = list(primary_lines)
     attempts: list[dict[str, Any]] = []
+    interval_rows = []
+    def protect_unresolved_intervals(items):
+        # Independent pixels invalidated scalar confidence. Use the existing
+        # low-confidence review path without inventing a replacement value.
+        return [{**line,'confidence':min(float(line.get('confidence',0)),.64)}
+                if any(line is row['result'] for row in interval_rows) else line for line in items]
     try:
         import cv2
 
@@ -1594,16 +1685,21 @@ def retry_suspicious_table_rows(
         if image is None:
             return primary_lines, []
         height, width = image.shape[:2]
-        candidates = dedupe_crop_candidates(suspicious_table_rows(primary_lines, width, height, limit=None))
+        interval_rows = microscopy_interval_rows(primary_lines,image)
+        scalar_rows = [row for row in suspicious_table_rows(primary_lines, width, height, limit=None)
+                       if not any(row.get('result') is interval['result'] for interval in interval_rows)]
+        candidates = dedupe_crop_candidates([*interval_rows,*scalar_rows])
         rows = candidates[:max(0,12-budget['rowRetried'])]
         budget['rowCandidates'] += len(candidates)
         budget['rowRemaining'] += len(candidates)
         if not rows:
-            return primary_lines, []
+            return protect_unresolved_intervals(primary_lines), []
 
         with tempfile.TemporaryDirectory(prefix="health-records-ocr-table-") as temp_name:
             temp_dir = Path(temp_name)
             for row_index, row in enumerate(rows):
+                select_results = (lambda items:items) if row.get('intervalCandidate') else (lambda items:table_result_candidates(items,row['nameRect'],row['referenceRect']))
+                consensus = (lambda items:consensus_retry_interval(items,row['result'])) if row.get('intervalCandidate') else consensus_retry_result
                 left, top, right, bottom = row["crop"]
                 crop_image = image[top:bottom, left:right]
                 if crop_image.size == 0:
@@ -1664,31 +1760,28 @@ def retry_suspicious_table_rows(
                 preliminary_lines = combine_retry_result_markers(
                     table_row_lines(retry_lines, row["nameRect"], row["referenceRect"], row['slope'])
                 )
-                preliminary_results = table_result_candidates(
-                    preliminary_lines, row["nameRect"], row["referenceRect"]
-                )
-                if row["resultSuspicious"] and consensus_retry_result(preliminary_results) is None:
+                preliminary_results = select_results(preliminary_lines)
+                if row["resultSuspicious"] and consensus(preliminary_results) is None:
                     # A tight crop may resolve joined glyphs while a wider one
                     # keeps a decimal intact. Give each geometry a second view.
                     run_variant("table_wide_gray", cv2.cvtColor(enlarged, cv2.COLOR_BGR2GRAY), row["crop"])
                     run_variant("table_tight_rgb", tight_enlarged, row["tightCrop"])
-                    preliminary_results = table_result_candidates(combine_retry_result_markers(
-                        table_row_lines(retry_lines, row["nameRect"], row["referenceRect"], row['slope'])), row["nameRect"], row["referenceRect"])
-                needs_red_fallback = (row["resultSuspicious"] and consensus_retry_result(preliminary_results) is None) or bool(row['units'])
+                    preliminary_results = select_results(combine_retry_result_markers(
+                        table_row_lines(retry_lines, row["nameRect"], row["referenceRect"], row['slope'])))
+                needs_red_fallback = (row["resultSuspicious"] and consensus(preliminary_results) is None) or bool(row['units'])
                 if needs_red_fallback:
                     run_variant("table_red_contrast", red_contrast, row["crop"])
 
                 retry_row_lines = combine_retry_result_markers(
                     table_row_lines(retry_lines, row["nameRect"], row["referenceRect"], row['slope'])
                 )
-                retry_results = table_result_candidates(
-                    retry_row_lines, row["nameRect"], row["referenceRect"]
-                )
+                retry_results = select_results(retry_row_lines)
                 if row["resultSuspicious"] and retry_results:
-                    best_result = consensus_retry_result(retry_results)
+                    best_result = consensus(retry_results)
                     if best_result and (
-                        # High-confidence readings stay intact, including prefixed arrows.
-                        retry_replacement_allowed(row, table_result_value(normalized_ocr_text(best_result.get("text"))))
+                        # Only independent dash pixels plus interval consensus
+                        # can override scalar confidence; other protections stay intact.
+                        row.get('intervalCandidate') or retry_replacement_allowed(row, table_result_value(normalized_ocr_text(best_result.get("text"))))
                     ):
                         original_result_text = (
                             normalized_ocr_text(row["result"].get("text"))
@@ -1757,11 +1850,11 @@ def retry_suspicious_table_rows(
             )
         )
         return [
-            {**line, "id": f"line_{index + 1}"} for index, line in enumerate(merged)
+            {**line, "id": f"line_{index + 1}"} for index, line in enumerate(protect_unresolved_intervals(merged))
         ], attempts
     except Exception as error:
         print(f"OCR table retry skipped: {type(error).__name__}", file=sys.stderr, flush=True)
-        return merged, attempts
+        return protect_unresolved_intervals(merged), attempts
 
 
 def header_retry_regions(lines, width, height, limit=8):
@@ -1878,6 +1971,16 @@ def header_retry_regions(lines, width, height, limit=8):
                     unit_box = line_rect(original)
                     top = max(0, int(min(top, unit_box[1] - h * .2)))
                     bottom = min(height, int(max(bottom, unit_box[3] + h * .2)))
+                elif kind == 'result' and len(members) == 1 and (
+                        (float(members[0].get('confidence', 0)) < .90
+                         and re.fullmatch(r'[-+]?\d+(?:\.\d+)?[tT]', normalized_ocr_text(members[0].get('text'))))
+                        or re.fullmatch(r'[↑↓▲▼⬆⬇]\s*[-+]?\d+(?:\.\d+)?', normalized_ocr_text(members[0].get('text')))):
+                    # Reread an ambiguous flag in the explicit result column;
+                    # do not strip it or change digits without pixel consensus.
+                    original = members[0]
+                    original_result_box = line_rect(original)
+                    top = max(0, int(min(top, original_result_box[1] - h * .2)))
+                    bottom = min(height, int(max(bottom, original_result_box[3] + h * .2)))
                 elif members:
                     continue  # Existing ambiguous results go through row retry.
                 elif kind == 'unit':
@@ -1894,7 +1997,7 @@ def header_retry_regions(lines, width, height, limit=8):
                     if glued_result: region['expectedResult'] = re.sub(r'\s+', '', glued_result.group(1))
                     if original is not None:region['original']=original
                     regions.append(region)
-    return sorted(regions,key=lambda r:(r.get('original') is None, {'name':0,'result':1,'reference':2,'unit':3}[r['kind']]))[:limit]
+    return sorted(regions,key=lambda r:(r.get('original') is None, {'result':0,'name':1,'reference':2,'unit':3}[r['kind']]))[:limit]
 
 
 def retry_missing_header_cells(engine, image_path, lines, budget=None, retry_context=None):
@@ -1940,7 +2043,13 @@ def retry_missing_header_cells(engine, image_path, lines, budget=None, retry_con
                     budget['cellRemaining']-=1
                     budget['cellUnresolved']+=1
                 started=time.perf_counter()
-                try:result,_=engine(str(path))
+                try:
+                    # The explicit upright table header establishes orientation.
+                    # A prefixed arrow may be a numeric cell flipped by the angle
+                    # classifier. Reread pixels in that established direction.
+                    direction_check = region['kind'] == 'result' and re.match(
+                        r'^[↑↓▲▼⬆⬇]', str(region.get('original', {}).get('text', '')))
+                    result,_=engine(str(path), use_cls=False) if direction_check else engine(str(path))
                 except Exception:
                     attempts.append({'field':region['kind'],'variant':label,'failed':True})
                     continue
@@ -1962,6 +2071,9 @@ def retry_missing_header_cells(engine, image_path, lines, budget=None, retry_con
                                              [min(b[0] for b in boxes),max(b[3] for b in boxes)]]}]
                 for line in retry_lines:
                     text=normalized_ocr_text(line.get('text'))
+                    if region['kind'] == 'result' and region.get('original') is not None and not direction_check and not retry_replacement_allowed(
+                            {'result': region['original']}, table_result_value(text)):
+                        continue
                     if region['kind'] in ('reference', 'unit'):
                         text=re.sub(r'\s+', '', text)
                         line={**line,'text':text}
@@ -1996,7 +2108,12 @@ def retry_missing_header_cells(engine, image_path, lines, budget=None, retry_con
                 reference = TABLE_REFERENCE_PATTERN.match(normalized_ocr_text(best.get('text')))
                 if region['kind'] != 'reference' or (reference and float(reference.group(1)) <= float(reference.group(2))):
                     budget['cellUnresolved']-=1
-    return [{**line,'id':f'line_{i+1}'} for i,line in enumerate([*merged,*added])],attempts
+    unresolved_direction = {id(region['original']) for region in candidates
+                            if region['kind'] == 'result' and region.get('original') is not None
+                            and re.match(r'^[↑↓▲▼⬆⬇]', str(region['original'].get('text', '')))}
+    return [{**line,'id':f'line_{i+1}', **({'confidence':min(float(line.get('confidence',0)),.64)}
+             if id(line) in unresolved_direction else {})}
+            for i,line in enumerate([*merged,*added])],attempts
 
 
 def enhance_page_lines(image_path, lines, scale=1):
@@ -2081,7 +2198,7 @@ def recognize_image(engine: Any, image_path: Path, image_role: str | None, enhan
                         continue  # A failed optional orientation cannot erase usable OCR.
                 if best:
                     _, angle, path, candidate, elapsed = best
-                    cached = lambda value: (candidate, elapsed) if str(value) == str(path) else engine(value)
+                    cached = lambda value, **kwargs: (candidate, elapsed) if str(value) == str(path) and not kwargs else engine(value, **kwargs)
                     lines, metadata = recognize_image(cached, path, image_role, enhance_tables, retry_context, prepare_photo=False)
                     return restore_quarter_turn(lines, angle, width, height), {
                         'source': 'quarter_turn_table', 'rotation': angle, 'ocr': metadata}

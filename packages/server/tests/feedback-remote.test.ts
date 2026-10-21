@@ -42,3 +42,9 @@ test('binary image responses reject wrong types, oversized bodies and stream err
   await assert.rejects(sendFeedbackRequest('/attachments/42',{image:true},{fetch:async()=>response,identity:()=> 'synthetic'}),(e:any)=>e.status===502&&!String(e).includes('SYNTHETIC_PRIVATE'));
  }
 });
+
+test('PDF attachment bytes use the same private bounded download proxy',async()=>{
+ const result=await sendFeedbackRequest('/attachments/42',{image:true},{fetch:async()=>new Response('%PDF-synthetic',{headers:{'Content-Type':'application/pdf'}}),identity:()=> 'synthetic'}) as {bytes:Buffer;mimeType:string};
+ assert.equal(result.mimeType,'application/pdf');assert.equal(result.bytes.toString(),'%PDF-synthetic');
+ await assert.rejects(sendFeedbackRequest('/attachments/42',{image:true},{fetch:async()=>new Response('too large',{headers:{'Content-Type':'application/pdf','Content-Length':String(10*1024*1024+1)}}),identity:()=> 'synthetic'}));
+});

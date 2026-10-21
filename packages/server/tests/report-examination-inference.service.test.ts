@@ -25,6 +25,19 @@ test('table separator normalization resolves one row but preserves ambiguous rep
  assert.equal(inferObservationExamination(observation('合成指标 8.0 U/L'),unique).certain,false);
 });
 
+test('gamma enzyme OCR glyph matching retains values, qualifiers and source ambiguity', () => {
+ const rows=[page(['报告日期：2026-01-03','V-谷氨酰转肽酶 | 24.6 | U/L'])];
+ const infer=(quote:string,pages=rows)=>inferObservationExamination(observation(quote),pages);
+ for(const glyph of ['γ','Y','V']) assert.equal(infer(`${glyph}-谷氨酰转肽酶 | 24.6 | U/L`).certain,true);
+ for(const quote of ['γ-谷氨酰转肽酶 | 246 | U/L','γ-谷氨酰转肽酶 | <24.6 | U/L',
+  'γ-谷氨酰转肽酶同工酶 | 24.6 | U/L','γ-合成测定甲 | 24.6 | U/L']) {
+  assert.equal(infer(quote).certain,false,quote);
+ }
+ const ambiguous=[page(['报告日期：2026-01-03','V-谷氨酰转肽酶 | 24.6 | U/L','Y-谷氨酰转肽酶 | 24.6 | U/L'])];
+ assert.ok(infer('γ-谷氨酰转肽酶 | 24.6 | U/L',ambiguous).risks.includes('source_row_ambiguous'));
+ assert.equal(infer('γ-合成测定甲 | 24.6 | U/L',[page(['报告日期：2026-01-03','V-合成测定甲 | 24.6 | U/L'])]).certain,false);
+});
+
 test('dated table columns retain equal and different measurements with separate verified times',()=>{
  for(const first of ['120','80']) {
   const row=`合成指标 | ${first} | 80 | U/L`;
@@ -212,4 +225,20 @@ test('startup backfill uses the report date for old undated observations after a
   assert.deepEqual([assigned.occurredAt,assigned.precision,assigned.status],['2026-09-07','date','automatic']);
   assert.deepEqual(backfillDocumentWideObservationDates(),{scanned:0,assigned:0,alreadyCompleted:true});
  } finally { closeDatabaseForTests(); process.env=env; rmSync(dir,{recursive:true,force:true}); }
+});
+
+test('abnormal arrow columns do not lose source dates or hide ambiguous rows and numeric differences',()=>{
+ const source='合成指标 | 80 | U/L | 0-90';
+ const pages=[page(['检查日期：2026-01-03',source])];
+ for(const marker of ['↑','↓','▲','▼']) {
+  const quote=`合成指标 | 80 | ${marker} | U/L | 0-90`;
+  const inferred=inferObservationExamination(observation(quote),pages);
+  assert.equal(inferred.certain,true);
+  assert.equal(inferred.sourceKey,inferObservationExamination(observation(source),pages).sourceKey);
+  const repeated=[page(['检查日期：2026-01-03',source,source])];
+  assert.ok(inferObservationExamination(observation(quote),repeated).risks.includes('source_row_ambiguous'));
+  for(const changed of ['8.0','8-0','<80','-80']) {
+   assert.equal(inferObservationExamination(observation(quote.replace('80',changed)),pages).certain,false);
+  }
+ }
 });

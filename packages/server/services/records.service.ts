@@ -4,6 +4,7 @@ import { preserveFeedbackInstallation } from './feedback-installation.service';
 import { assertRestoreAdministrator, restoreAccessPolicy, type RestoreAccessPolicy } from './restore-access.service';
 import { evaluateDuplicatePair } from "./report-duplicate-evidence";
 import { getReportExaminations } from "./report-examination.service";
+import { mappedOcrMeasurement, isExplicitOcrTableHeader } from './ocr-table-columns';
 import { examinationDuplicateResolver } from "./examination-duplicate.service";
 import { buildDuplicateSnapshot } from "./report-duplicate-snapshot.service";
 import { appendReviewWarnings } from "./page-append-result-guard.service";
@@ -88,6 +89,7 @@ import {
   dictionaryReferenceForUnit,
   ensureBuiltinIndicatorCatalog,
   isPolicyFilteredNormalization,
+  isDesignGatedQualitativeExclusion,
 } from "./indicator-normalization.service";
 import {
   getJobRunnerStatus,
@@ -969,8 +971,11 @@ export function classifyObservationDisplay(input: {
   manualReviewed?: boolean;
   trendAdmission?: ReturnType<typeof assessTrendAdmission>;
 }): Pick<Observation, "displayTier" | "displayCategory" | "displayReason"> {
+  const designGatedQualitative = Boolean(input.canonicalName && input.numericValue == null
+    && input.normalizationMatchedBy !== 'manual_exclusion'
+    && isDesignGatedQualitativeExclusion(input.normalizationExcludedReason));
   if (
-    input.normalizationQuality === "excluded" ||
+    (input.normalizationQuality === "excluded" && !designGatedQualitative) ||
     isPolicyFilteredNormalization(input.normalizationMatchedBy)
   ) {
     return {
@@ -1035,6 +1040,21 @@ export function classifyObservationDisplay(input: {
     /^(?:阴性|阳性|弱阳性|可疑阳性|未检出|未见|正常|异常|未见异常|未见明显异常|[-—–－])$/i.test(
       resultText,
     );
+  // Extended laboratory spellings require the verified current result cell,
+  // not a word occurring anywhere in an OCR quote or a historical column.
+  const structuredQualitative = input.numericValue == null
+    && (!input.unit?.trim() || /^(?:个)?\/[HL]P(?:F)?$/i.test(input.unit.trim()))
+    && /^(?:[-+±]{1,4}|无|未查见|未检出|未见(?:异常)?|阴性|阳性|弱阳性|正常|异常|清亮|浑浊|[浅深棕褐黄红黑绿白灰淡]{1,3}色|稀便|糊状|软便|硬便|成形|不成形|\d+(?:\.\d+)?\s*[-~～]\s*\d+(?:\.\d+)?)$/.test(resultText)
+    && Array.isArray(input.evidence) && input.evidence.some(entry => {
+      const evidence = entry as {quote?:string;table?:{headerText?:string;headerSourceLineIds?:string[];rowSourceLineIds?:string[]}} | null;
+      const table=evidence?.table;
+      if (!evidence?.quote || !table?.headerSourceLineIds?.length || !table.rowSourceLineIds?.length
+        || !table.headerText || !isExplicitOcrTableHeader(table.headerText)) return false;
+      const measurement=mappedOcrMeasurement(evidence.quote,table.headerText);
+      const compact=(value:string)=>value.normalize('NFKC').replace(/\s+/g,'');
+      return measurement && compact(measurement.name)===compact(itemName)
+        && compact(measurement.result)===compact(resultText);
+    });
   const evidenceQuotes = Array.isArray(input.evidence)
     ? input.evidence.flatMap((entry) => {
         if (!entry || typeof entry !== "object") return [];
@@ -1106,10 +1126,17 @@ export function classifyObservationDisplay(input: {
   }
   if (
     input.numericValue == null &&
-    !String(input.unit || "").trim() &&
-    (qualitativeResult ||
-      /(?:^|\s)(?:内科|外科|眼科)(?:检查)?(?:\s|$)|裂隙灯|查体/.test(context))
+    (structuredQualitative || (!String(input.unit || "").trim() && (qualitativeResult ||
+      /(?:^|\s)(?:内科|外科|眼科)(?:检查)?(?:\s|$)|裂隙灯|查体/.test(context))))
   ) {
+    const sourceNeedsReview = !input.manualReviewed && Array.isArray(input.evidence) && input.evidence.some(entry => {
+      const evidence=entry as {imageOnly?:boolean;nameCorrected?:boolean;ocrLowConfidence?:boolean}|null;
+      return evidence?.imageOnly || evidence?.nameCorrected || evidence?.ocrLowConfidence;
+    });
+    if (sourceNeedsReview || input.trendAdmission?.reason === '请先确认检查时间') return {
+      displayTier:'secondary',displayCategory:'medical_candidate',
+      displayReason:sourceNeedsReview?'原图识别或项目名称仍需人工核对':'请先确认检查时间',
+    };
     return {
       displayTier: "secondary",
       displayCategory: "qualitative_finding",

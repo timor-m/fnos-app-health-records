@@ -3789,6 +3789,17 @@ test('a verified visual name correction replaces only its own OCR occurrence', a
   });
 });
 
+test('split administrative report identifiers are metadata while clinical numbered names remain candidates', async () => withReport(1,async()=>{
+ const lines=['报告单号 | ABC202601030001','报告编号 | 202601030002',
+  '样本编号 | 202601030003','CA 125 | 18.4 | U/mL','维生素 B12 | 420 | pg/mL',
+  '合成测定编号 | 12 | U/L'];
+ const pages=rebuildOcrPages([{pageId:'page-1',pageNumber:1,linesJson:JSON.stringify(lines.map(text=>({text,confidence:1})))}]);
+ for(const name of ['报告单号','报告编号','样本编号']) {
+  const row=pages[0].lines.find(line=>line.text.includes(name));assert.ok(row);assert.equal(row.candidateKind,null);assert.equal(row.role,'metadata');
+ }
+ for(const name of ['CA 125','维生素 B12','合成测定编号']) assert.equal(pages[0].lines.find(line=>line.text.includes(name))?.candidateKind,'scalar');
+}));
+
 test('OCR unresolved and unattempted counts remain separate in existing final layout warnings', () => {
   const plan=syntheticPlan([{pageNumber:1,lines:[]}]);
   plan.pages[0].ocrRetryRemaining=2;
@@ -3964,4 +3975,48 @@ test('table ordinals are cleaned after trusted evidence is restored at persisten
     assert.match(rows[0].evidence,/8合成项目/);
     assert.equal(rows[0].flag,'high');
   });
+});
+
+test('letter-spaced headers recover qualitative rows and empty flag cells without relaxing evidence validation', async () => {
+  await withReport(1, async ({reportId,jobId}) => {
+    const raw: Array<{id:string;text:string;confidence:number;box:number[];tableUnsafe:boolean}> = [];
+    const add=(id:string,text:string,x:number,y:number,width=65)=>{
+      if(text) raw.push({id,text,confidence:.99,box:[x,y,x+width,y+18],tableUnsafe:true});
+    };
+    // The second fragment starts slightly higher; reading order still runs left to right.
+    add('header-name-a','项',70,10,18);add('header-name-b','目',130,9,18);
+    ['结果','提示','单位','参考范围','检测方法'].forEach((text,i)=>add(`header-${i}`,text,[240,340,420,520,650][i],10));
+    const values=['深褐色','不成形','+++','4-8','无','37.6','未检出','未查见','阴性','阳性'];
+    const names=values.map((_,i)=>`合成项目${'甲乙丙丁戊己庚辛壬癸'[i]}${i===0?'(标本分类)':''}`);
+    values.forEach((value,i)=>{
+      const y=50+i*35;
+      add(`name-${i}`,`[HR]${names[i]}`,20,y,180);add(`result-${i}`,value,240,y,55);
+      add(`unit-${i}`,value==='37.6'?'/HP':/\d/.test(value)?'U/L':'',420,y);
+      add(`reference-${i}`,'无',520,y);add(`method-${i}`,'合成法',650,y);
+    });
+    getDatabase().prepare('UPDATE ocr_results SET lines_json=?').run(JSON.stringify(raw));
+    const plan=buildAiExtractionPlan(reportId);
+    const rows=plan.pages[0].lines.filter(line=>names.includes(line.sourceCells[0]?.text));
+    assert.equal(rows.length,10);
+    assert.ok(rows.every(line=>line.candidateKind==='scalar' && !line.tableStructureUnsafe));
+    assert.ok(rows.every(line=>line.sourceCells.length===6 && line.sourceCells[2].text===''
+      && line.sourceCells[2].sourceLineIds.length===0));
+    assert.equal(rows.flatMap(line=>line.localObservations).find(fact=>fact.resultText==='37.6')?.unit,'/HP');
+    const execution=await executeAiExtractionPlan(jobId,reportId,async()=>({
+      ...normalizeAiExtraction({observations:rows.map(line=>({
+        itemName:line.sourceCells[0].text,resultText:line.sourceCells[1].text,
+        numericValue:line.sourceCells[1].text==='37.6'?37.6:null,
+        unit:line.sourceCells[3].text||null,evidence:[{pageNumber:1,quote:line.text}],
+      }))}),provider:'test',model:'test',promptVersion:'test',rawResponseJson:'{}',promptTokens:0,completionTokens:0,elapsedMs:0,
+    }),{visionReview:async()=>null});
+    assert.equal(execution.result.fields.observations.length,10);
+    assert.equal(execution.unmatchedCandidates,0);
+    assert.ok(execution.result.fields.observations.some(item=>item.resultText==='4-8'));
+    persistAiExtraction(reportId,jobId,execution.result,execution.inputCharacters);
+    assert.equal(getDatabase().prepare('SELECT count(*) n FROM observations WHERE report_id=?').get(reportId)?.n,10);
+    // Misaligned model tables remain ambiguous: recovery must not move good cells.
+    const ambiguous=raw.map(line=>({...line,text:line.text==='目'?'姓名':line.text}));
+    const [unrecovered]=rebuildOcrPages([{pageId:'negative',pageNumber:1,linesJson:JSON.stringify(ambiguous)}]);
+    assert.ok(!unrecovered.lines.some(line=>line.projectHeaderCells?.[0]?.text==='项目'));
+  },()=>['合成报告']);
 });

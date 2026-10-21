@@ -24,6 +24,59 @@ def ocr_line(text, confidence, x1, y1, x2, y2, variant=None):
 
 
 class TableRetryTest(unittest.TestCase):
+    def test_prefixed_flag_cells_use_upright_pixel_consensus_and_protect_unresolved_values(self):
+        import cv2
+        import numpy as np
+        import tempfile
+        source = [ocr_line(text, .99, col * 200, y, col * 200 + 90, y + 20)
+                  for y, cells in [(10, ['Test', 'Result', 'Reference', 'Unit']),
+                                   (60, ['Synthetic', '↑77', '1-10', 'U/L'])]
+                  for col, text in enumerate(cells)]
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'synthetic.png'
+            cv2.imwrite(str(path), np.full((150, 900, 3), 255, dtype=np.uint8))
+            for replies in [('7.7↓', '7.7↓'), ('7.7↓', '77↑')]:
+                answers = iter(replies)
+                def engine(_, **kwargs):
+                    self.assertIs(kwargs.get('use_cls'), False)
+                    return [([[90, 12], [240, 12], [240, 60], [90, 60]], next(answers), .99)], None
+                result, attempts = worker.retry_missing_header_cells(engine, path, source)
+                self.assertEqual(len(attempts), 2)
+                cell = next(line for line in result if line['text'] in ('7.7↓', '↑77'))
+                self.assertEqual(cell['text'], '7.7↓' if replies[0] == replies[1] else '↑77')
+                if replies[0] != replies[1]:
+                    self.assertLess(cell['confidence'], .65)
+            context = worker.PageRetryContext(); context.budget['retryCallLimit'] = 0
+            protected, attempts = worker.retry_missing_header_cells(engine, path, source, retry_context=context)
+            self.assertEqual(attempts, [])
+            self.assertLess(next(line for line in protected if line['text'] == '↑77')['confidence'], .65)
+            self.assertEqual(source[5]['confidence'], .99)
+            self.assertEqual(worker.header_retry_regions(source[4:], 900, 150), [])
+            wrapped = [*source[:4], {**source[4], 'box': [[0, 60], [90, 60], [90, 75], [0, 75]]},
+                       {**source[5], 'box': [[200, 60], [290, 60], [290, 95], [200, 95]]}, *source[6:]]
+            region = next(r for r in worker.header_retry_regions(wrapped, 900, 150)
+                          if r['kind'] == 'result' and r.get('original') is wrapped[5])
+            self.assertLessEqual(region['crop'][1], 60)
+            self.assertGreaterEqual(region['crop'][3], 95)
+
+    def test_low_confidence_flag_glyph_rereads_the_original_cell_without_changing_digits(self):
+        source = [ocr_line('Synthetic', .99, 10, 60, 110, 90),
+                  ocr_line('24.6t', .81, 450, 60, 510, 90),
+                  ocr_line('10-30', .99, 720, 60, 810, 90)]
+        headers = [ocr_line('项目', .99, 10, 10, 110, 35), ocr_line('结果', .99, 450, 10, 510, 35),
+                   ocr_line('参考范围', .99, 720, 10, 810, 35)]
+        rows = [row for row in worker.header_retry_regions(headers + source, 1200, 900)
+                if row['kind'] == 'result' and row.get('original') is source[1]]
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(worker.table_result_value('24.6t'))
+        self.assertTrue(worker.retry_replacement_allowed({'result': source[1]}, 24.6))
+        self.assertFalse(worker.retry_replacement_allowed({'result': source[1]}, 246))
+        self.assertFalse(worker.retry_replacement_allowed({'result': source[1]}, None))
+        for text, confidence in [('24.6t', .99), ('24.6mg', .81)]:
+            other = [source[0], {**source[1], 'text': text, 'confidence': confidence}, source[2]]
+            self.assertTrue(all(row.get('original') is not other[1]
+                                for row in worker.header_retry_regions(headers + other, 1200, 900)))
+
     def test_word_positions_split_fused_columns_but_do_not_invent_or_change_text(self):
         boxes = [[[x,10],[x+20,10],[x+20,30],[x,30]] for x in (10,31,180,201,330,351)]
         words = ['项','目','12','.5','单','位']
@@ -905,6 +958,72 @@ class TableRetryTest(unittest.TestCase):
         # 损坏形态的行不受限制，维持原替换逻辑
         corrupt = {"reference": (0.4, 8.0), "resultExtreme": True, "resultCorrupt": True}
         self.assertTrue(worker.retry_replacement_allowed(corrupt, 0.0))
+
+
+class MicroscopyIntervalTest(unittest.TestCase):
+    def fixture(self, dash=True, value='48', unit='/HP'):
+        import cv2
+        import numpy as np
+        image=np.full((140,650,3),255,dtype=np.uint8)
+        cv2.line(image,(253,64),(253,76),(0,0,0),2)
+        cv2.line(image,(284,64),(284,76),(0,0,0),2)
+        if dash: cv2.line(image,(265,70),(274,70),(0,0,0),1)
+        lines=[ocr_line('项目',.99,20,10,90,30),ocr_line('结果',.99,250,10,300,30),
+               ocr_line('单位',.99,420,10,470,30),ocr_line('Synthetic',.99,20,60,150,80),
+               ocr_line(value,.99,250,60,290,80),ocr_line(unit,.99,420,60,470,80)]
+        return image,lines
+
+    def test_only_independent_dash_pixels_in_unique_microscopy_result_trigger(self):
+        image,lines=self.fixture()
+        self.assertEqual(len(worker.microscopy_interval_rows(lines,image)),1)
+        no_dash,_=self.fixture(False)
+        self.assertEqual(worker.microscopy_interval_rows(lines,no_dash),[])
+        for value in ['4.8','<48','-48','4-8','8']:
+            im,ls=self.fixture(value=value)
+            self.assertEqual(worker.microscopy_interval_rows(ls,im),[])
+        for unit in ['U/L','mg/L','/unknown']:
+            im,ls=self.fixture(unit=unit)
+            self.assertEqual(worker.microscopy_interval_rows(ls,im),[])
+        for extra in [ocr_line('结果',.99,330,10,380,30),ocr_line('上次结果',.99,330,10,400,30),
+                      ocr_line('2026-01-03',.99,330,10,410,30)]:
+            self.assertEqual(worker.microscopy_interval_rows([*lines,extra],image),[])
+        self.assertEqual(worker.microscopy_interval_rows(lines[3:],image),[])
+
+    def test_interval_consensus_preserves_digits_and_rejects_conflicting_or_unlocated_readings(self):
+        _,lines=self.fixture();original=lines[4]
+        a=ocr_line('4-8',.99,250,60,290,80,'rgb')
+        b=ocr_line('4-8',.98,250,60,290,80,'gray')
+        self.assertEqual(worker.consensus_retry_interval([a,b],original)['text'],'4-8')
+        for bad in [ocr_line('4-7',.99,250,60,290,80,'gray'),ocr_line('48',.99,250,60,290,80,'gray'),
+                    ocr_line('4-8',.99,250,100,290,120,'gray'),{**b,'variant':'rgb'}, {**b,'confidence':.5}]:
+            self.assertIsNone(worker.consensus_retry_interval([a,bad],original))
+
+    def test_retry_is_bounded_and_unresolved_pixels_cannot_publish_a_confident_integer(self):
+        import cv2
+        import tempfile
+        from copy import deepcopy
+        with tempfile.TemporaryDirectory() as root:
+            path=Path(root)/'synthetic.png';image,lines=self.fixture();cv2.imwrite(str(path),image)
+            saved=deepcopy(lines)
+            calls=[]
+            def engine(value):
+                calls.append(value)
+                return [[[[54,36],[174,36],[174,96],[54,96]],'4-8',.99]],None
+            result,_=worker.retry_suspicious_table_rows(engine,path,lines)
+            self.assertEqual(len(calls),2)
+            self.assertTrue(any(line['text']=='4-8' for line in result))
+            self.assertFalse(any(line['text']=='48' for line in result))
+            self.assertEqual(lines,saved)
+            for limit in [0,1,2]:
+                context=worker.PageRetryContext();context.budget['retryCallLimit']=limit
+                result,_=worker.retry_suspicious_table_rows(lambda path:([],None),path,lines,retry_context=context)
+                unresolved=next(line for line in result if line['text']=='48')
+                self.assertLess(unresolved['confidence'],.65)
+                self.assertLessEqual(context.budget['retryCalls'],limit)
+            no_dash,_=self.fixture(False);cv2.imwrite(str(path),no_dash)
+            result,attempts=worker.retry_suspicious_table_rows(engine,path,lines)
+            self.assertEqual(attempts,[])
+            self.assertEqual(result,lines)
 
 
 if __name__ == "__main__":
