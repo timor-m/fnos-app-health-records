@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { Copy, Cpu, UserRound } from "@lucide/vue";
 import SubPageHeader from "../../components/SubPageHeader.vue";
+import AboutWechatGroup from "../../components/AboutWechatGroup.vue";
 import { request } from "../../utils/api";
 import { useToast } from "../../composables/useToast";
 import { copyTextToClipboard } from "../../utils/clipboard";
@@ -97,6 +98,8 @@ onMounted(() => {
         <div><span>QQ 交流群</span><button class="about-copy-value" type="button" title="点击复制群号" @click="copyQqGroup"><strong>{{ qqGroupNumber }}</strong><Copy :size="13" /></button></div>
       </div>
     </section>
+
+    <AboutWechatGroup />
 
     <p v-if="message" class="inline-panel-error">
       {{ message }}<button class="error-retry" type="button" @click="loadAbout">重试</button>

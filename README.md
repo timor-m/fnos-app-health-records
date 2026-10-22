@@ -109,6 +109,7 @@ npm run build
 - 开源仓库：[github.com/timor-m/fnos-app-health-records](https://github.com/timor-m/fnos-app-health-records)
 - Docker Hub：[timorm/fnos-app-health-records](https://hub.docker.com/r/timorm/fnos-app-health-records)
 - QQ 交流群：`1085626763`
+- 微信交流群：进入应用「我的」→「关于」查看加群二维码；仅在后台提供有效二维码时显示，请求失败或二维码过期时自动隐藏。
 
 交流群可用于安装交流、功能建议和指标字典反馈。应用 BUG 请优先使用上述应用内入口；群聊中只提供反馈编号、脱敏后的错误信息或未命中指标名称，不要发送报告原件、OCR 正文、结果值或成员信息。
 
