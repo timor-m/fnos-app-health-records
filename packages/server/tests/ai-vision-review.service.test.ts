@@ -518,3 +518,22 @@ test('dense candidate lists keep the existing review limit instead of escalating
     assert.equal(output?.fields.observations.length,0,'rows outside the original candidate list are not expanded implicitly');
   });
 });
+
+
+test('single Han names require an exact name/value region, including a glued table ordinal', () => {
+  const lines = ['1钾 | 6.4 | mmol/L | 参考范围 1-9', '钠 8.6 mmol/L',
+    '尿钾 6.4 mmol/L', '1型 6.4 U/L', '3钙 <6.4 mmol/L', '4镁 | 2.7 | mmol/L | 钾 | 6.4 | mmol/L'];
+  const group = groupVisionReviewPages(lines.map((text,index) => candidateLine('page-1',1,index+1,text)))[0];
+  const {accepted,rejected} = acceptVisionObservations([
+    visionObservation('钾','6.4',lines[0]),
+    visionObservation('钠','8.6',lines[1]),
+    visionObservation('钾','1',lines[0]), // ordinal is not the measured value
+    visionObservation('钾','9',lines[0]), // reference bound is not the result
+    visionObservation('钾','6.4',lines[2]), // another specimen/project
+    visionObservation('型','6.4',lines[3]), // medical qualifier is not an ordinal
+    visionObservation('钙','6.4',lines[4]), // detection limit cannot become an exact point
+    visionObservation('镁','6.4',lines[5]), // neighbouring result cannot be borrowed
+  ],group,emptyResult());
+  assert.deepEqual(accepted.map(item=>item.itemName),['钾','钠']);
+  assert.equal(rejected,6);
+});

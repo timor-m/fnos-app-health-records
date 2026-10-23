@@ -1,3 +1,5 @@
+import { cleanIndicatorName } from './indicator-name';
+
 const measurementNumber = String.raw`[+-]?(?:\d{1,3}(?:,\d{3})+|\d+|\.\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?`;
 const printedNumber = (value: string) => Number(value.replace(/,/g, ''));
 
@@ -44,7 +46,7 @@ export function leadingMeasurementNumber(value: string): number | null {
 export function measurementEvidenceRegions(quote: string, names: string[]): string[] {
   const cells = quote.normalize('NFKC').split(/[|｜;；\n]/).map(cell => cell.trim());
   const reference = /参考范围|参考区间|参考值|正常范围|\breference\b/i;
-  const anchors = [...new Set(names.map(name => name.normalize('NFKC').replace(/\s+/g, '').toLowerCase()).filter(name => name.length >= 2))]
+  const anchors = [...new Set(names.map(name => name.normalize('NFKC').replace(/\s+/g, '').toLowerCase()).filter(name => name.length >= 2 || /^\p{Script=Han}$/u.test(name)))]
     .sort((a, b) => b.length - a.length);
   const regions: string[] = [];
   for (let i = 0; i < cells.length; i += 1) {
@@ -52,7 +54,12 @@ export function measurementEvidenceRegions(quote: string, names: string[]): stri
     if (/^(?:参考范围|参考区间|参考值|正常范围|reference)/i.test(cell)) continue;
     for (const name of anchors) {
       const pattern = [...name].map(char => char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s*');
-      const matched = new RegExp(`(?<![\\p{L}\\p{N}])${pattern}(?![\\p{L}])`, 'iu').exec(cell);
+      let matched = new RegExp(`(?<![\\p{L}\\p{N}])${pattern}(?![\\p{L}])`, 'iu').exec(cell);
+      if (!matched) {
+        // Only a leading table ordinal may be removed; preserve numeric medical qualifiers.
+        const ordinal = new RegExp(`^\\d{1,3}\\s*${pattern}(?![\\p{L}])`, 'iu').exec(cell);
+        if (ordinal && cleanIndicatorName(ordinal[0], {tableOrdinal: true}).name.replace(/\s+/g, '') === name) matched = ordinal;
+      }
       if (!matched) continue;
       const remainder = cell.slice(matched.index + matched[0].length).replace(/^[):：\s]+/, '').split(reference)[0].trim();
       // A printed abbreviation in parentheses may follow the full project name.

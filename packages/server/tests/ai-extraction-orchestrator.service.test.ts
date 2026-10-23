@@ -4020,3 +4020,24 @@ test('letter-spaced headers recover qualitative rows and empty flag cells withou
     assert.ok(!unrecovered.lines.some(line=>line.projectHeaderCells?.[0]?.text==='项目'));
   },()=>['合成报告']);
 });
+
+
+test('glued ordinals on single-character table names retain row evidence through persistence', async () => {
+  await withReport(1, async ({reportId,jobId}) => {
+    const raw = [['项目','结果','单位','参考范围'],['1甲','6.4','mmol/L','1-9'],['2乙','8.6','mmol/L','1-9']]
+      .flatMap((cells,row)=>cells.map((text,col)=>({id:`ordinal-${row}-${col}`,text,confidence:.99,
+        box:[col*220,row*60,col*220+150,row*60+20]})));
+    getDatabase().prepare('UPDATE ocr_results SET lines_json=?').run(JSON.stringify(raw));
+    const executor: AiExecutor = async () => ({...emptyExtractionResult(), ...normalizeAiExtraction({observations:[
+      {itemName:'甲',resultText:'6.4',numericValue:6.4,unit:'mmol/L',evidence:[{pageNumber:1,quote:'1甲 | 6.4 | mmol/L | 1-9'}]},
+      {itemName:'乙',resultText:'8.6',numericValue:8.6,unit:'mmol/L',evidence:[{pageNumber:1,quote:'2乙 | 8.6 | mmol/L | 1-9'}]},
+      {itemName:'甲',resultText:'9',numericValue:9,evidence:[{pageNumber:1,quote:'1甲 | 6.4 | mmol/L | 1-9'}]},
+    ]})});
+    const execution = await executeAiExtractionPlan(jobId,reportId,executor);
+    assert.deepEqual(execution.result.fields.observations.map(item=>item.numericValue).sort(),[6.4,8.6]);
+    assert.equal(execution.result.evidenceValidation?.rejectedObservations,1);
+    persistAiExtraction(reportId,jobId,execution.result,execution.inputCharacters);
+    const rows=getDatabase().prepare('SELECT item_name AS name,numeric_value AS value FROM observations WHERE report_id=?').all(reportId);
+    assert.deepEqual(rows.map(row=>[row.name,row.value]).sort(),[['乙',8.6],['甲',6.4]].sort());
+  }, () => ['项目 | 结果 | 单位 | 参考范围','1甲 | 6.4 | mmol/L | 1-9','2乙 | 8.6 | mmol/L | 1-9']);
+});

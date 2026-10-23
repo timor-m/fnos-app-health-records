@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isCurrentResultColumn, mappedOcrMeasurement, mappedOcrUnit, mappedOcrResultCells, splitOcrTableCells } from "./ocr-table-columns";
 import { canonicalMeasurementUnit, unitFromResultCell } from "./measurement-units.service";
+import { cleanIndicatorName } from "../utils/indicator-name";
 import { cleanOcrResult } from "../utils/ocr-result";
 import { parseExactMeasurement } from "../utils/measurement-bound";
 import { rollbackAfterError, getDatabase } from "../database/client";
@@ -948,7 +949,7 @@ function observationNameMatches(
   const names = [item.itemName, item.normalizedName || ""].filter(Boolean);
   if (line.projectHeaderCells) {
     const measurement = mappedOcrMeasurement(line.text, line.tableHeaderText);
-    const source = normalizedEvidenceText(measurement?.name || '');
+    const source = normalizedEvidenceText(cleanIndicatorName(measurement?.name || '', {tableOrdinal: true}).name);
     // In parallel groups even a one-character name difference can identify another item.
     const matched = names.some(name => source === normalizedEvidenceText(name))
       || line.dictionaryFacts.some(fact => [fact.displayName, fact.alias].some(alias =>
