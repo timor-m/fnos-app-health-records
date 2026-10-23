@@ -61,6 +61,7 @@ test('all OCR and viewing angle combinations align image originals and PDF previ
           assert.equal(detail?.coordWidth, expected.width);
           assert.equal(detail?.coordHeight, expected.height);
           assert.deepEqual(detail?.lines.map(line => line.box), [expected.box, expected.box]);
+          assert.deepEqual(detail?.lines.map(line => line.readingBox ?? line.box), [source.box, source.box]);
           assert.deepEqual(detail?.lines.map(line => line.id), ['stable-line', 'stable-polygon']);
           assert.deepEqual(detail?.lines.map(line => line.confidence), [0.96, 0.94]);
           assert.equal(getReportDetail(owner, reportId).pages[0]?.ocrStale, false);

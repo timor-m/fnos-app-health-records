@@ -27,6 +27,8 @@ export type EvidenceRef = {
   lineIds: string[];
   sourceText: string;
   confidence: number | null;
+  region?: [number,number,number,number];
+  readingRegion?: [number,number,number,number];
 };
 
 export type Observation = {

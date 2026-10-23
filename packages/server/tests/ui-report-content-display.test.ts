@@ -82,7 +82,7 @@ test("report detail distinguishes non-trend records from actionable review", () 
   assert.match(reportDetail, /title: '定性结果'/);
   assert.match(reportDetail, /title: '其他检查记录'/);
   assert.match(reportDetail, /title: '待核对指标'/);
-  assert.match(reportDetail, /v-for="section in nonTrendSections"/);
+  assert.match(reportDetail, /v-for="section in displayObservationSections"/);
 });
 
 test("observation review workspace keeps source context beside the editor", () => {
@@ -95,7 +95,7 @@ test("observation review workspace keeps source context beside the editor", () =
 });
 
 test("touch observation editing opens above the review workspace", () => {
-  assert.match(reportDetail, /class="observation-edit-panel" :class="\{ 'is-open': observationEditorOpen \}"/);
+  assert.match(reportDetail, /class="observation-edit-panel" :class="\{ 'is-open': observationEditorOpen,/);
   assert.match(styles, /\.observation-edit-panel\.is-open \{[^}]*position:\s*fixed;[^}]*z-index:\s*130;/);
   assert.match(styles, /\.form-select-layer \{[^}]*z-index:\s*140;/);
 });

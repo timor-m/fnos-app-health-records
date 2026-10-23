@@ -1,3 +1,4 @@
+import {sourceRegion} from "../../shared/source-region";
 import { assertNoPageAppend } from "./page-append-lock.service";
 import { consumeUnverifiedPreviousObservation } from './extraction-review.service';
 import type { ExaminationInput } from "../domain/examination";
@@ -87,7 +88,7 @@ function savedSourceEvidence(row: Pick<OverrideRow, 'fieldsJson' | 'evidenceJson
       const page = entry.pageId
         ? getDatabase().prepare('SELECT id, page_number AS pageNumber FROM report_pages WHERE report_id=? AND id=?').get(reportId, entry.pageId)
         : getDatabase().prepare('SELECT id, page_number AS pageNumber FROM report_pages WHERE report_id=? AND page_number=?').get(reportId, Number(entry.pageNumber) || 0);
-      return page ? {...entry, pageId: page.id, pageNumber: page.pageNumber} : entry;
+      return page ? {...entry, pageId: page.id, pageNumber: page.pageNumber} : entry.pageId ? {...entry, pageNumber: undefined} : entry;
     });
   } catch { return []; }
 }
@@ -115,7 +116,7 @@ export function applyObservationFieldOverrides(
     }
     used.add(override.id);
     return {
-      observation: { ...observation, ...fields, normalizedName: null },
+      observation: { ...observation, ...fields, normalizedName: null, ...(JSON.parse(override.fieldsJson)._manualSourceChanged ? {evidence:savedSourceEvidence(override,reportId)} : {}) },
       overrideId: override.id,
       manualCreated: Boolean(override.isManualCreated),
     };
@@ -222,6 +223,25 @@ function insertObservation(reportId: string, observationId: string, fields: Edit
   );
 }
 
+function selectedSourceEvidence(reportId: string, input: Record<string, unknown>) {
+  const pageId = input.sourcePageId;
+  if (pageId === undefined) {
+    if (input.sourceRegion != null) throw createError({statusCode:400,statusMessage:"请先选择框选区域的来源页"});
+    return undefined;
+  }
+  if (pageId === null || pageId === '') {
+    if (input.sourceRegion != null) throw createError({statusCode:400,statusMessage:'请先选择框选区域的来源页'});
+    return [];
+  }
+  if (typeof pageId !== 'string') throw createError({statusCode:400,statusMessage:'来源页无效'});
+  const page = getDatabase().prepare('SELECT id,page_number AS pageNumber,sha256,rotation,mime_type AS mimeType FROM report_pages WHERE report_id=? AND id=?').get(reportId,pageId) as {id:string;pageNumber:number;sha256:string;rotation:number;mimeType:string}|undefined;
+  if (!page) throw createError({statusCode:400,statusMessage:'来源页不存在或不属于当前报告'});
+  const region = input.sourceRegion == null ? null : sourceRegion(input.sourceRegion);
+  if (input.sourceRegion != null && !region) throw createError({statusCode:400,statusMessage:'框选区域无效，请重新选择'});
+  if (region && region.rotation !== (page.mimeType==='application/pdf' ? page.rotation : 0)) throw createError({statusCode:409,statusMessage:'页面方向已变化，请重新选择区域'});
+  return [{pageId:page.id,pageNumber:page.pageNumber,quote:'',...(region ? {manualRegion:{...region,pageSha256:page.sha256}} : {})}];
+}
+
 export function createManualObservation(user: RequestUser, reportId: string, input: Record<string, unknown>) {
   const report = managedReport(user, reportId);
   const fields = validatedFields(input);
@@ -231,16 +251,24 @@ export function createManualObservation(user: RequestUser, reportId: string, inp
   const db = getDatabase();
   db.exec("BEGIN IMMEDIATE");
   try {
+    if (input.expectedSourceVersion !== undefined && input.previousObservationIndex == null) {
+      const version = db.prepare('SELECT source_version AS version FROM reports WHERE id=?').get(reportId) as {version:number};
+      if (!Number.isInteger(input.expectedSourceVersion) || input.expectedSourceVersion !== version.version) {
+        throw createError({ statusCode: 409, statusMessage: "报告已更新，请刷新后重新补充，当前输入尚未保存" });
+      }
+    }
+    const selectedEvidence = selectedSourceEvidence(reportId,input);
     insertObservation(reportId, observationId, fields);
     const reviewed = input.previousObservationIndex === undefined || input.previousObservationIndex === null ? null
       : consumeUnverifiedPreviousObservation(reportId,input.previousObservationIndex,input.expectedSourceVersion);
-    const reviewedEvidence = reviewed ? JSON.stringify([{pageNumber:reviewed.pageNumber || 1,quote:reviewed.sourceText}]) : '[]';
-    if (reviewed) db.prepare('UPDATE observations SET evidence_json=? WHERE id=?').run(reviewedEvidence,observationId);
+    const reviewedEvidence = selectedEvidence ? JSON.stringify(selectedEvidence)
+      : reviewed ? JSON.stringify([{pageNumber:reviewed.pageNumber || 1,quote:reviewed.sourceText}]) : '[]';
+    if (reviewed || selectedEvidence) db.prepare('UPDATE observations SET evidence_json=? WHERE id=?').run(reviewedEvidence,observationId);
     db.prepare(`
       INSERT INTO observation_field_overrides (
         id, report_id, source_key, observation_id, fields_json, canonical_key, is_manual_created, updated_by
       ) VALUES (?, ?, ?, ?, ?, ?, 1, ?)
-    `).run(overrideId, reportId, `manual:${overrideId}`, observationId, JSON.stringify({...fields,...(reviewed ? {_sourceEvidence:JSON.parse(reviewedEvidence)} : {})}), canonicalKey, user.id);
+    `).run(overrideId, reportId, `manual:${overrideId}`, observationId, JSON.stringify({...fields,...((reviewed || selectedEvidence) ? {_sourceEvidence:JSON.parse(reviewedEvidence)} : {})}), canonicalKey, user.id);
     db.prepare("UPDATE reports SET source_version = source_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(reportId);
     db.prepare(`
       INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
@@ -248,7 +276,7 @@ export function createManualObservation(user: RequestUser, reportId: string, inp
     `).run(createId("audit"), user.id, observationId, JSON.stringify({
       memberId: report.memberId,
       reportId,
-      fields: [...Object.keys(fields), ...(canonicalKey ? ["canonicalKey"] : [])],
+      fields: [...Object.keys(fields), ...(canonicalKey ? ["canonicalKey"] : []), ...(selectedEvidence !== undefined ? ["source"] : [])],
     }));
     db.exec("COMMIT");
   } catch (error) {
@@ -304,6 +332,8 @@ export function updateManualObservation(
         throw createError({ statusCode: 409, statusMessage: "报告已更新，请刷新后重新校对，当前输入尚未保存" });
       }
     }
+    const changedSource = selectedSourceEvidence(reportId,input);
+    if (changedSource !== undefined) db.prepare("UPDATE observations SET evidence_json=? WHERE id=?").run(JSON.stringify(changedSource),observationId);
     const display = deriveObservationDisplayAbnormal({
       storedFlag: fields.abnormalFlag, resultText: fields.resultText, supportingText: [],
       numericValue: fields.numericValue, referenceLow: fields.referenceLow,
@@ -329,7 +359,8 @@ export function updateManualObservation(
         updated_at = CURRENT_TIMESTAMP
     `).run(
       overrideId, reportId, sourceKey, observationId, JSON.stringify({ ...fields,
-        _sourceEvidence: savedSourceEvidence({fieldsJson:current.fieldsJson || '{}',evidenceJson:current.evidenceJson}, reportId) }), canonicalKey,
+        _manualSourceChanged: changedSource !== undefined || Boolean(JSON.parse(current.fieldsJson || '{}')._manualSourceChanged),
+        _sourceEvidence: changedSource ?? savedSourceEvidence({fieldsJson:current.fieldsJson || '{}',evidenceJson:current.evidenceJson}, reportId) }), canonicalKey,
       current.isManualCreated ? 1 : 0, user.id,
     );
     db.prepare("UPDATE reports SET source_version = source_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(reportId);

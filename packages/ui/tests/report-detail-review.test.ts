@@ -417,3 +417,87 @@ it('does not show withdrawn extraction values or ask users to compare them',asyn
     expect(fetchMock.mock.calls.some(([,init])=>init?.method==='POST')).toBe(false);
   }finally{wrapper.unmount();}
 });
+
+it('shows all tiers by original page and submits a page-bound supplement through the existing form', async () => {
+  const pages=[1,2].map(pageNumber=>({id:`p${pageNumber}`,pageNumber,mimeType:'image/png',hasThumbnail:false,rotation:0}));
+  const payload={...detailPayload,pages,observations:[
+    {...observation,id:'late',itemName:'合成下行',displayTier:'primary',evidence:{pageId:'p1',lineIds:['late'],sourceText:''}},
+    {...observation,id:'early',itemName:'合成上行',evidence:{pageId:'p1',lineIds:['early'],sourceText:''}}
+  ]};
+  fetchMock.mockImplementation(async (input:RequestInfo|URL, init?:RequestInit)=>{
+    const url=String(input);
+    if(url.endsWith('/api/reports/r1') || init?.method==='POST')return jsonResponse(payload);
+    if(url.endsWith('/p1/ocr'))return jsonResponse({pageId:'p1',lines:[{id:'early',box:[10,10,200,20]},{id:'late',box:[10,50,200,60]}]});
+    if(url.endsWith('/p2/ocr'))return jsonResponse({pageId:'p2',lines:[]});
+    if(url.includes('jobs'))return jsonResponse([]);
+    return jsonResponse({});
+  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const wrapper=mount(ReportDetail,{attachTo:document.body,props:{reportId:'r1',reviewObservationId:'late',variant:'panel'},global:{stubs:{teleport:true,RouterLink:true}}});
+  await flushPromises();await flushPromises();
+  try {
+    await wrapper.get('.observation-source-image-wrapper img').trigger('load');await flushPromises();
+    const buttons=()=>wrapper.get('[aria-label="指标查看方式"]').findAll('button');
+    expect(buttons().map(button=>button.text())).toEqual(['分类查看','原文顺序']);
+    expect(buttons()[0].attributes('aria-pressed')).toBe('true');
+    await buttons()[1].trigger('click');await flushPromises();await flushPromises();
+    expect(buttons()[1].attributes('aria-pressed')).toBe('true');
+    expect(buttons()[0].attributes('aria-pressed')).toBe('false');
+    await buttons()[0].trigger('click');await flushPromises();
+    expect(wrapper.text()).toContain('可用于趋势的指标');
+    expect(buttons()[0].attributes('aria-pressed')).toBe('true');
+    await buttons()[1].trigger('click');await flushPromises();
+    const sections=wrapper.findAll('.observation-tier-section');
+    expect(sections.map(section=>section.find('header strong').text())).toEqual(['第 1 页','第 2 页']);
+    expect(sections[0].findAll('.observation-title strong').map(node=>node.text())).toEqual(['合成上行','合成下行']);
+    expect(sections[0].text()).toContain('可用于趋势');
+    expect(sections.every(section=>!section.find('header button').exists())).toBe(true);
+    await wrapper.get('.observation-source-nav button[title="下一页"]').trigger('click');await flushPromises();
+    expect(wrapper.findAll('.observation-add-button')).toHaveLength(1);
+    expect(wrapper.get('.observation-add-button').text()).toBe('补充指标');
+    await wrapper.get('.observation-add-button').trigger('click');await flushPromises();
+    expect(wrapper.get('.observation-add-modal').attributes('role')).toBe('dialog');
+    expect(wrapper.get('.observation-add-modal').attributes('aria-label')).toBe('补充指标');
+    expect(wrapper.get('.observation-add-backdrop').exists()).toBe(true);
+    expect(wrapper.find('.observation-edit-shade').exists()).toBe(false);
+    expect(wrapper.findAllComponents({name:'FormSelect'}).find(component=>component.props('ariaLabel')==='补充指标来源页')!.props('modelValue')).toBe('p2');
+    await wrapper.findAll('button').find(button=>button.attributes('title')==='取消编辑')!.trigger('click');await flushPromises();
+    await buttons()[0].trigger('click');await flushPromises();
+    await wrapper.get('.observation-add-button').trigger('click');await flushPromises();
+    const sourceSelect=wrapper.findAllComponents({name:'FormSelect'}).find(component=>component.props('ariaLabel')==='补充指标来源页')!;
+    expect(sourceSelect.props('modelValue')).toBe('p2');
+    const name=wrapper.findAll('.observation-core-fields label').find(node=>node.text()==='指标名称')!.get('input');
+    await name.setValue('合成补充项目');
+    await wrapper.get('.observation-editor-form').trigger('submit');await flushPromises();
+    const saved=callsTo('/observations').find(([,init])=>init?.method==='POST');
+    expect(JSON.parse(saved![1].body)).toMatchObject({itemName:'合成补充项目',sourcePageId:'p2',expectedSourceVersion:7});
+  } finally {wrapper.unmount();}
+});
+
+it('teleports only supplementation into a separate dialog and returns editing to the existing column', async()=>{
+ vi.stubGlobal('ResizeObserver',class{observe(){}disconnect(){}});
+ const payload={...detailPayload,pages:[{id:'p1',pageNumber:1,mimeType:'image/png',hasThumbnail:false,rotation:0}],observations:[{...observation,evidence:{pageId:'p1',lineIds:[],region:[.1,.2,.3,.4],sourceText:''}}]};
+ fetchMock.mockImplementation(async(input:RequestInfo|URL)=>String(input).endsWith('/api/reports/r1')?jsonResponse(payload):jsonResponse([]));
+ const wrapper=mount(ReportDetail,{attachTo:document.body,props:{reportId:'r1',reviewObservationId:'obs-1',variant:'panel'},global:{stubs:{RouterLink:true}}});
+ try {
+  await flushPromises();await flushPromises();
+  expect(document.querySelector('.observation-all-layout .observation-edit-panel.is-open')).not.toBeNull();
+  expect(document.querySelector('.observation-edit-panel .source-region-picker')).toBeNull();
+  expect(document.querySelector('[aria-label="补充指标来源页"]')).toBeNull();
+  (document.querySelector('.observation-add-button') as HTMLButtonElement).click();await flushPromises();
+  const dialog=document.querySelector('[role="dialog"][aria-label="补充指标"]')!;
+  expect(dialog).not.toBeNull();
+  expect(dialog.closest('.observation-all-layout')).toBeNull();
+  expect(dialog.querySelector('.source-region-picker')).not.toBeNull();
+  expect(dialog.querySelector('[aria-label="补充指标来源页"]')).not.toBeNull();
+  expect(document.querySelectorAll('.observation-editor-form')).toHaveLength(1);
+  dialog.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await flushPromises();
+  expect(document.querySelector('.observation-add-modal')).toBeNull();
+  expect(wrapper.emitted('close')).toBeUndefined();
+  (document.querySelector('button[title="编辑指标"]') as HTMLButtonElement).click();await flushPromises();
+  expect(document.querySelector('.observation-all-layout .observation-edit-panel.is-open')).not.toBeNull();
+  expect(document.querySelector('.observation-edit-panel .source-region-picker')).toBeNull();
+  expect(document.querySelector('[aria-label="补充指标来源页"]')).toBeNull();
+  expect(document.querySelector('.observation-add-backdrop')).toBeNull();
+ } finally {wrapper.unmount();}
+});
