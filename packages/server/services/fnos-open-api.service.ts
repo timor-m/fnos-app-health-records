@@ -27,10 +27,10 @@ function socketPath() {
 }
 
 function fnosUid(user: RequestUser) {
-  if (user.provider !== "fnos_gateway" || !user.authenticated || !/^\d+$/.test(user.id)) {
+  if (user.provider !== "fnos_gateway" || !user.authenticated || !/^\d+$/.test(user.fnosUid || "") || !Number.isSafeInteger(Number(user.fnosUid))) {
     throw createError({ statusCode: 403, statusMessage: "当前请求缺少可信的飞牛用户身份" });
   }
-  return Number(user.id);
+  return Number(user.fnosUid);
 }
 
 export function isFnosUserFileApiConfigured() {

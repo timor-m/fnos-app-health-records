@@ -53,6 +53,7 @@ export function gatewayUser(event: H3Event): RequestUser | null {
   const displayName = typeof username === "string" ? decodeGatewayHeaderValue(username).trim() : "";
   return {
     id: uid.trim(),
+    fnosUid: uid.trim(),
     displayName: displayName || uid.trim(),
     provider: "fnos_gateway",
     authenticated: true,

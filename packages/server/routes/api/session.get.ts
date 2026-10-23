@@ -7,7 +7,7 @@ import { isAdministrator } from "../../domain/request-user";
 
 export default defineEventHandler((event) => {
   const config = getAppConfig();
-  const user = getRequestUser(event);
+  const { fnosUid: _fnosUid, ...user } = getRequestUser(event);
   return ok({
     ...user,
     appName: config.appName,
