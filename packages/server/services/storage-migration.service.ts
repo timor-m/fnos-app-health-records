@@ -19,7 +19,7 @@ const cleanupManifestName = 'archive-cleanup.json';
 const cleanableDirectories = new Set(['db', 'reports', 'report-notes', 'thumbnails', 'report-exports', 'upload-staging']);
 type CleanupManifest = { version: 1; id: string; source: string; target: string; device: number; inode: number; files: Array<{ path: string; size: number; hash: string }> };
 let cleaning = false;
-const runtimeOnly = new Set(['ocr-venv', 'ocr-table', 'models', 'pip-cache', 'logs', 'tmp', 'cache']);
+const runtimeOnly = new Set(['runtime', 'ocr-venv', 'ocr-table', 'models', 'pip-cache', 'logs', 'tmp', 'cache']);
 const controlFiles = new Set(['archive-location.json', 'archive-migration.json', 'archive-location.json.tmp', 'archive-migration.json.tmp', 'fnos-authorized-paths', 'ocr-install-status.json', 'runtime.json']);
 let running: Promise<void> | null = null;
 let cancelRequested = false;
@@ -31,17 +31,18 @@ function supportedDeployment() {
 }
 async function targetRoot(rootId: string) {
   supportedDeployment();
-  const root = listLocalImportRoots().find(root => root.id === rootId);
+  const root = rootId === 'default' ? {id: 'default', path: getAppConfig().runtimeDir} : listLocalImportRoots().find(root => root.id === rootId);
   if (!root) issue('目标目录未获得应用级授权，请重新选择');
   const path = await realpath(root.path);
   const source = await realpath(getAppConfig().storageDir);
   const runtime = await realpath(getAppConfig().runtimeDir);
-  if (contains(path, source) || contains(source, path) || contains(path, runtime) || contains(runtime, path)) issue('目标目录不能与当前档案或运行目录重叠');
+  if (rootId === 'default' && source === runtime) issue('档案已在默认位置');
+  if (contains(path, source) || contains(source, path) || (rootId !== 'default' && (contains(path, runtime) || contains(runtime, path)))) issue('目标目录不能与当前档案或运行目录重叠');
   await access(path, constants.R_OK | constants.W_OK | constants.X_OK);
   const filesystem = await statfs(path);
   // Only local file systems supported by this application; network mounts are not SQLite targets.
   if (getAppConfig().authMode === 'fnos' && ![0xef53, 0x9123683e, 0x58465342].includes(Number(filesystem.type) >>> 0)) issue('目标不是受支持的本地存储空间，不支持网络挂载目录');
-  return { ...root, path, availableBytes: filesystem.bavail * filesystem.bsize };
+  return { ...root, path, target: rootId === 'default' ? path : join(path, archiveDirectoryName()), returnToDefault: rootId === 'default', availableBytes: filesystem.bavail * filesystem.bsize };
 }
 
 type SourceFile = { path: string; size: number; modified: number };
@@ -49,12 +50,12 @@ async function inventory(source: string) {
   const files: SourceFile[] = [];
   async function visit(relativePath: string) {
     for (const entry of (await readdir(join(source, relativePath), { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
-      if (!relativePath && (runtimeOnly.has(entry.name) || entry.name === archiveIdentityFile || entry.name === ownedMarker)) continue;
+      if (!relativePath && (runtimeOnly.has(entry.name) || (entry.isDirectory() && /^ocr-venv\.broken\.\d{14}$/.test(entry.name)) || entry.name === archiveIdentityFile || entry.name === ownedMarker)) continue;
       if (relativePath === 'config' && (entry.name === cleanupManifestName || controlFiles.has(entry.name) || /^archive-(location|migration|cleanup)\.json\..+\.tmp$/.test(entry.name))) continue;
       if (relativePath === 'db' && /-(wal|shm)$/.test(entry.name)) continue;
       const child = join(relativePath, entry.name);
       const stat = await lstat(join(source, child));
-      if (stat.isSymbolicLink()) issue('档案中存在符号链接，需人工核对后迁移');
+      if (stat.isSymbolicLink()) issue(`档案中存在符号链接（相对路径：${child}），需人工核对后迁移`);
       if (stat.isDirectory()) await visit(child);
       else if (stat.isFile()) files.push({ path: child, size: stat.size, modified: stat.mtimeMs });
       else issue('档案中存在不支持的特殊文件');
@@ -68,8 +69,11 @@ export async function previewStorageMigration(rootId: string) {
   if (cleaning) issue('正在清理旧档案，请稍后再迁移');
   if (storageMigrationPaused()) issue('已有迁移需要完成或取消');
   const root = await targetRoot(rootId);
-  const target = join(root.path, archiveDirectoryName());
-  try {
+  const target = root.target;
+  if (root.returnToDefault) {
+    checkDefaultDatabaseIdle(target);
+    await inventory(target);
+  } else try {
     await lstat(target);
     issue('目标下已存在应用同名目录，不会覆盖；请继续原迁移任务或选择其他授权目录');
   } catch (error) {
@@ -79,7 +83,7 @@ export async function previewStorageMigration(rootId: string) {
   const bytes = files.reduce((sum, file) => sum + file.size, 0);
   const requiredBytes = bytes + Math.max(256 * 1024 ** 2, Math.ceil(bytes * .1));
   if (root.availableBytes < requiredBytes) issue('目标剩余空间不足，需预留迁移校验空间');
-  return { rootId, parent: root.path, files: files.length, bytes, requiredBytes, availableBytes: root.availableBytes };
+  return { rootId, parent: root.path, target, returnToDefault: root.returnToDefault, files: files.length, bytes, requiredBytes, availableBytes: root.availableBytes };
 }
 
 function archiveDirectoryName() {
@@ -92,7 +96,7 @@ export function getStorageMigration() {
   const state = readStorageMigration();
   let cleanupAvailable = false;
   try { cleanupAvailable = Boolean(state?.phase === 'completed' && !state.cleanupCompletedAt && readCleanupManifest().id === state.id); } catch { /* Old migrations have no verified deletion manifest. */ }
-  return state ? { ...state, cleanupAvailable, cleaning, interrupted: !running && storageMigrationPaused() } : null;
+  return state ? { ...state, ...(state.rootId==='default' ? {previousArchiveDir:join(defaultReturnDirectory(state),'previous')} : {}), cleanupAvailable, cleaning, interrupted: !running && storageMigrationPaused() } : null;
 }
 
 function checkCancelled() { if (cancelRequested) throw new Error('MIGRATION_CANCELLED'); }
@@ -144,6 +148,95 @@ async function verifyReferences(target: string) {
   } finally { db.close(); }
 }
 
+async function commitArchiveSwitch(state: StorageMigration, files: CleanupManifest['files']) {
+  const config = getAppConfig();
+  const sourceIdentity = await lstat(state.source);
+  atomicStorageJson(join(config.runtimeDir, 'config', cleanupManifestName), {
+    version: 1, id: state.id, source: state.source, target: state.target,
+    device: sourceIdentity.dev, inode: sourceIdentity.ino,
+    files: files.filter(file => cleanableDirectories.has(file.path.split(sep)[0]))
+  } satisfies CleanupManifest);
+  state.phase = 'switching'; writeStorageMigration(state);
+  // All source writes have drained; the connection stays closed until the durable pointer commits.
+  closeDatabase();
+  atomicStorageJson(join(config.runtimeDir, 'config', archiveLocationFile), { version: 1, archiveId: state.archiveId, path: state.target });
+  state.switched = true;
+  writeStorageMigration(state);
+  getDatabase();
+  state.phase = 'completed'; state.error = null; writeStorageMigration(state);
+}
+
+function checkDefaultDatabaseIdle(target: string) {
+  for (const suffix of ['-wal', '-shm', '-journal']) if (existsSync(join(target,'db',`health-records.sqlite${suffix}`))) issue('默认目录中的旧数据库可能仍被使用，请停止旧服务后重试');
+}
+
+function defaultReturnDirectory(state: StorageMigration) {
+  return join(state.target, 'runtime', `archive-return-${state.id}`);
+}
+
+async function syncArchiveDirectories(target: string, files: Array<{path:string}>) {
+  const directories = new Set<string>([target]);
+  for (const file of files) {
+    for (let dir = dirname(join(target, file.path)); contains(target, dir); dir = dirname(dir)) {
+      directories.add(dir);
+      if (dir === target) break;
+    }
+  }
+  for (const dir of [...directories].sort((a, b) => b.length - a.length)) {
+    const fd = await open(dir, 'r');
+    try { await fd.sync(); } finally { await fd.close(); }
+  }
+}
+
+async function renameDurably(source: string, target: string) {
+  await rename(source,target);
+  for (const directory of new Set([dirname(source),dirname(target)])) {
+    const fd=await open(directory,'r');try {await fd.sync();} finally {await fd.close();}
+  }
+}
+
+async function installDefaultArchive(state: StorageMigration) {
+  checkDefaultDatabaseIdle(state.target);
+  const workspace=defaultReturnDirectory(state);
+  const planPath=await safeTargetPath(state.target,relative(state.target,join(workspace,'promotion.json')));
+  const plan=JSON.parse(readFileSync(planPath,'utf8')) as {version:number;id:string;files:CleanupManifest['files'];previous:CleanupManifest['files']};
+  const valid=(file:CleanupManifest['files'][number],previous:boolean) => {
+    if (!file || typeof file.path !== 'string' || isAbsolute(file.path) || file.path.split(sep).some(part=>!part||part==='.'||part==='..')
+      || !Number.isSafeInteger(file.size) || file.size<0 || !/^[a-f0-9]{64}$/.test(file.hash)) return false;
+    const [top,name]=file.path.split(sep);
+    return !runtimeOnly.has(top) && top!==ownedMarker && (top!==archiveIdentityFile||previous)
+      && !/^ocr-venv\.broken\.\d{14}$/.test(top)
+      && !(top==='config' && (controlFiles.has(name)||name===cleanupManifestName||/^archive-(location|migration|cleanup)\.json\..+\.tmp$/.test(name)))
+      && !(top==='db' && /-(wal|shm)$/.test(name));
+  };
+  if (plan.version!==1||plan.id!==state.id||!Array.isArray(plan.files)||!Array.isArray(plan.previous)
+    || !plan.files.every(file=>valid(file,false))||!plan.previous.every(file=>valid(file,true))
+    || new Set(plan.files.map(file=>file.path)).size!==plan.files.length||new Set(plan.previous.map(file=>file.path)).size!==plan.previous.length) issue('迁回默认位置的校验清单无效，已暂停切换');
+  for (const file of plan.previous) {
+    const backup=await safeTargetPath(state.target,relative(state.target,join(workspace,'previous',file.path)));
+    if (!existsSync(backup)) {
+      const original=await safeTargetPath(state.target,file.path);
+      if (await hashFile(original)!==file.hash) issue('默认目录中的旧副本已变化，已暂停切换');
+      await renameDurably(original,backup);
+    }
+    if (await hashFile(backup)!==file.hash) issue('默认目录旧副本的备份校验失败');
+  }
+  for (const file of plan.files) {
+    const staged=await safeTargetPath(state.target,relative(state.target,join(workspace,'staging',file.path)));
+    const destination=await safeTargetPath(state.target,file.path);
+    if (existsSync(staged)) {
+      if (existsSync(destination)) issue('默认目录出现未预期文件，已暂停切换');
+      if (await hashFile(staged)!==file.hash) issue('暂存档案校验失败，已暂停切换');
+      await renameDurably(staged,destination);
+    }
+    if (await hashFile(destination)!==file.hash) issue('默认目录的档案校验失败');
+  }
+  await verifyReferences(state.target);
+  await syncArchiveDirectories(state.target,plan.files);
+  atomicStorageJson(join(state.target,archiveIdentityFile),{version:1,archiveId:state.archiveId});
+  await commitArchiveSwitch(state,plan.files);
+}
+
 async function execute(state: StorageMigration) {
   try {
     await drainWrites();
@@ -159,7 +252,9 @@ async function execute(state: StorageMigration) {
     }
     if (await realpath(config.storageDir) !== state.source || state.switched) issue('当前目录与迁移记录不一致，已停止操作');
     const root = await targetRoot(state.rootId);
-    if (dirname(state.target) !== root.path) issue('目标授权目录已变化');
+    if (state.target !== root.target) issue('目标授权目录已变化');
+    if (root.returnToDefault && state.phase === 'switching') { await installDefaultArchive(state); return; }
+    const destinationRoot = root.returnToDefault ? join(defaultReturnDirectory(state), 'staging') : state.target;
     const checkpoint = getDatabase().prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
     if (checkpoint?.busy) issue('数据库仍被其他连接占用，请稍后重试');
     closeDatabase();
@@ -169,12 +264,13 @@ async function execute(state: StorageMigration) {
     state.copiedBytes = 0; state.copiedFiles = 0;
     const missingBytes = state.bytes; // Conservative on resume: require enough room for a full replacement.
     if (root.availableBytes < missingBytes + Math.max(256 * 1024 ** 2, Math.ceil(missingBytes * .1))) issue('目标剩余空间不足');
-    if (existsSync(state.target)) {
-      if (await realpath(state.target) !== state.target
-        || JSON.parse(readFileSync(join(state.target, ownedMarker), 'utf8')).id !== state.id) issue('目标不是本任务创建的专属目录');
+    if (existsSync(destinationRoot)) {
+      if (await realpath(destinationRoot) !== destinationRoot
+        || JSON.parse(readFileSync(join(destinationRoot, ownedMarker), 'utf8')).id !== state.id) issue('目标不是本任务创建的专属目录');
     } else {
-      await mkdir(state.target, { mode: 0o700 });
-      atomicStorageJson(join(state.target, ownedMarker), { id: state.id, version: 1 });
+      if (root.returnToDefault) await safeTargetPath(state.target, relative(state.target, join(destinationRoot, ownedMarker)));
+      else await mkdir(destinationRoot, { mode: 0o700 });
+      atomicStorageJson(join(destinationRoot, ownedMarker), { id: state.id, version: 1 });
     }
     const hashes = new Map<string, string>();
     for (const file of files) {
@@ -183,8 +279,8 @@ async function execute(state: StorageMigration) {
       const source = join(state.source, file.path);
       const before = await lstat(source);
       if (!before.isFile() || before.size !== file.size || before.mtimeMs !== file.modified || await realpath(source) !== source) issue('迁移期间源文件发生变化，请重试');
-      const destination = await safeTargetPath(state.target, file.path);
-      const temporary = await safeTargetPath(state.target, `${file.path}.copy-${state.id}`);
+      const destination = await safeTargetPath(destinationRoot, file.path);
+      const temporary = await safeTargetPath(destinationRoot, `${file.path}.copy-${state.id}`);
       const output = await open(temporary, constants.O_CREAT | constants.O_WRONLY | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
       await pipeline(createReadStream(source), async function* (chunks: AsyncIterable<Buffer>) {
         for await (const chunk of chunks) { checkCancelled(); yield chunk; }
@@ -205,46 +301,37 @@ async function execute(state: StorageMigration) {
     checkCancelled();
     state.phase = 'verifying'; writeStorageMigration(state);
     for (const file of files) {
-      if (await hashFile(join(state.target, file.path)) !== hashes.get(file.path)) issue('目标文件最终校验失败');
+      if (await hashFile(join(destinationRoot, file.path)) !== hashes.get(file.path)) issue('目标文件最终校验失败');
       if (await hashFile(join(state.source, file.path)) !== hashes.get(file.path)) issue('校验期间源文件发生变化，请重试');
     }
     const finalFiles = await inventory(state.source);
     if (JSON.stringify(finalFiles) !== JSON.stringify(files)) issue('校验期间源文件列表发生变化，请重试');
-    const targetFiles = await inventory(state.target);
+    const targetFiles = await inventory(destinationRoot);
     if (JSON.stringify(targetFiles.map(file => file.path)) !== JSON.stringify(files.map(file => file.path))) issue('目标存在不属于本次源快照的文件，请取消后重新创建迁移任务');
-    await verifyReferences(state.target);
+    await verifyReferences(destinationRoot);
     checkCancelled();
     // Persist newly created directory entries as well as file contents before switching.
-    const directories = new Set<string>([state.target]);
-    for (const file of files) {
-      for (let dir = dirname(join(state.target, file.path)); contains(state.target, dir); dir = dirname(dir)) {
-        directories.add(dir);
-        if (dir === state.target) break;
+    await syncArchiveDirectories(destinationRoot,files);
+    if (root.returnToDefault) {
+      checkDefaultDatabaseIdle(state.target);
+      const previous = await inventory(state.target);
+      const oldFiles: CleanupManifest['files'] = [];
+      for (const file of previous) oldFiles.push({path:file.path,size:file.size,hash:await hashFile(join(state.target,file.path))});
+      if (existsSync(join(state.target,archiveIdentityFile))) {
+        const identityPath=await safeTargetPath(state.target,archiveIdentityFile);
+        oldFiles.push({path:archiveIdentityFile,size:(await lstat(identityPath)).size,hash:await hashFile(identityPath)});
       }
-    }
-    for (const dir of [...directories].sort((a, b) => b.length - a.length)) {
-      const fd = await open(dir, 'r');
-      try { await fd.sync(); } finally { await fd.close(); }
+      atomicStorageJson(join(defaultReturnDirectory(state),'promotion.json'), {version:1,id:state.id,files:files.map(file=>({path:file.path,size:file.size,hash:hashes.get(file.path)!})),previous:oldFiles});
+      state.phase='switching';writeStorageMigration(state);
+      await installDefaultArchive(state);return;
     }
     atomicStorageJson(join(state.target, archiveIdentityFile), { version: 1, archiveId: state.archiveId });
-    const sourceIdentity = await lstat(state.source);
-    atomicStorageJson(join(config.runtimeDir, 'config', cleanupManifestName), {
-      version: 1, id: state.id, source: state.source, target: state.target,
-      device: sourceIdentity.dev, inode: sourceIdentity.ino,
-      files: files.filter(file => cleanableDirectories.has(file.path.split(sep)[0]))
-        .map(file => ({ path: file.path, size: file.size, hash: hashes.get(file.path)! }))
-    } satisfies CleanupManifest);
-    state.phase = 'switching'; writeStorageMigration(state);
-    // All source writes have drained; the connection stays closed until the durable pointer commits.
-    atomicStorageJson(join(config.runtimeDir, 'config', archiveLocationFile), { version: 1, archiveId: state.archiveId, path: state.target });
-    state.switched = true;
-    writeStorageMigration(state);
-    getDatabase();
-    state.phase = 'completed'; state.error = null; writeStorageMigration(state);
+    await commitArchiveSwitch(state, files.map(file => ({path:file.path,size:file.size,hash:hashes.get(file.path)!})));
   } catch (error) {
     state.switched ||= resolve(getAppConfig().storageDir) === state.target;
     const cancelled = !state.switched && (error as Error).message === 'MIGRATION_CANCELLED';
-    state.phase = cancelled ? 'cancelled' : 'failed';
+    // A partial installation into the default directory must stay paused until resumed.
+    state.phase = state.rootId === 'default' && state.phase === 'switching' && !state.switched ? 'switching' : cancelled ? 'cancelled' : 'failed';
     state.error = cancelled ? null : (error as Error).name === 'StorageMigrationError'
       ? (error as Error).message : '迁移未完成，源数据和目标副本均已保留。请检查目录权限、存储空间及数据库后重试。';
     writeStorageMigration(state);
@@ -269,7 +356,7 @@ export async function startStorageMigration(rootId: string) {
   const id = randomUUID();
   const source = await realpath(getAppConfig().storageDir);
   const state: StorageMigration = { version: 1, id, archiveId: randomUUID(), rootId, source,
-    target: join(root.path, archiveDirectoryName()), phase: 'waiting', files: 0, copiedFiles: 0, bytes: 0, copiedBytes: 0,
+    target: root.target, phase: 'waiting', files: 0, copiedFiles: 0, bytes: 0, copiedBytes: 0,
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), error: null, cancelRequested: false, switched: false };
   // Recheck after the last asynchronous preflight step.
   if (running || cleaning || storageMigrationPaused()) issue('已有迁移或清理正在执行');
@@ -282,7 +369,7 @@ export function resumeStorageMigration() {
   if (running || cleaning) issue('迁移或清理正在执行');
   const state = readStorageMigration();
   if (!state || ['completed', 'cancelled'].includes(state.phase)) issue('没有可继续的迁移');
-  state.phase = state.switched ? 'switching' : 'waiting'; state.error = null; state.cancelRequested = false;
+  state.phase = state.switched || (state.rootId === 'default' && state.phase === 'switching') ? 'switching' : 'waiting'; state.error = null; state.cancelRequested = false;
   writeStorageMigration(state); launch(state);
   return getStorageMigration();
 }

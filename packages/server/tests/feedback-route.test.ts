@@ -40,6 +40,9 @@ test('local authenticated route forwards only feedback operations and edited ima
   assert.equal((await app.request('http://localhost/api/feedback/upload',{method:'POST',headers:{'Idempotency-Key':'pdf-upload-test'},body:pdf})).status,200);
   const forwarded=(calls.at(-1)!.body as FormData).get('file') as File;
   assert.equal(forwarded.name,'report.pdf');assert.equal(forwarded.type,'application/pdf');assert.equal(await forwarded.text(),'%PDF-synthetic-original');
+  const message=await app.request('http://localhost/api/feedback/tickets/B0001/messages',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':'attachment-only-reply'},body:JSON.stringify({content:'',attachmentIds:[1]})});
+  assert.equal(message.status,200);assert.deepEqual(JSON.parse(String(calls.at(-1)!.body)),{content:'',attachmentIds:[1]});assert.equal(calls.at(-1)!.headers.get('x-client-id'),id);
+
  }finally{globalThis.fetch=originalFetch;closeDatabaseForTests();process.env=env;rmSync(dir,{recursive:true,force:true});}
 });
 

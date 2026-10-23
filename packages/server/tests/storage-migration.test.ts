@@ -1,7 +1,7 @@
 import {preflightStoredBackup} from "../services/records.service";
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, renameSync } from 'node:fs';
+import { mkdtempSync, realpathSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync, renameSync, linkSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { H3, type H3Event } from 'h3';
@@ -135,11 +135,140 @@ test('cancelling while draining retains the source and never switches', async ()
   });
 });
 
+test('returning to the default directory migrates the latest archive and quarantines the old copy', async () => {
+  await fixture(async (source, target, rootId) => {
+    getDatabase().exec(`INSERT INTO users(id,display_name) VALUES('return-owner','synthetic');
+      INSERT INTO health_members(id,display_name,created_by) VALUES('return-member','synthetic','return-owner');
+      INSERT INTO reports(id,member_id,created_by,title,report_type,status) VALUES('return-report','return-member','return-owner','synthetic','laboratory','ready');
+      INSERT INTO report_pages(id,report_id,page_number,original_name,storage_path,mime_type,file_size,sha256) VALUES('return-page','return-report',1,'synthetic.txt','reports/synthetic.txt','text/plain',17,'synthetic');`);
+    await startStorageMigration(rootId);await waitForStorageMigration();
+    const external = getAppConfig().storageDir;
+    const status=await getArchiveStorageStatus({id:'return-owner',displayName:'synthetic',provider:'development',authenticated:true,isAdmin:true,isGatewayAdmin:true});
+    assert.equal(status.roots.find(root=>root.id==='default')?.path,source);
+    getDatabase().prepare('UPDATE migration_probe SET value=?').run('latest archive');
+    writeFileSync(join(external,'reports/synthetic.txt'),'latest content');
+    writeFileSync(join(source,'reports/stale.txt'),'old inactive file');
+    const preview = await previewStorageMigration('default');
+    assert.equal(preview.target,source);
+    await startStorageMigration('default');await waitForStorageMigration();
+    const state=getStorageMigration()!;
+    assert.equal(state.phase,'completed',state.error||'return failed');
+    assert.equal(getAppConfig().storageDir,source);
+    assert.equal(getAppConfig().storageRelocated,false);
+    assert.equal(getDatabase().prepare('SELECT value FROM migration_probe').get()?.value,'latest archive');
+    assert.equal(readFileSync(join(source,'reports/synthetic.txt'),'utf8'),'latest content');
+    assert.equal(existsSync(join(source,'reports/stale.txt')),false);
+    assert.equal(readFileSync(join(source,'runtime',`archive-return-${state.id}`,'previous','reports/stale.txt'),'utf8'),'old inactive file');
+    assert.equal(readFileSync(join(external,'reports/synthetic.txt'),'utf8'),'latest content');
+    assert.equal(readFileSync(join(source,'ocr-venv/keep-runtime.txt'),'utf8'),'runtime');
+    getDatabase().prepare('UPDATE migration_probe SET value=?').run('after return');closeDatabase();
+    writeStorageMigration({...state,phase:'switching',switched:false});
+    resumeStorageMigration();await waitForStorageMigration();
+    assert.equal(getStorageMigration()?.phase,'completed');
+    assert.equal(getDatabase().prepare('SELECT value FROM migration_probe').get()?.value,'after return');
+    assert.equal(getDatabase().prepare('SELECT count(*) AS n FROM report_pages').get()?.n,1);
+    assert.ok((await previewStorageCleanup(state.id)).files>0);
+    await cleanupStorageSource(state.id);
+    assert.equal(existsSync(join(external,'reports/synthetic.txt')),false);
+    assert.equal(readFileSync(join(source,'reports/synthetic.txt'),'utf8'),'latest content');
+    assert.equal(readFileSync(join(source,'runtime',`archive-return-${state.id}`,'previous','reports/stale.txt'),'utf8'),'old inactive file');
+  });
+});
+
+test('an interrupted default return pauses writes, rejects unsafe plans and resumes without losing the current archive', async () => {
+  await fixture(async (source, target, rootId) => {
+    await startStorageMigration(rootId);await waitForStorageMigration();
+    const external=getAppConfig().storageDir;
+    getDatabase().prepare('UPDATE migration_probe SET value=?').run('current authoritative archive');
+    const alias=join(target,'synthetic-hardlink');linkSync(join(source,'reports/synthetic.txt'),alias);
+    await startStorageMigration('default');await waitForStorageMigration();
+    const state=getStorageMigration()!;
+    assert.equal(state.phase,'switching');assert.equal(storageMigrationPaused(),true);
+    assert.equal(getAppConfig().storageDir,external);
+    assert.throws(()=>cancelStorageMigration(),/不能取消/);
+    const manifest=join(source,'runtime',`archive-return-${state.id}`,'promotion.json');
+    const original=readFileSync(manifest,'utf8');const forged=JSON.parse(original);
+    forged.files[0].path='config/archive-location.json';writeFileSync(manifest,JSON.stringify(forged));
+    rmSync(alias);resumeStorageMigration();await waitForStorageMigration();
+    assert.equal(getStorageMigration()?.phase,'switching');assert.equal(storageMigrationPaused(),true);
+    assert.equal(getAppConfig().storageDir,external);
+    writeFileSync(manifest,original);resumeStorageMigration();await waitForStorageMigration();
+    assert.equal(getStorageMigration()?.phase,'completed');assert.equal(storageMigrationPaused(),false);
+    assert.equal(getAppConfig().storageDir,source);
+    assert.equal(getDatabase().prepare('SELECT value FROM migration_probe').get()?.value,'current authoritative archive');
+    // Simulate a restart after some verified files were installed but before pointer commit.
+    closeDatabase();
+    // Restore the unopened copied DB image: normal post-commit startup has since written to it.
+    copyFileSync(join(external,'db/health-records.sqlite'),join(source,'db/health-records.sqlite'));
+    renameSync(join(source,'reports/synthetic.txt'),join(source,'runtime',`archive-return-${state.id}`,'staging','reports/synthetic.txt'));
+    const oldIdentity=JSON.parse(readFileSync(join(external,'.health-records-archive.json'),'utf8'));
+    atomicStorageJson(join(source,'config/archive-location.json'),{version:1,path:external,archiveId:oldIdentity.archiveId});
+    writeStorageMigration({...state,phase:'switching',switched:false});
+    resumeStorageMigration();await waitForStorageMigration();
+    assert.equal(getStorageMigration()?.phase,'completed',getStorageMigration()?.error||'partial install recovery failed');
+    assert.equal(readFileSync(join(source,'reports/synthetic.txt'),'utf8'),'synthetic content');
+    assert.equal(getDatabase().prepare('SELECT value FROM migration_probe').get()?.value,'current authoritative archive');
+  });
+});
+
+test('returning to default also works after the previous default archive was cleaned',async()=>{
+  await fixture(async(source,_target,rootId)=>{
+    await startStorageMigration(rootId);await waitForStorageMigration();
+    await cleanupStorageSource(getStorageMigration()!.id);
+    assert.equal(existsSync(join(source,'db/health-records.sqlite')),false);
+    getDatabase().prepare('UPDATE migration_probe SET value=?').run('after old copy cleanup');
+    await startStorageMigration('default');await waitForStorageMigration();
+    assert.equal(getStorageMigration()?.phase,'completed',getStorageMigration()?.error||'return failed');
+    assert.equal(getAppConfig().storageRelocated,false);
+    assert.equal(getDatabase().prepare('SELECT value FROM migration_probe').get()?.value,'after old copy cleanup');
+    assert.equal(readFileSync(join(source,'ocr-venv/keep-runtime.txt'),'utf8'),'runtime');
+  });
+});
+
+test('private Python runtime symlinks remain in the source and never enter archive migration', async () => {
+  await fixture(async (source, target, rootId) => {
+    const bin = join(source, 'runtime', 'python-3.11', 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'python3.11'), 'synthetic Python runtime');
+    symlinkSync('python3.11', join(bin, 'python3'));
+    await previewStorageMigration(rootId);
+    await startStorageMigration(rootId);
+    await waitForStorageMigration();
+    assert.equal(getStorageMigration()?.phase, 'completed');
+    assert.equal(readFileSync(join(bin, 'python3'), 'utf8'), 'synthetic Python runtime');
+    assert.equal(existsSync(join(target, getAppConfig().appName, 'runtime')), false);
+    assert.equal(readFileSync(join(target, getAppConfig().appName, 'reports/synthetic.txt'), 'utf8'), 'synthetic content');
+  });
+});
+
+test('installer-created broken OCR environments stay in place while similarly named business paths remain guarded', async () => {
+  await fixture(async (source, target, rootId) => {
+    const backup = 'ocr-venv.broken.20261023120000';
+    const bin = join(source, backup, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'python3.11'), 'synthetic old runtime');
+    symlinkSync('python3.11', join(bin, 'python3'));
+    await previewStorageMigration(rootId);
+    const similar = join(source, 'ocr-venv.broken.notes');
+    mkdirSync(similar);symlinkSync(target, join(similar, 'unsafe'));
+    await assert.rejects(previewStorageMigration(rootId), /ocr-venv\.broken\.notes[/\\]unsafe/);
+    rmSync(similar, {recursive:true});
+    const fakeBackup = join(source, 'ocr-venv.broken.20261023120001');
+    symlinkSync(target, fakeBackup);
+    await assert.rejects(previewStorageMigration(rootId), /ocr-venv\.broken\.20261023120001/);
+    rmSync(fakeBackup);
+    await startStorageMigration(rootId);await waitForStorageMigration();
+    assert.equal(getStorageMigration()?.phase, 'completed');
+    assert.equal(readFileSync(join(bin, 'python3'), 'utf8'), 'synthetic old runtime');
+    assert.equal(existsSync(join(target, getAppConfig().appName, backup)), false);
+  });
+});
+
 test('preflight rejects unauthorized roots and source symlinks without switching', async () => {
   await fixture(async (source, target, rootId) => {
     await assert.rejects(previewStorageMigration('unknown'), /授权/);
     symlinkSync(target, join(source, 'reports', 'unsafe'));
-    await assert.rejects(previewStorageMigration(rootId), /符号链接/);
+    await assert.rejects(previewStorageMigration(rootId), error => /符号链接/.test(String(error)) && /reports[/\\]unsafe/.test(String(error)));
     assert.equal(getAppConfig().storageDir, source);
   });
 });
@@ -252,6 +381,10 @@ test('legacy runtime directory may use a stable symlink alias', async () => {
     await startStorageMigration(rootId); await waitForStorageMigration();
     assert.equal(getStorageMigration()?.phase, 'completed', getStorageMigration()?.error || 'alias migration failed');
     assert.equal(getAppConfig().storageDir, getStorageMigration()?.target);
+    await startStorageMigration('default');await waitForStorageMigration();
+    assert.equal(getStorageMigration()?.phase,'completed',getStorageMigration()?.error||'alias return failed');
+    assert.equal(getAppConfig().storageDir,source);
+    assert.equal(getAppConfig().storageRelocated,false);
   });
 });
 

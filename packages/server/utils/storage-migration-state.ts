@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, mkdirSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, unlinkSync, realpathSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join, dirname, isAbsolute, resolve, basename } from 'node:path';
 import { getAppConfig } from './runtime-config';
@@ -37,7 +37,7 @@ export function readStorageMigration(): StorageMigration | null {
     || typeof value.rootId !== 'string' || !value.rootId
     || typeof value.source !== 'string' || !isAbsolute(value.source) || resolve(value.source) !== value.source
     || typeof value.target !== 'string' || !isAbsolute(value.target) || resolve(value.target) !== value.target
-    || ![getAppConfig().appName, `health-records-${value.id}`].includes(basename(value.target)) || value.target === value.source
+    || !(value.rootId === 'default' ? value.target === realpathSync(getAppConfig().runtimeDir) : [getAppConfig().appName, `health-records-${value.id}`].includes(basename(value.target))) || value.target === value.source
     || typeof value.switched !== 'boolean' || typeof value.cancelRequested !== 'boolean'
     || ![value.files, value.copiedFiles, value.bytes, value.copiedBytes].every(n => Number.isSafeInteger(n) && n >= 0)
     || !['waiting', 'copying', 'verifying', 'switching', 'completed', 'failed', 'cancelled'].includes(value.phase)) {

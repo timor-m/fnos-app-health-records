@@ -1,3 +1,4 @@
+import {DOMWrapper} from '@vue/test-utils';
 import { mount, flushPromises } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import FeedbackImageEditor from "../src/components/FeedbackImageEditor.vue";
@@ -10,7 +11,7 @@ beforeEach(() => { request.mockReset(); request.mockImplementation(async (path:s
   throw new Error('服务连接失败，尚未提交');
 }); });
 afterEach(() => vi.restoreAllMocks());
-function render() { return mount(FeedbackSettingsPage, { global: { stubs: { SubPageHeader: true, Teleport: true, FeedbackImageEditor: true } } }); }
+function render() { return withTeleportDom(mount(FeedbackSettingsPage, { attachTo:document.body, global: { stubs: { SubPageHeader: true, Teleport: false, FeedbackImageEditor: true } } })); }
 describe("feedback service UI", () => {
   it("mixes PDFs and images without a count limit, edits only images and submits the original PDF", async () => {
     let counter=0;
@@ -113,7 +114,7 @@ describe("feedback service UI", () => {
     const invalid = new File(["text"], "sample.svg", { type: "image/svg+xml" });
     const oversized = new File(["x"], "large.png", { type: "image/png" });
     Object.defineProperty(oversized, "size", { value: 11 * 1024 * 1024 });
-    Object.defineProperty(input.element, "files", { configurable: true, value: [invalid, oversized, ...Array(7).fill(valid)] });
+    Object.defineProperty(input.element, "files", { configurable: true, value: [invalid, oversized, ...Array.from({length:7},(_,i)=>new File(['image'],`sample-${i}.png`,{type:'image/png'}))] });
     await input.trigger("change");
     expect(wrapper.findAll(".attachment-tile")).toHaveLength(7);
     expect(wrapper.get(".attachment-error").text()).toContain("10 MB");
@@ -134,7 +135,7 @@ describe("feedback service UI", () => {
     expect(wrapper.find(".success-card").exists()).toBe(false);
     expect(request.mock.calls.every(call => typeof call[0] === "string" && (call[0] === "feedback-diagnostics" || call[1]?.headers?.["x-client-id"] === undefined))).toBe(true);
     wrapper.unmount();
-    expect(revoke).toHaveBeenCalledTimes(7);
+    expect(revoke).toHaveBeenCalledTimes(count);
   });
   it("replaces the original attachment with the edited file", async () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValueOnce("blob:original").mockReturnValueOnce("blob:edited");
@@ -167,3 +168,9 @@ describe("feedback service UI", () => {
     wrapper.unmount();
   });
 });
+
+// The generic Teleport stub remounts child pickers on updates; exercise real Teleports.
+function withTeleportDom<T extends {get:any;find:any;findAll:any;text:any}>(page:T):T {
+  const dom=new DOMWrapper(document.body);
+  return Object.assign(page,{get:dom.get.bind(dom),find:dom.find.bind(dom),findAll:dom.findAll.bind(dom),text:dom.text.bind(dom)});
+}

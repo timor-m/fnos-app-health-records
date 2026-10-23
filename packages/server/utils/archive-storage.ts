@@ -25,8 +25,7 @@ export function resolveArchiveLocation(runtimeDir: string, enabled: boolean): Ar
   try {
     location = JSON.parse(content);
     if (location.version !== 1 || typeof location.path !== 'string' || !isAbsolute(location.path)
-      || typeof location.archiveId !== 'string' || !/^[a-f0-9-]{36}$/i.test(location.archiveId)
-      || resolve(location.path) === resolve(runtimeDir)) throw new Error('Invalid location');
+      || typeof location.archiveId !== 'string' || !/^[a-f0-9-]{36}$/i.test(location.archiveId)) throw new Error('Invalid location');
   } catch {
     return { ...legacy, error: '档案存储配置无效，已停止访问档案，不会初始化空数据库。' };
   }
@@ -47,7 +46,7 @@ export function resolveArchiveLocation(runtimeDir: string, enabled: boolean): Ar
     accessSync(location.path, constants.R_OK | constants.W_OK | constants.X_OK);
     accessSync(join(location.path, 'db'), constants.R_OK | constants.W_OK | constants.X_OK);
     accessSync(dbPath, constants.R_OK | constants.W_OK);
-    return { ...selected, error: null };
+    return { ...selected, relocated: realpathSync(location.path) !== realpathSync(runtimeDir), error: null };
   } catch {
     return { ...selected, error: '档案存储不可用或目录身份不匹配。请检查存储空间挂载和读写权限；不会切回旧目录或创建空档案。' };
   }
