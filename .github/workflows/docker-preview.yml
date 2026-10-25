@@ -1,4 +1,4 @@
-name: Docker Preview (feat-event)
+name: Docker Image (feat-event)
 
 on:
   push:
@@ -98,8 +98,8 @@ jobs:
           docker logs --tail=80 health-records-preview-check
           echo "Docker startup check failed." >&2
           exit 1
-      # Explicit tags prevent metadata-action's automatic latest/version aliases.
-      - name: Publish branch images only
+      # Publish only the package version; never add latest or branch aliases.
+      - name: Publish version image only
         id: publish
         uses: docker/build-push-action@v6
         with:
@@ -107,9 +107,7 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:feat-event
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:feat-event-${{ github.sha }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.package.outputs.version }}
           labels: |
             org.opencontainers.image.version=${{ steps.package.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -135,11 +133,12 @@ jobs:
       - name: Summarize published images
         env:
           DIGEST: ${{ steps.publish.outputs.digest }}
+          APP_VERSION: ${{ steps.package.outputs.version }}
         run: |
           {
-            echo "### Docker preview"
-            echo "- Image: $REGISTRY/$IMAGE_NAME:feat-event"
-            echo "- Commit tag: $REGISTRY/$IMAGE_NAME:feat-event-$GITHUB_SHA"
+            echo "### Docker image"
+            echo "- Image: $REGISTRY/$IMAGE_NAME:$APP_VERSION"
+            echo "- Source: feat-event ($GITHUB_SHA)"
             echo "- Digest: $DIGEST"
             echo "- Platforms: linux/amd64, linux/arm64"
           } >> "$GITHUB_STEP_SUMMARY"
