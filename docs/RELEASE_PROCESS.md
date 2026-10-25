@@ -239,12 +239,13 @@ npm run release:notes
 
 自动化校验与发布：
 
-- GitHub CI 在 push 和 pull request 时执行 `npm run release:ci`。
+- GitHub CI 在 push 和 pull request 时执行 `npm run release:ci`；`feat-event` 分支的 push 改由独立 Docker Preview 工作流完成校验、服务端/UI 测试、类型检查、性能检查和 Docker 启动检查，不打包 FPK。
+- `Docker Preview (feat-event)` 仅在当前仓库的 `feat-event` 分支发布双架构镜像，标签限定为 `feat-event` 和 `feat-event-<完整提交 SHA>`；发布前后核对 `latest` digest，不更新正式版本标签，不创建 Git tag 或 GitHub Release。此流程不冻结版本、不递增应用或 schema 版本，部署方式见 [Docker 部署](DOCKER_DEPLOYMENT.md#feat-event-分支预览镜像)。
 - GitHub Release 在 tag 或手动触发时执行严格发布校验、测试和打包；tag 版本必须与 `package.json` 版本一致。
 - Release notes 会自动读取 `CHANGELOG.md` 当前版本段落、`package.json`、`template.config.json` 和迁移注册表，输出本版本变更、发布摘要（含应用 ID 与目标 schema）、发布产物和 Docker 镜像信息；`releaseNotes.highlights` 仅保留给 `release:info` 检查和发布校验，不再写入 GitHub Release 正文。
 - 包结构校验会确认 manifest 版本、sub_version、应用介绍、changelog 和图标尺寸。
 - `vX.Y.Z` Tag 先构建 fnOS `.fpk`，再通过 Buildx 发布 `linux/amd64`、`linux/arm64` 的 Docker Hub 多架构镜像，最后创建同时包含 `.fpk`、镜像地址和 digest 的 GitHub Release。
-- Docker 镜像仅发布精确版本 `X.Y.Z`；稳定版本额外更新 `latest`，预发布版本不更新 `latest`。不再生成 `vX.Y.Z`、`X.Y` 或短提交 SHA 镜像标签；Git Release tag 仍使用 `vX.Y.Z`。镜像版本与 `.fpk` 版本都只取自同一个 `package.json`。已有 Docker Hub 标签不会自动删除，使用旧标签的部署需先改为精确版本。
+- 正式 Release 流程的 Docker 镜像仅发布精确版本 `X.Y.Z`；稳定版本额外更新 `latest`，预发布版本不更新 `latest`。不再生成 `vX.Y.Z`、`X.Y` 或短提交 SHA 镜像标签；Git Release tag 仍使用 `vX.Y.Z`。镜像版本与 `.fpk` 版本都只取自同一个 `package.json`。独立分支预览流程使用前述分支标签。已有 Docker Hub 标签不会自动删除，使用旧标签的部署需先改为精确版本。
 - 镜像发布启用 OCI 源码、版本、许可证标签、SBOM 和 GitHub Actions provenance。发布前应确认 Docker Hub Access Token 和 GitHub Actions Secrets 配置正确。
 
 本地完整发布：

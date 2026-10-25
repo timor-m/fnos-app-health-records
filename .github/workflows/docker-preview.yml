@@ -1,0 +1,145 @@
+name: Docker Preview (feat-event)
+
+on:
+  push:
+    branches: [feat-event]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-preview-feat-event
+  cancel-in-progress: false
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: ${{ vars.DOCKERHUB_IMAGE || 'timorm/fnos-app-health-records' }}
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/feat-event'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Validate, test and typecheck
+        run: |
+          npm run validate:release
+          npm test
+          npm run test:ui
+          npm run typecheck
+          npm run test:duplicates:benchmark
+
+  docker:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read application version
+        id: package
+        run: node -p "'version=' + require('./package.json').version" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Validate Docker Hub configuration
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "Configure DOCKERHUB_USERNAME and DOCKERHUB_TOKEN repository secrets." >&2
+            exit 1
+          fi
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Record existing latest digest
+        id: latest
+        shell: bash
+        run: |
+          DIGEST="$(docker buildx imagetools inspect "$REGISTRY/$IMAGE_NAME:latest" --format '{{.Manifest.Digest}}')"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+      - name: Build local image for startup check
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: health-records-preview:check
+          build-args: |
+            APP_VERSION=${{ steps.package.outputs.version }}
+            GATEWAY_PREFIX=/
+          cache-from: type=gha,scope=feat-event
+          cache-to: type=gha,mode=max,scope=feat-event
+          provenance: false
+      - name: Check fresh Docker startup
+        shell: bash
+        run: |
+          trap 'docker rm -fv health-records-preview-check >/dev/null 2>&1 || true' EXIT
+          docker run -d --name health-records-preview-check \
+            -e AUTH_MODE=local -p 127.0.0.1:3334:3334 health-records-preview:check
+          for attempt in {1..40}; do
+            if curl --fail --silent http://127.0.0.1:3334/healthz > /dev/null; then
+              curl --fail --silent http://127.0.0.1:3334/ > /dev/null
+              exit 0
+            fi
+            sleep 3
+          done
+          docker logs --tail=80 health-records-preview-check
+          echo "Docker startup check failed." >&2
+          exit 1
+      # Explicit tags prevent metadata-action's automatic latest/version aliases.
+      - name: Publish branch images only
+        id: publish
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:feat-event
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:feat-event-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.version=${{ steps.package.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            APP_VERSION=${{ steps.package.outputs.version }}
+            GATEWAY_PREFIX=/
+          cache-from: type=gha,scope=feat-event
+          cache-to: type=gha,mode=max,scope=feat-event
+          provenance: mode=max
+          sbom: true
+      - name: Verify latest is unchanged
+        if: always() && steps.latest.outcome == 'success'
+        shell: bash
+        env:
+          PREVIOUS_DIGEST: ${{ steps.latest.outputs.digest }}
+        run: |
+          CURRENT_DIGEST="$(docker buildx imagetools inspect "$REGISTRY/$IMAGE_NAME:latest" --format '{{.Manifest.Digest}}')"
+          if [ "$CURRENT_DIGEST" != "$PREVIOUS_DIGEST" ]; then
+            echo "latest changed during this run; check concurrent release activity." >&2
+            exit 1
+          fi
+          echo "latest unchanged: $CURRENT_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+      - name: Summarize published images
+        env:
+          DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          {
+            echo "### Docker preview"
+            echo "- Image: $REGISTRY/$IMAGE_NAME:feat-event"
+            echo "- Commit tag: $REGISTRY/$IMAGE_NAME:feat-event-$GITHUB_SHA"
+            echo "- Digest: $DIGEST"
+            echo "- Platforms: linux/amd64, linux/arm64"
+          } >> "$GITHUB_STEP_SUMMARY"
