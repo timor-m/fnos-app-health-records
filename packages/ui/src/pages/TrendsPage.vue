@@ -43,7 +43,6 @@ const route = useRoute();
 const loading = ref(true);
 const loadError = ref("");
 const series = ref<TrendSeries[]>([]);
-const pendingReports = ref<Array<{reportId:string;reportTitle:string;examinationCount:number;observationCount:number}>>([]);
 const query = ref("");
 const groupFilter = ref('');
 const groupTree = ref<TrendGroupNode[]>([]);
@@ -278,13 +277,11 @@ async function load(memberId: string, silent = false) {
   closeDetails();
   try {
     const params = `memberId=${encodeURIComponent(memberId)}`;
-    const [result, tree, pending] = await Promise.all([
-      request<TrendSeries[]>(`trends?${params}`), request<TrendGroupNode[]>(`trends/groups?${params}`),
-      request<typeof pendingReports.value>(`trends/pending?${params}`)
+    const [result, tree] = await Promise.all([
+      request<TrendSeries[]>(`trends?${params}`), request<TrendGroupNode[]>(`trends/groups?${params}`)
     ]);
     if (app.selectedMemberId.value === memberId && sequence === loadRequest) {
       series.value = result;
-      pendingReports.value = pending;
       groupTree.value = tree;
       const availableKeys = new Set(flattenTrendGroups(tree).filter(g => g.indicatorCount > 0).map(g => g.key));
       if (groupFilter.value && !availableKeys.has(groupFilter.value)) groupFilter.value = '';
@@ -838,7 +835,6 @@ watch(() => app.selectedMemberId.value, (memberId) => {
   ++loadRequest;
   ++groupRequest;
   series.value = [];
-  pendingReports.value = [];
   groupTree.value = [];
   groupFilter.value = '';
   groupResultKeys.value = null;
@@ -901,28 +897,8 @@ onDeactivated(() => {
       <RouterLink to="/trends" aria-current="page">指标趋势</RouterLink>
       <RouterLink to="/trends/morphology">形态变化</RouterLink>
     </nav>
-    <section v-if="!loading && !loadError && pendingReports.length" class="trend-pending-panel" aria-label="待确认检查">
-      <div class="trend-pending-heading">
-        <span class="trend-pending-icon"><CircleAlert :size="17" aria-hidden="true" /></span>
-        <div class="trend-pending-copy"><h3>有检查结果待确认</h3><p>结果已保留，确认检查归属和时间后即可进入趋势。</p></div>
-        <span class="trend-pending-count">{{ pendingReports.length }} 份报告</span>
-      </div>
-      <details class="trend-pending-details">
-        <summary><span>查看待确认报告</span><ChevronDown :size="15" aria-hidden="true" /></summary>
-        <div class="trend-pending-content">
-          <p class="trend-pending-guide">打开报告，在“全部指标”的来源报告页中核对时间。</p>
-          <div class="trend-pending-list">
-            <button v-for="report in pendingReports" :key="report.reportId" type="button" class="trend-pending-report" @click="openReport(report.reportId)">
-              <FileText class="trend-pending-file" :size="17" aria-hidden="true" />
-              <span class="trend-pending-report-copy"><span class="trend-pending-report-title">{{ report.reportTitle }}</span><span class="trend-pending-report-meta">{{ report.examinationCount }} 次检查<span aria-hidden="true"> · </span>{{ report.observationCount }} 项结果</span></span>
-              <ChevronRight class="trend-pending-arrow" :size="16" aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-      </details>
-    </section>
     <PullIndicator :distance="pullDistance" :refreshing="refreshing" />
-    <div v-if="loading" class="loading-list"><span v-for="index in 3" :key="index"></span></div>
+    <div v-if="loading" class="loading-list"><span v-for="index in 8" :key="index"></span></div>
     <p v-else-if="loadError" class="inline-panel-error">
       {{ loadError }}<button class="error-retry" type="button" @click="retryLoad">重试</button>
     </p>
@@ -1120,7 +1096,7 @@ onDeactivated(() => {
                 >
                   <span class="trend-chart-value">{{ pointNumberText(item, chartPoint.point) }}</span>
                   <i :class="pointFlagClass(chartPoint.point)" :data-direction="['<', '≤'].includes(pointComparator(chartPoint.point) || '') ? '↓' : '↑'"></i>
-                  <time>{{ trendMeasurementTime(chartPoint.point) }}</time>
+                  <time>{{ formatDate(chartPoint.point.reportIssuedAt) }}</time>
                 </button>
               </div>
             </div>
@@ -1170,43 +1146,9 @@ onDeactivated(() => {
       @close="closeSourcePage"
     >
       <template #actions>
-        <button type="button" title="打开来源报告详情" @click="openSourceReport"><FileText :size="18" /></button>
+        <button type="button" title="打开来源档案详情" @click="openSourceReport"><FileText :size="18" /></button>
       </template>
     </ImageViewer>
     <BackToTop />
   </section>
 </template>
-
-<style scoped>
-.trend-pending-panel { margin: 14px 0; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
-.trend-pending-heading { display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px 12px; }
-.trend-pending-icon { display: flex; align-items: center; justify-content: center; flex: 0 0 30px; height: 30px; border-radius: 9px; background: color-mix(in srgb, var(--amber, #d97706) 10%, var(--surface)); color: var(--amber, #d97706); }
-.trend-pending-copy { flex: 1; min-width: 0; }
-.trend-pending-copy h3 { margin: 0; color: var(--ink); font-size: 13px; font-weight: 600; line-height: 1.6; }
-.trend-pending-copy p { margin: 3px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
-.trend-pending-count { flex-shrink: 0; margin-top: 2px; padding: 2px 8px; border-radius: 6px; background: var(--fill-4); color: var(--muted); font-size: 11px; line-height: 1.7; font-variant-numeric: tabular-nums; }
-.trend-pending-details summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.6; cursor: pointer; list-style: none; }
-.trend-pending-details summary::-webkit-details-marker { display: none; }
-.trend-pending-details summary:hover { color: var(--brand-strong); background: var(--brand-soft); }
-.trend-pending-details summary svg { flex-shrink: 0; transition: transform .15s; }
-.trend-pending-details[open] summary svg { transform: rotate(180deg); }
-.trend-pending-content { padding: 0 16px 12px; }
-.trend-pending-guide { margin: 3px 0 9px; color: var(--muted); font-size: 11px; line-height: 1.7; }
-.trend-pending-list { border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
-.trend-pending-report { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 56px; margin: 0; padding: 10px 12px; border: 0; border-radius: 0; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
-.trend-pending-report + .trend-pending-report { border-top: 1px solid var(--line); }
-.trend-pending-report:hover { background: var(--brand-soft); }
-.trend-pending-report:focus-visible, .trend-pending-details summary:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
-.trend-pending-file, .trend-pending-arrow { flex-shrink: 0; color: var(--muted); }
-.trend-pending-report-copy { display: grid; gap: 3px; flex: 1; min-width: 0; }
-.trend-pending-report-title { font-size: 12px; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; white-space: normal; }
-.trend-pending-report-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; line-height: 1.5; font-variant-numeric: tabular-nums; }
-@media (max-width: 480px) {
-  .trend-pending-heading { flex-wrap: wrap; padding: 12px; gap: 8px; }
-  .trend-pending-copy { flex-basis: calc(100% - 38px); }
-  .trend-pending-count { margin: 0 0 0 38px; }
-  .trend-pending-details summary { padding-inline: 12px; }
-  .trend-pending-content { padding-inline: 12px; }
-}
-@media (prefers-reduced-motion: reduce) { .trend-pending-details summary svg { transition: none; } }
-</style>

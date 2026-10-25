@@ -28,6 +28,7 @@ import {
 import {
   classifyReportContent,
   hasMedicationContent,
+  hasVaccinationContent,
   hasMedicationContinuation,
   classifyReportDocument,
   mergeContentClassifications,
@@ -5445,7 +5446,7 @@ function unitFromRanges(
       // 体检报告里被误判为门诊/住院的检查表格页不再整页送入 narrative 单元。
       const narrativeWholePage =
         route === "narrative" &&
-        (page.medicationContent || page.classification.contentTypes.some(
+        (page.medicationContent || hasVaccinationContent(page.text) || page.classification.contentTypes.some(
           (type) =>
             [
               "outpatient",
@@ -7015,12 +7016,12 @@ export function planRebuiltOcrPages(
         );
   /*
    * 概览模式：指标仍逐行提取（与详细模式同一解析契约），并保留形态发现单元；
-   * 概览只保留明确用药页及相邻续页的叙事单元，避免临床记录的用药被跳过。
+   * 概览保留明确用药页及相邻续页、接种条目页的叙事单元，避免临床记录的用药被跳过。
    * 合并单元已在同一契约内输出形态发现，不再单独生成形态单元。
    */
   const narrativeBaseUnits = extractionDepth === "overview"
     ? baseUnits.map(unit => ({ ...unit, pageRanges: unit.pageRanges.filter(range =>
-        pages.find(page => page.pageId === range.pageId)?.medicationContent) }))
+        pages.some(page => page.pageId === range.pageId&&(page.medicationContent||hasVaccinationContent(page.text)))) }))
     : baseUnits;
   const narrativeUnits = packNarrativeUnits(narrativeBaseUnits, pages, documentClassification.primaryType);
   const morphologyUnits =

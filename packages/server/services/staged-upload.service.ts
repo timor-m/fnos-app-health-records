@@ -1,3 +1,5 @@
+import { validateUploadContext } from './health-upload-workflow.service';
+import type { HealthUploadContext } from '../../shared/health-upload';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -7,7 +9,7 @@ import { getAppConfig } from '../utils/runtime-config';
 import { assertMemberManage, requireAuthenticated } from './member.service';
 import { createUploadFromStagedFiles, detectUploadType } from './upload.service';
 
-type StagedManifest = { memberId: string; files: Array<{ originalName: string; size: number; rotation: number }> };
+type StagedManifest = { memberId: string; context?: HealthUploadContext; files: Array<{ originalName: string; size: number; rotation: number }> };
 // Opportunistic cleanup is limited to this service's hashed temporary directories.
 export function cleanupExpiredStagedUploads(now = Date.now()) {
   const root = join(getAppConfig().storageDir, 'upload-staging');
@@ -50,7 +52,8 @@ export function startStagedUpload(user: RequestUser, key: string, input: StagedM
     return { originalName: file.originalName, size: file.size, rotation: file.rotation };
   });
   if (total > 2 * 1024 * 1024 * 1024) throw createError({ statusCode: 413, data: { code: "FILE_TOO_LARGE" }, statusMessage: '一次导入总大小不能超过 2GB' });
-  const manifest = { memberId: input.memberId, files };
+  const context = validateUploadContext(user, input.memberId, input.context);
+  const manifest = { memberId: input.memberId, files, ...(Object.keys(context).length ? {context} : {}) };
   const directory = stageDirectory(user, key);
   mkdirSync(directory, { recursive: true });
   const now = new Date();
@@ -95,7 +98,7 @@ export function completeStagedUpload(user: RequestUser, key: string) {
     if (!existsSync(path) || statSync(path).size !== file.size) throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: '报告文件尚未传齐，请继续上传后再识别' });
     return { originalName: file.originalName, rotation: file.rotation, sourcePath: path };
   });
-  const result = createUploadFromStagedFiles(user, manifest.memberId, files, key);
+  const result = createUploadFromStagedFiles(user, manifest.memberId, files, key, manifest.context);
   // Keep the manifest so a lost completion response can be retried; payloads
   // are removed only by the explicit discard endpoint after acknowledgement.
   return result;

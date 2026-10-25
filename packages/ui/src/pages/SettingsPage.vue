@@ -53,7 +53,7 @@ const reminderBadge = computed(() => {
     <nav class="settings-menu" aria-label="设置入口">
       <RouterLink to="/me/members"><UsersRound :size="20" /><div><strong>家庭成员</strong><span>{{ app.session.value?.isAdmin ? "成员资料与访问权限" : "添加和管理自己的成员" }}</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink v-if="app.session.value?.provider === 'local' && app.session.value?.isAdmin" to="/me/account-security"><KeyRound :size="20" /><div><strong>账号安全</strong><span>管理本地账号与密码</span></div><ChevronRight :size="18" /></RouterLink>
-      <RouterLink to="/me/trash"><Trash2 :size="20" /><div><strong>回收站</strong><span>恢复或永久删除已移除报告</span></div><ChevronRight :size="18" /></RouterLink>
+      <RouterLink to="/me/trash"><Trash2 :size="20" /><div><strong>回收站</strong><span>恢复或永久删除已移除记录</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink v-if="app.session.value?.isAdmin && ['fnos', 'development'].includes(app.session.value.authMode)" to="/me/storage"><HardDrive :size="20" /><div><strong>存储设置</strong><span>档案位置与存储空间</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink v-if="app.session.value?.isAdmin" to="/me/maintenance"><Wrench :size="20" /><div><strong>维护工具</strong><span>数据维护、检查修复与日志诊断</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink v-else to="/me/duplicates"><GitMerge :size="20" /><div><strong>重复报告检测</strong><span>查找重复报告，核对后合并或清理</span></div><ChevronRight :size="18" /></RouterLink>

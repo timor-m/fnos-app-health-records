@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, rmSync, renameSync, symlinkSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, renameSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -8,6 +8,7 @@ import { archiveIdentityFile, archiveLocationFile, resolveArchiveLocation } from
 import { getAppConfig } from '../utils/runtime-config';
 import { getArchiveStorageStatus } from '../services/archive-storage.service';
 import { closeDatabaseForTests, getDatabase } from '../database/client';
+import { storageMigrationPaused } from '../utils/storage-migration-state';
 
 test('archive inspection preserves legacy roots and does not initialize directories', async () => {
   const root = mkdtempSync(join(tmpdir(), 'archive-legacy-'));
@@ -121,4 +122,45 @@ test('an explicit default location still requires its matching archive identity 
     writeFileSync(join(runtime,archiveIdentityFile),JSON.stringify({version:1,archiveId:'22222222-2222-4222-8222-222222222222'}));
     assert.ok(resolveArchiveLocation(runtime,true).error);
   } finally {rmSync(runtime,{recursive:true,force:true});}
+});
+
+test('fnOS upgrade accepts the completed default-return state saved by 0.2.15 without changing its controls', async () => {
+  const runtime = realpathSync(mkdtempSync(join(tmpdir(), 'archive-0215-default-return-')));
+  const previous = Object.fromEntries(['STORAGE_DIR', 'NODE_ENV', 'AUTH_MODE', 'VITE_DEV_SERVER_URL'].map(key => [key, process.env[key]]));
+  const archiveId = '11111111-1111-4111-8111-111111111111';
+  const migrationId = '22222222-2222-4222-8222-222222222222';
+  try {
+    process.env.STORAGE_DIR = runtime;
+    process.env.NODE_ENV = 'production';
+    process.env.AUTH_MODE = 'fnos';
+    delete process.env.VITE_DEV_SERVER_URL;
+    mkdirSync(join(runtime, 'config'));
+    mkdirSync(join(runtime, 'db'));
+    const db = new DatabaseSync(join(runtime, 'db', 'health-records.sqlite'));
+    db.exec('CREATE TABLE synthetic(id INTEGER)');
+    db.close();
+    const controls = {
+      [archiveIdentityFile]: JSON.stringify({ version: 1, archiveId }),
+      ['config/' + archiveLocationFile]: JSON.stringify({ version: 1, path: runtime, archiveId }),
+      'config/archive-migration.json': JSON.stringify({
+        version: 1, id: migrationId, archiveId, rootId: 'default',
+        source: join(runtime, 'previous-volume', 'fnos-app-health-records'), target: runtime,
+        phase: 'completed', files: 1, copiedFiles: 1, bytes: 1, copiedBytes: 1,
+        createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+        error: null, cancelRequested: false, switched: true
+      })
+    };
+    for (const [name, text] of Object.entries(controls)) writeFileSync(join(runtime, name), text);
+    assert.equal(getAppConfig().storageError, null);
+    assert.equal(storageMigrationPaused(), false);
+    const status = await getArchiveStorageStatus({ id: 'synthetic', displayName: 'Synthetic', provider: 'fnos_gateway', authenticated: true, isAdmin: true, isGatewayAdmin: true });
+    assert.equal(status.state, 'ready');
+    assert.equal(status.paused, false);
+    assert.equal(status.relocated, false);
+    assert.equal(status.migration?.phase, 'completed');
+    for (const [name, text] of Object.entries(controls)) assert.equal(readFileSync(join(runtime, name), 'utf8'), text);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    rmSync(runtime, { recursive: true, force: true });
+  }
 });

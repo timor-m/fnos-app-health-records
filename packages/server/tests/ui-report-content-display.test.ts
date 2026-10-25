@@ -59,11 +59,11 @@ test("governance directly reuses the indicator editor without cascading report d
   assert.match(styles, /\.observation-direct-review > header, \.observation-direct-review \.observation-all-list \{ display: none;/);
   assert.doesNotMatch(styles, /grid-template-areas: "source editor"/);
   assert.match(reportDetail, /if \(target\) openObservationEditor\(target\)/);
-  assert.match(records, /<ReportDetailSheet v-if="mobileDetailOpen && selected"/);
+  assert.match(records, /<ReportDetailSheet v-if="route.path === '\/records' && mobileDetailOpen && selected"/);
   assert.doesNotMatch(reportDetail, /initialObservationId/);
   assert.doesNotMatch(governance, /report-detail-sheet-backdrop/);
   const sheet = read("packages/ui/src/components/ReportDetailSheet.vue");
-  assert.match(sheet, /role="dialog" aria-modal="true" aria-label="报告详情"/);
+  assert.match(sheet, /role="dialog" aria-modal="true" aria-label="档案详情"/);
   assert.match(sheet, /@updated="emit\('updated'\)"/);
 });
 

@@ -1,12 +1,18 @@
 <script setup lang="ts">
+import {isHealthRecordKind} from '../utils/health-record-navigation';
+import {vaccinationReturnTo} from '../utils/vaccination';
 import { createUuid as createItemId } from "../utils/uuid";
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import {
   ArrowUp, ArrowDown, Camera, CheckCircle2, ChevronRight, CircleAlert, FileImage, FileText,
   Folder, FolderOpen, HardDrive, ImagePlus, LoaderCircle, RefreshCw, RotateCw, UploadCloud, X
 } from "@lucide/vue";
+import { useRoute, useRouter } from "vue-router";
 import { useAppContext } from "../composables/useAppContext";
 import { useToast } from "../composables/useToast";
+import HealthCategoryIcon from '../components/HealthCategoryIcon.vue';
+import UploadArchivePanel from '../components/UploadArchivePanel.vue';
+import type { HealthUploadContext } from '../../../shared/health-upload';
 import UploadOrganizer from "../components/UploadOrganizer.vue";
 import ImageViewer from "../components/ImageViewer.vue";
 import { apiUrl, request, requestUpload } from "../utils/api";
@@ -26,6 +32,7 @@ type QueueItem = {
 
 type UploadResult = {
   reportId: string;
+  memberId: string;
   title: string;
   status: "queued";
   pageCount: number;
@@ -57,6 +64,39 @@ type SelectedLocalFile = { rootId: string; path: string; name: string; size: num
 
 
 const app = useAppContext();
+const route = useRoute();
+const router = useRouter();
+const entryMemberId = ref('');
+const hasEntryContext = computed(() => ['processId','relatedKind','relatedId','reminderId']
+  .some(key => typeof route.query[key] === 'string' && Boolean(route.query[key])));
+watch(() => JSON.stringify([route.path,route.query]), () => {
+  entryMemberId.value = route.path === '/upload'
+    ? typeof route.query.memberId === 'string' ? route.query.memberId : app.selectedMemberId.value : '';
+}, {immediate:true});
+const contextMismatch = computed(() => hasEntryContext.value && Boolean(entryMemberId.value)
+  && entryMemberId.value !== app.selectedMemberId.value);
+const uploadContext = computed<HealthUploadContext>(() => {
+  if (route.path !== '/upload' || contextMismatch.value) return {};
+  const context: HealthUploadContext = {};
+  if(isHealthRecordKind(route.query.relatedKind)&&typeof route.query.relatedId==='string')context.relatedRecord={kind:route.query.relatedKind,id:route.query.relatedId};
+  for (const key of ['processId','reminderId'] as const)
+    if (typeof route.query[key] === 'string') context[key] = route.query[key];
+  return context;
+});
+const recordsDestination = computed(() => !contextMismatch.value && route.path === '/upload'
+  ? vaccinationReturnTo(route.query.returnTo) : '/events');
+const recordsActionLabel = computed(() => recordsDestination.value.startsWith('/health-processes/') ? '返回健康历程' : '查看记录');
+let directReceipt: {signature:string;key:string} | undefined;
+const localSelectionScope = ref<{memberId:string;context:HealthUploadContext}|null>(null);
+const workflowReportIds = ref<string[]>([]);
+const workflowMemberId = ref('');
+const currentUploadIds = computed(() => workflowMemberId.value === app.selectedMemberId.value ? workflowReportIds.value : []);
+function resetUploadedRecords() { workflowReportIds.value = []; workflowMemberId.value = ''; }
+function recordUploaded(uploaded: UploadResult, memberId: string) {
+  if (workflowMemberId.value !== memberId) workflowReportIds.value = [];
+  workflowMemberId.value = memberId;
+  if (!workflowReportIds.value.includes(uploaded.reportId)) workflowReportIds.value.push(uploaded.reportId);
+}
 const toast = useToast();
 const items = ref<QueueItem[]>([]);
 const uploadList = ref<HTMLElement | null>(null);
@@ -129,12 +169,17 @@ const organizerFiles = computed(() => items.value.map(item => ({ id: item.id, na
 const uploadPreviewId = ref('');
 const uploadPreviewPages = computed(() => items.value.filter(item => item.previewUrl).map(item => ({ key: item.id, fullUrl: item.previewUrl, label: item.file.name })));
 const canSubmitOrganization = computed(() => items.value.length === 1 || organizationPlan.value.length > 0);
-type ImportTask = { key: string; label: string; status: 'waiting' | 'uploading' | 'completed' | 'failed'; error: string; sent: number; browserFiles?: QueueItem[]; localFiles?: SelectedLocalFile[]; memberId: string; reportId?: string };
+type ImportTask = { key: string; label: string; status: 'waiting' | 'uploading' | 'completed' | 'failed'; error: string; sent: number; browserFiles?: QueueItem[]; localFiles?: SelectedLocalFile[]; memberId: string; context: HealthUploadContext; reportId?: string };
 const importTasks = ref<ImportTask[]>([]);
 const batchRunning = ref(false);
 const batchCompleted = computed(() => importTasks.value.filter(task => task.status === 'completed').length);
+const batchAllCompleted = computed(() => importTasks.value.length > 0 && batchCompleted.value === importTasks.value.length);
+const currentImportTasks = computed(() => importTasks.value.length > 0 && importTasks.value[0].memberId === app.selectedMemberId.value);
 async function runImportTasks() {
   if (batchRunning.value) return;
+  if (contextMismatch.value || importTasks.value.some(task => task.status !== 'completed' && task.memberId !== app.selectedMemberId.value)) {
+    error.value = '这些上传任务属于原成员，请切回原成员后重试。'; return;
+  }
   batchRunning.value = true;
   for (const task of importTasks.value) if (task.status === 'failed') task.status = 'waiting';
   const pending = importTasks.value.filter(task => task.status === 'waiting');
@@ -146,7 +191,7 @@ async function runImportTasks() {
       try {
         let uploaded: UploadResult;
         if (task.browserFiles) {
-          const started = await request<{ received: number[] }>('uploads/staged', { method: 'POST', body: JSON.stringify({ requestKey: task.key, memberId: task.memberId, files: task.browserFiles.map(item => ({ originalName: item.file.name, size: item.file.size, rotation: item.rotation })) }) });
+          const started = await request<{ received: number[] }>('uploads/staged', { method: 'POST', body: JSON.stringify({ requestKey: task.key, memberId: task.memberId, context:task.context, files: task.browserFiles.map(item => ({ originalName: item.file.name, size: item.file.size, rotation: item.rotation })) }) });
           task.sent = started.received.length;
           for (const [index, item] of task.browserFiles.entries()) {
             if (started.received.includes(index)) continue;
@@ -159,11 +204,12 @@ async function runImportTasks() {
           await request(`uploads/staged/${task.key}`, { method: 'DELETE' }).catch(() => {});
         } else {
           const files = task.localFiles!;
-          uploaded = await request<UploadResult>('local-files/import', { method: 'POST', body: JSON.stringify({ memberId: task.memberId, requestKey: task.key,
+          uploaded = await request<UploadResult>('local-files/import', { method: 'POST', body: JSON.stringify({ memberId: task.memberId, requestKey: task.key, context:task.context,
             ...(files.every(file => file.rootId === '__authorized') ? { authorizedPaths: files.map(file => file.path) } : { files: files.map(file => ({ rootId: file.rootId, path: file.path })) }) }) });
           task.sent = files.length;
         }
         task.reportId = uploaded.reportId; task.status = 'completed';
+        recordUploaded(uploaded, task.memberId);
         app.notifyDataChanged();
       } catch (cause) { task.status = 'failed'; task.error = cause instanceof Error ? cause.message : '导入失败，请重试'; }
     }
@@ -174,7 +220,7 @@ async function clearImportTasks() {
   if (batchRunning.value) return;
   if (importTasks.value.some(task => task.status !== 'completed') && !window.confirm('放弃未完成的上传？已创建的报告不会删除。')) return;
   await Promise.all(importTasks.value.filter(task => task.browserFiles).map(task => request(`uploads/staged/${task.key}`, { method: 'DELETE' }).catch(() => {})));
-  importTasks.value = []; clearQueue(); selectedLocalFiles.value = [];
+  importTasks.value = []; clearQueue(); selectedLocalFiles.value = []; resetUploadedRecords();
 }
 const dragging = ref(false);
 const uploading = ref(false);
@@ -308,7 +354,7 @@ async function requestFnosUserPaths(flow: FnosAuthorizationFlow) {
 
   const state = createItemId();
   const memberId = app.selectedMemberId.value;
-  sessionStorage.setItem(fnosAuthStateKey, JSON.stringify({ state, flow, memberId }));
+  sessionStorage.setItem(fnosAuthStateKey, JSON.stringify({ state, flow, memberId, context: uploadContext.value, requestKey: createItemId() }));
   await sdk.openAppAuth("pickUserFile", {
     appName: app.session.value?.appName || "fnos-app-health-records",
     directory,
@@ -320,31 +366,21 @@ async function requestFnosUserPaths(flow: FnosAuthorizationFlow) {
   return null;
 }
 
-async function submitAuthorizedFnosPaths(paths: string[], memberId = app.selectedMemberId.value) {
+async function submitAuthorizedFnosPaths(paths: string[], memberId = app.selectedMemberId.value, context: HealthUploadContext = {...uploadContext.value}, requestKey = createItemId()) {
   if (!paths.length) return;
   if (!memberId) throw new Error("请先选择报告所属成员");
+  localSelectionScope.value = {memberId,context};
   if (paths.length > 1) {
     if (paths.length > 1000) throw new Error('一次导入最多 1000 个文件');
     selectedLocalFiles.value = paths.map(path => ({ rootId: '__authorized', path, name: path.split('/').pop() || '文件', size: 0 }));
     localBrowserOpen.value = true;
     return;
   }
-  localImporting.value = true;
-  localError.value = "";
-  error.value = "";
-  result.value = null;
-  try {
-    result.value = await request<UploadResult>("local-files/import", {
-      method: "POST",
-      body: JSON.stringify({ memberId, authorizedPaths: paths })
-    });
-    clearQueue();
-    selectedLocalFiles.value = [];
-    localBrowserOpen.value = false;
-    startPolling();
-  } finally {
-    localImporting.value = false;
-  }
+  resetUploadedRecords();
+  importTasks.value = [{key:requestKey,label:'报告 1',memberId,context,status:'waiting',sent:0,error:'',
+    localFiles:[{rootId:'__authorized',path:paths[0],name:paths[0].split('/').pop()||'文件',size:0}]}];
+  localBrowserOpen.value = false;
+  await runImportTasks();
 }
 
 async function authorizeFnosDirectory() {
@@ -352,9 +388,11 @@ async function authorizeFnosDirectory() {
   localAuthorizing.value = true;
   localError.value = "";
   try {
+    const scope = {memberId:app.selectedMemberId.value,context:{...uploadContext.value}};
     const paths = await requestFnosUserPaths("directory");
     if (!paths) return;
     await openLocalBrowser();
+    localSelectionScope.value = scope;
   } catch (cause) {
     localError.value = cause instanceof Error ? cause.message : "无法打开飞牛目录授权";
   } finally {
@@ -363,13 +401,15 @@ async function authorizeFnosDirectory() {
 }
 
 async function chooseFnosFiles() {
+  if (contextMismatch.value) return;
   if (localAuthorizing.value || localImporting.value) return;
   localAuthorizing.value = true;
   localError.value = "";
   try {
+    const scope = {memberId:app.selectedMemberId.value,context:{...uploadContext.value}};
     const paths = await requestFnosUserPaths("files");
     if (!paths) return;
-    await submitAuthorizedFnosPaths(paths);
+    await submitAuthorizedFnosPaths(paths,scope.memberId,scope.context);
   } catch (cause) {
     localError.value = cause instanceof Error ? cause.message : "从飞牛选择文件失败";
     localBrowserOpen.value = true;
@@ -383,7 +423,7 @@ async function handleFnosAuthorizationCallback() {
   if (!raw) return;
   sessionStorage.removeItem(fnosAuthStateKey);
   try {
-    const pending = JSON.parse(raw) as { state?: unknown; flow?: unknown; memberId?: unknown };
+    const pending = JSON.parse(raw) as { state?: unknown; flow?: unknown; memberId?: unknown; context?: HealthUploadContext; requestKey?: string };
     const { TrimApp } = await import("@trimjs/web-app");
     const result = new TrimApp().parseAppAuthCallback(window.location.href);
     clearFnosAuthorizationQuery();
@@ -396,9 +436,10 @@ async function handleFnosAuthorizationCallback() {
     }
     if (pending.flow === "directory") {
       await openLocalBrowser();
+      localSelectionScope.value = {memberId:typeof pending.memberId === "string" ? pending.memberId : "",context:pending.context || {}};
       return;
     }
-    await submitAuthorizedFnosPaths(result.path, typeof pending.memberId === "string" ? pending.memberId : "");
+    await submitAuthorizedFnosPaths(result.path, typeof pending.memberId === "string" ? pending.memberId : "", pending.context || {}, pending.requestKey);
   } catch (cause) {
     clearFnosAuthorizationQuery();
     error.value = cause instanceof Error ? cause.message : "无法处理飞牛文件授权结果";
@@ -530,6 +571,7 @@ async function loadLocalDirectory(rootId?: string, path = "") {
 }
 
 async function openLocalBrowser() {
+  localSelectionScope.value = {memberId:app.selectedMemberId.value,context:{...uploadContext.value}};
   localBrowserOpen.value = true;
   localRoots.value = [];
   localCurrent.value = null;
@@ -613,18 +655,22 @@ function toggleCurrentLocalFiles() {
 }
 
 async function submitLocalImport() {
+  if (contextMismatch.value || (localSelectionScope.value && localSelectionScope.value.memberId !== app.selectedMemberId.value)) {
+    localError.value = '所选资料的来源成员与当前成员不一致，请切回原成员或重新选择资料。'; return;
+  }
   if (!selectedLocalFiles.value.length || !app.selectedMemberId.value || batchRunning.value) return;
   const selectedFiles = [...selectedLocalFiles.value];
   const plan = selectedFiles.length === 1 ? [[selectedFiles[0].rootId + ':' + selectedFiles[0].path]] : localOrganizationPlan.value;
   if (!plan.length) { localError.value = '请完成所有文件的报告分组'; return; }
   const tasks = plan.map((ids, index) => ({
-    key: createItemId(), label: `报告 ${index + 1}`, memberId: app.selectedMemberId.value!,
+    key: createItemId(), label: `报告 ${index + 1}`, memberId: localSelectionScope.value?.memberId || app.selectedMemberId.value!, context:{...(localSelectionScope.value?.context || uploadContext.value)},
     status: 'waiting' as const, sent: 0, error: '',
     localFiles: ids.map(id => selectedFiles.find(file => file.rootId + ':' + file.path === id)!)
   }));
   if (tasks.some(task => task.localFiles.some(file => !file) || (task.localFiles.some(file => file.rootId === '__authorized') && !task.localFiles.every(file => file.rootId === '__authorized')))) {
     localError.value = '请分别导入直接授权文件和目录文件'; return;
   }
+  resetUploadedRecords();
   importTasks.value = tasks;
   localBrowserOpen.value = false;
   await runImportTasks();
@@ -640,6 +686,7 @@ function clearFinishedUpload() {
   result.value = null;
   jobs.value = [];
   error.value = "";
+  resetUploadedRecords();
 }
 
 function jobLabel(jobType: ProcessingJob["jobType"]) {
@@ -698,6 +745,7 @@ async function retryJob(job: ProcessingJob) {
 }
 
 async function submit() {
+  if (contextMismatch.value) {error.value = "来源成员与当前成员不一致，请切回原成员或清除来源信息。";return;}
   if (uploading.value || batchRunning.value || importTasks.value.length) return;
   if (!items.value.length) return;
   if (!canSubmitOrganization.value) {
@@ -709,9 +757,10 @@ async function submit() {
     error.value = "请先选择报告所属成员";
     return;
   }
+  resetUploadedRecords();
   if (items.value.length > 1) {
     const files = [...items.value];
-    importTasks.value = organizationPlan.value.map((ids, index) => ({ key: createItemId(), label: `报告 ${index + 1}`, memberId: app.selectedMemberId.value!, status: 'waiting', sent: 0, error: '', browserFiles: ids.map(id => ({ ...files.find(item => item.id === id)! })) }));
+    importTasks.value = organizationPlan.value.map((ids, index) => ({ key: createItemId(), label: `报告 ${index + 1}`, memberId: app.selectedMemberId.value!, context:{...uploadContext.value}, status: 'waiting', sent: 0, error: '', browserFiles: ids.map(id => ({ ...files.find(item => item.id === id)! })) }));
     await runImportTasks();
     return;
   }
@@ -720,10 +769,17 @@ async function submit() {
   result.value = null;
   try {
     const body = new FormData();
-    body.append("memberId", app.selectedMemberId.value);
-    body.append("manifest", JSON.stringify({ pages: items.value.map((item) => ({ rotation: item.rotation })) }));
+    const memberId = app.selectedMemberId.value;
+    const context = {...uploadContext.value};
+    const signature = JSON.stringify({memberId,context,files:items.value.map(item=>[item.id,item.rotation])});
+    if (directReceipt?.signature !== signature) directReceipt = {signature,key:createItemId()};
+    body.append("memberId", memberId);
+    body.append("context", JSON.stringify(context));
+    body.append("requestKey", directReceipt.key);
+    body.append("manifest", JSON.stringify({ pages: items.value.map((item) => ({ rotation: item.rotation, size:item.file.size })) }));
     for (const item of items.value) body.append("files", item.file, item.file.name);
     result.value = await requestUpload<UploadResult>("uploads", body);
+    recordUploaded(result.value, memberId);
     clearQueue();
     startPolling();
   } catch (cause) {
@@ -743,6 +799,9 @@ onMounted(() => {
 /* 已完成的上传只在当前停留期间保留结果；离开后回到干净的上传工作台。失败任务继续保留以便重试。 */
 onDeactivated(() => {
   if (uploadFinishedSuccessfully.value || cancelledJobs.value) clearFinishedUpload();
+  if (!batchRunning.value && batchAllCompleted.value) {
+    importTasks.value = []; clearQueue(); selectedLocalFiles.value = []; resetUploadedRecords();
+  }
 });
 /* 任务未跑完时后台（KeepAlive 失活）也保持轮询，完成后广播数据变更；回到页面时补一次刷新 */
 onActivated(() => {
@@ -756,13 +815,19 @@ onActivated(() => {
 </script>
 
 <template>
-  <section v-if="app.selectedMember.value?.permission !== 'manager'" class="plain-page"><h2>当前档案仅可查看</h2><p>上传报告需要档案管理权限，请联系该档案的共享管理者。</p></section>
+  <section v-if="app.selectedMember.value?.permission !== 'manager'" class="plain-page"><h2>当前档案仅可查看</h2><p>上传档案需要档案管理权限，请联系该档案的共享管理者。</p></section>
   <section v-else class="plain-page upload-page">
     <div class="page-intro">
-      <div><h2>上传健康报告</h2><p>保存到 {{ app.selectedMember.value?.displayName || "当前成员" }} 的档案</p></div>
+      <div><h2>上传资料</h2><p>保存到 {{ app.selectedMember.value?.displayName || "当前成员" }} 的档案，自动识别后可在记录页查看和核对。</p></div>
       <span v-if="items.length" class="count-label">{{ items.length }} 个文件 · {{ formatBytes(totalBytes) }}</span>
     </div>
 
+    <div class="upload-content-types" role="group" aria-label="上传内容">
+      <button class="soft-action-button" type="button" aria-pressed="true"><HealthCategoryIcon category="report" :size="20" />报告资料</button>
+      <button class="soft-action-button" type="button" disabled aria-label="影像，暂未开放"><HealthCategoryIcon category="imaging" :size="20" />影像 <small>暂未开放</small></button>
+    </div>
+    <p class="upload-content-hint">影像文件上传暂未开放，检查报告请使用图片或 PDF。</p>
+    <p v-if="contextMismatch" class="inline-panel-error upload-context-error" role="alert">当前成员与这个入口的来源成员不一致。请切回原成员继续，或 <button type="button" @click="router.replace('/upload')">清除来源信息，重新上传</button>。</p>
     <div
       v-if="!importTasks.length"
       class="drop-zone"
@@ -791,13 +856,13 @@ onActivated(() => {
     </div>
 
     <p v-if="error" class="upload-error">{{ error }}</p>
-    <div v-if="result" class="upload-success">
+    <div v-if="result && result.memberId === app.selectedMemberId.value" class="upload-success">
       <CheckCircle2 :size="22" />
-      <div><strong>报告已进入处理队列</strong><span>{{ result.pageCount }} 个原件，{{ result.jobCount }} 个初始任务，AI 整理后自动命名</span></div>
-      <RouterLink to="/records">查看档案</RouterLink>
+      <div><strong>本次资料已保存</strong><span>识别将在后台继续，可到记录页查看和核对。</span></div>
+      <RouterLink :to="recordsDestination">{{ recordsActionLabel }}</RouterLink>
     </div>
 
-    <section v-if="result" class="job-progress" aria-live="polite">
+    <section v-if="result && result.memberId === app.selectedMemberId.value" class="job-progress" aria-live="polite">
       <div class="job-progress-summary">
         <div>
           <strong>后台处理</strong>
@@ -817,7 +882,7 @@ onActivated(() => {
       <div v-if="ocrEmptyWarning" class="runtime-warning">
         <CircleAlert :size="18" />
         <div><strong>没有识别到任何文字</strong><span>上传的原件上没有可识别的文字内容，可能不是有效的体检报告。请确认照片清晰、完整包含报告文字后重新上传，或在档案详情中手动录入。</span></div>
-        <RouterLink to="/records">查看档案</RouterLink>
+        <RouterLink :to="recordsDestination">{{ recordsActionLabel }}</RouterLink>
       </div>
       <div v-if="failedJobs.length" class="failed-job-list">
         <article v-for="job in failedJobs" :key="job.id">
@@ -828,15 +893,16 @@ onActivated(() => {
       </div>
     </section>
 
-    <section v-if="importTasks.length" class="upload-batch-results" aria-label="导入进度">
+    <section v-if="currentImportTasks" class="upload-batch-results" aria-label="本次上传进度">
       <header><strong>已保存 {{ batchCompleted }} / {{ importTasks.length }} 份报告</strong><span>{{ batchRunning ? '请保持页面打开，文件逐份上传中' : '已保存的报告将继续后台识别' }}</span></header>
-      <article v-for="task in importTasks" :key="task.key">
+      <template v-if="!batchAllCompleted"><article v-for="task in importTasks" :key="task.key">
         <strong>{{ task.label }}</strong><span>{{ task.status === 'completed' ? '已保存 · 已进入识别队列' : task.status === 'failed' ? '上传失败' : task.status === 'uploading' ? `正在保存 · ${task.sent} / ${task.browserFiles?.length || task.localFiles?.length} 个文件` : '等待上传' }}</span>
         <p v-if="task.error" role="alert">{{ task.error }}</p>
-        <RouterLink v-if="task.reportId" to="/records">查看档案</RouterLink>
-      </article>
-      <div class="form-actions"><button v-if="importTasks.some(task => task.status === 'failed')" class="primary-button" type="button" :disabled="batchRunning" @click="runImportTasks">重试失败报告</button><button class="soft-action-button" type="button" :disabled="batchRunning" @click="clearImportTasks">{{ importTasks.some(task => task.status !== 'completed') ? '放弃未完成任务' : '继续导入' }}</button></div>
+        <RouterLink v-if="task.reportId" :to="recordsDestination">{{ recordsActionLabel }}</RouterLink>
+      </article></template>
+      <div class="form-actions"><RouterLink v-if="batchCompleted" class="soft-action-button" :to="recordsDestination">{{ recordsActionLabel }}</RouterLink><button v-if="importTasks.some(task => task.status === 'failed')" class="primary-button" type="button" :disabled="batchRunning" @click="runImportTasks">重试失败报告</button><button class="soft-action-button" type="button" :disabled="batchRunning" @click="clearImportTasks">{{ importTasks.some(task => task.status !== 'completed') ? '放弃未完成任务' : '继续上传' }}</button></div>
     </section>
+    <UploadArchivePanel v-if="!contextMismatch && !batchRunning && currentUploadIds.length && (!importTasks.length || batchAllCompleted)" :member-id="app.selectedMemberId.value" :report-ids="currentUploadIds" current-batch @saved="app.notifyDataChanged(); app.refreshReminderCount()" />
     <UploadOrganizer v-if="!importTasks.length" :files="organizerFiles" :attention="organizationAttention" @mode="organizationMode = $event" @plan="organizationPlan = $event" />
     <Teleport to="body">
       <ImageViewer v-if="uploadPreviewId && uploadPreviewPages.some(page => page.key === uploadPreviewId)" :pages="uploadPreviewPages" :start-index="uploadPreviewPages.findIndex(page => page.key === uploadPreviewId)" @close="uploadPreviewId = ''" />
@@ -866,7 +932,7 @@ onActivated(() => {
       </template>
       <div class="upload-submit">
         <span>{{ items.length }} 个文件 · {{ formatBytes(totalBytes) }}<template v-if="canSubmitOrganization">，提交后离开页面仍会继续处理</template></span>
-        <button class="primary-button" type="button" :disabled="uploading || batchRunning" @click="submit">
+        <button class="primary-button" type="button" :disabled="contextMismatch || uploading || batchRunning" @click="submit">
           <LoaderCircle v-if="uploading" class="spin-icon" :size="18" />
           <UploadCloud v-else :size="18" />
           {{ uploading ? "正在保存" : "保存并开始识别" }}
@@ -964,7 +1030,7 @@ onActivated(() => {
           <p v-if="(localError || localAvailability?.message) && localRoots.length" class="local-file-error">{{ localError || localAvailability?.message }}</p>
           <footer class="local-file-footer">
             <span>已选 {{ selectedLocalFiles.length }} 个文件<template v-if="selectedLocalFiles.length"> · {{ formatBytes(localSelectionBytes) }}</template></span>
-            <button class="primary-button" type="button" :disabled="!selectedLocalFiles.length || localImporting || (selectedLocalFiles.length > 1 && !localOrganizationPlan.length)" @click="submitLocalImport">
+            <button class="primary-button" type="button" :disabled="contextMismatch || !selectedLocalFiles.length || localImporting || (selectedLocalFiles.length > 1 && !localOrganizationPlan.length)" @click="submitLocalImport">
               <LoaderCircle v-if="localImporting" class="spin-icon" :size="18" />
               <HardDrive v-else :size="18" />
               {{ localImporting ? "正在导入" : selectedLocalFiles.length > 1 && !localOrganizationPlan.length ? (localOrganizationMode === "custom" ? "请完成全部文件分组" : "请选择组织方式") : "导入并开始识别" }}
@@ -1000,3 +1066,11 @@ onActivated(() => {
     </Teleport>
   </section>
 </template>
+
+<style scoped>
+.upload-content-types { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 6px; }
+.upload-content-types button { gap: 6px; font-size: 14px; }
+.upload-content-types small { font-size: 12px; }
+.upload-content-types button:disabled { opacity: .45; cursor: not-allowed; }
+.upload-content-hint { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 0 0 12px; }
+</style>

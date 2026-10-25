@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { useUnsavedRecord } from "../composables/useUnsavedRecord";
+import { onBeforeUnmount, computed, reactive, ref, watch } from "vue";
 import { LoaderCircle, Pencil, X } from "@lucide/vue";
 import FormSelect from "./FormSelect.vue";
 import { useScrollLock } from "../composables/useScrollLock";
@@ -23,7 +24,7 @@ type EditableFinding = {
   manualFields?: string[];
 };
 
-const props = defineProps<{ open: boolean; finding: EditableFinding | null }>();
+const props = defineProps<{ open: boolean; finding: EditableFinding | null;expectedSourceVersion?:number }>();
 const emit = defineEmits<{ close: []; saved: [] }>();
 const toast = useToast();
 const saving = ref(false);
@@ -47,8 +48,12 @@ const presenceOptions = [
   { value: "uncertain", label: "待确认" }
 ];
 
+const editVersion=ref<number>();
+let generation=0;let alive=true;onBeforeUnmount(()=>{alive=false;generation++;});
+const leave=useUnsavedRecord(()=>props.open?JSON.stringify(form):'',saving);
+async function close(){if(await leave.confirmLeave())emit('close');}
 watch(() => [props.open, props.finding] as const, ([open, finding]) => {
-  if (!open || !finding) return;
+  generation++;saving.value=false;editVersion.value=props.expectedSourceVersion;if(!open||!finding){leave.reset();return;}
   Object.assign(form, {
     organ: finding.organ || "", region: finding.region || "", laterality: finding.laterality,
     findingType: finding.findingType || "", findingName: finding.findingName || "",
@@ -60,11 +65,13 @@ watch(() => [props.open, props.finding] as const, ([open, finding]) => {
   });
   initialForm.value = { ...form };
   error.value = "";
+  leave.reset();
 }, { immediate: true });
 
 useScrollLock(computed(() => props.open));
 
 async function save() {
+  if(saving.value||!props.open)return;const token=generation;
   const id = props.finding?.id || props.finding?.findingId;
   if (!id) return;
   saving.value = true;
@@ -77,26 +84,27 @@ async function save() {
     }
     await request(`morphology-findings/${encodeURIComponent(id)}`, {
       method: "PUT",
-      body: JSON.stringify(body)
+      body: JSON.stringify({...body,expectedSourceVersion:editVersion.value})
     });
+    if(!alive||token!==generation||!props.open)return;
     toast.show("形态校对已保存");
-    emit("saved");
+    leave.reset();emit("saved");
     emit("close");
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "保存失败";
+    if(alive&&token===generation)error.value = cause instanceof Error ? cause.message : "保存失败";
   } finally {
-    saving.value = false;
+    if(token===generation)saving.value = false;
   }
 }
 </script>
 
 <template>
   <Teleport to="body">
-    <div v-if="open && finding" class="modal-backdrop morphology-editor-backdrop" @click.self="emit('close')">
+    <div v-if="open && finding" class="modal-backdrop morphology-editor-backdrop" @click.self="close">
       <section class="modal-panel morphology-editor" role="dialog" aria-modal="true" aria-label="校对形态发现">
         <header>
           <div><Pencil :size="19" /><span><strong>校对形态发现</strong><small>人工内容在后续 AI 重跑时保持优先</small></span></div>
-          <button class="plain-icon-button" type="button" title="关闭" @click="emit('close')"><X :size="18" /></button>
+          <button class="plain-icon-button" type="button" title="关闭" @click="close"><X :size="18" /></button>
         </header>
         <form class="settings-form morphology-editor-form" @submit.prevent="save">
           <div class="form-grid">
@@ -118,8 +126,8 @@ async function save() {
           </div>
           <div class="morphology-editor-original"><span>原文备案</span><p>{{ finding.rawText || "原报告未提供原文证据" }}</p></div>
           <p v-if="error" class="inline-panel-error">{{ error }}</p>
-          <footer class="form-actions morphology-editor-actions">
-            <button type="button" @click="emit('close')">取消</button>
+          <footer class="form-actions morphology-editor-actions record-form-actions">
+            <button type="button" @click="close">取消</button>
             <button class="primary-button" type="submit" :disabled="saving">
               <LoaderCircle v-if="saving" class="spin-icon" :size="16" />{{ saving ? "保存中" : "保存校对" }}
             </button>

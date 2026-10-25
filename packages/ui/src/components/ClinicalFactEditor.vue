@@ -1,5 +1,10 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import FormSuggest from './FormSuggest.vue';
+import MedicationUnitPicker from './MedicationUnitPicker.vue';
+import { medicationDosageFormOptions, medicationFrequencyOptions, medicationQuantityUnitOptions, medicationRouteOptions } from '../utils/record-form-options';
+import { useUnsavedRecord } from "../composables/useUnsavedRecord";
+import { createSubmissionKey } from "../utils/submission-key";
+import { onBeforeUnmount, computed, reactive, ref, watch } from "vue";
 import { LoaderCircle, Pencil, X } from "@lucide/vue";
 import DateTimePicker from "./DateTimePicker.vue";
 import FormSelect from "./FormSelect.vue";
@@ -12,6 +17,7 @@ type EditableFact = Record<string, unknown> & { id?: string };
 
 const props = defineProps<{
   open: boolean;
+  expectedSourceVersion?:number;
   reportId: string;
   type: ClinicalFactType;
   fact: EditableFact | null;
@@ -103,8 +109,13 @@ function factText(key: string) {
   return value === null || value === undefined ? "" : String(value);
 }
 
-watch(() => [props.open, props.type, props.fact] as const, ([open]) => {
-  if (!open) return;
+const editVersion=ref<number>();
+let generation=0;let alive=true;onBeforeUnmount(()=>{alive=false;generation++;});
+const leave=useUnsavedRecord(()=>props.open?JSON.stringify(form):'',saving);
+const submissionKey=createSubmissionKey();
+async function close(){if(await leave.confirmLeave())emit('close');}
+watch(() => [props.open, props.reportId, props.type, props.fact] as const, ([open]) => {
+  generation++;saving.value=false;editVersion.value=props.expectedSourceVersion;if(!open){leave.reset();return;}
   Object.assign(form, {
     sectionName: factText("sectionName"),
     diagnosisType: factText("diagnosisType") || "other",
@@ -148,6 +159,7 @@ watch(() => [props.open, props.type, props.fact] as const, ([open]) => {
     amount: factText("amount")
   });
   error.value = "";
+  leave.reset();submissionKey.reset();
 }, { immediate: true });
 
 useScrollLock(computed(() => props.open));
@@ -194,38 +206,40 @@ function payload() {
 }
 
 async function save() {
+  if(saving.value||!props.open)return;const token=generation;
   saving.value = true;
   error.value = "";
   try {
     if (props.fact?.id) {
       await request(`clinical-facts/${props.type}/${encodeURIComponent(props.fact.id)}`, {
         method: "PUT",
-        body: JSON.stringify(payload())
+        body: JSON.stringify({...payload(),expectedSourceVersion:editVersion.value})
       });
     } else {
       await request(`reports/${encodeURIComponent(props.reportId)}/clinical-facts`, {
         method: "POST",
-        body: JSON.stringify({ type: props.type, ...payload() })
+        body: JSON.stringify({ type: props.type, ...payload(),expectedSourceVersion:editVersion.value,requestKey:submissionKey.forRequest(props.reportId,{type:props.type,...payload(),expectedSourceVersion:editVersion.value}) })
       });
     }
+    if(!alive||token!==generation||!props.open)return;
     toast.show(`${titles[props.type]}已保存`);
-    emit("saved");
+    leave.reset();emit("saved");
     emit("close");
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "保存失败";
+    if(alive&&token===generation)error.value = cause instanceof Error ? cause.message : "保存失败";
   } finally {
-    saving.value = false;
+    if(token===generation)saving.value = false;
   }
 }
 </script>
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="modal-backdrop clinical-fact-editor-backdrop" @click.self="emit('close')">
+    <div v-if="open" class="modal-backdrop clinical-fact-editor-backdrop" @click.self="close">
       <section class="modal-panel clinical-fact-editor" role="dialog" aria-modal="true" :aria-label="`校对${titles[type]}`">
         <header>
           <div><Pencil :size="19" /><span><strong>{{ fact?.id ? "校对" : "新增" }}{{ titles[type] }}</strong><small>人工结果在后续 AI 重跑时保持优先</small></span></div>
-          <button class="plain-icon-button" type="button" title="关闭" @click="emit('close')"><X :size="18" /></button>
+          <button class="plain-icon-button" type="button" title="关闭" @click="close"><X :size="18" /></button>
         </header>
         <form class="settings-form clinical-fact-editor-form" @submit.prevent="save">
           <div v-if="type === 'diagnosis'" class="form-grid">
@@ -242,14 +256,14 @@ async function save() {
             <label class="field-wide"><span>药品名称</span><input v-model="form.medicationName" required /></label>
             <label><span>通用名</span><input v-model="form.genericName" /></label>
             <label><span>规格</span><input v-model="form.specification" /></label>
-            <label><span>剂型</span><input v-model="form.dosageForm" /></label>
+            <label><span>剂型</span><FormSuggest v-model="form.dosageForm" :options="medicationDosageFormOptions" label="剂型" name="dosageForm" placeholder="选择或填写" :disabled="saving" /></label>
             <label><span>每次剂量</span><input v-model="form.dose" /></label>
-            <label><span>剂量单位</span><input v-model="form.doseUnit" /></label>
-            <label><span>频次</span><input v-model="form.frequency" /></label>
-            <label><span>途径</span><input v-model="form.route" /></label>
+            <MedicationUnitPicker v-model="form.doseUnit" label="剂量单位" name="doseUnit" :disabled="saving" />
+            <label><span>频次</span><FormSuggest v-model="form.frequency" :options="medicationFrequencyOptions" label="用药频次" name="frequency" placeholder="选择或填写" :disabled="saving" /></label>
+            <label><span>途径</span><FormSuggest v-model="form.route" :options="medicationRouteOptions" label="使用途径" name="route" placeholder="选择或填写" :disabled="saving" /></label>
             <label><span>疗程</span><input v-model="form.duration" /></label>
             <label><span>数量</span><input v-model="form.quantity" /></label>
-            <label><span>数量单位</span><input v-model="form.quantityUnit" /></label>
+            <label><span>数量单位</span><FormSuggest v-model="form.quantityUnit" :options="medicationQuantityUnitOptions" label="数量单位" name="quantityUnit" placeholder="选择或填写" :disabled="saving" /></label>
             <label class="field-wide"><span>原文用法</span><textarea v-model="form.instructions" rows="3"></textarea></label>
           </div>
           <div v-else-if="type === 'procedure'" class="form-grid">
@@ -284,8 +298,8 @@ async function save() {
             <label><span>数量</span><input v-model="form.quantity" type="number" min="0" step="any" /></label>
           </div>
           <p v-if="error" class="inline-panel-error">{{ error }}</p>
-          <footer>
-            <button type="button" @click="emit('close')">取消</button>
+          <footer class="form-actions record-form-actions">
+            <button type="button" @click="close">取消</button>
             <button class="primary-button" type="submit" :disabled="saving">
               <LoaderCircle v-if="saving" class="spin-icon" :size="16" />{{ saving ? "保存中" : "保存校对" }}
             </button>

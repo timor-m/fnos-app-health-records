@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { flushPromises, mount } from "@vue/test-utils";
+import { DOMWrapper, flushPromises, mount } from "@vue/test-utils";
 import { ref } from "vue";
 
 vi.mock("../src/composables/useAppContext", () => ({
@@ -14,6 +14,7 @@ vi.mock("../src/composables/useConfirm", () => ({ useConfirm: () => ({ ask: vi.f
 vi.mock("../src/composables/useToast", () => ({ useToast: () => ({ show: vi.fn() }) }));
 vi.mock("../src/composables/useScrollLock", () => ({ useScrollLock: () => {} }));
 
+import FormSelect from "../src/components/FormSelect.vue";
 import ReportDetail from "../src/components/ReportDetail.vue";
 
 const observation = {
@@ -500,4 +501,29 @@ it('teleports only supplementation into a separate dialog and returns editing to
   expect(document.querySelector('[aria-label="补充指标来源页"]')).toBeNull();
   expect(document.querySelector('.observation-add-backdrop')).toBeNull();
  } finally {wrapper.unmount();}
+});
+
+it('corrects an other document through a type-only dialog while preserving unrelated metadata',async()=>{
+ let current={...detailPayload,reportType:'other',observations:[],summary:'合成原有结论'};
+ fetchMock.mockImplementation(async(input:RequestInfo|URL,options?:RequestInit)=>{
+  if(String(input).endsWith('/api/reports/r1')){if(options?.method==='PUT')current={...current,...JSON.parse(String(options.body)),sourceVersion:8};return jsonResponse(current);}
+  if(String(input).includes('jobs'))return jsonResponse([]);return jsonResponse({});
+ });
+ const wrapper=mount(ReportDetail,{attachTo:document.body,props:{reportId:'r1',variant:'panel'},global:{stubs:{RouterLink:true,ReportNotesPanel:true,ReportPageAppend:true}}});
+ try{await flushPromises();await flushPromises();expect(wrapper.text()).toContain('暂归为其他资料');
+ await wrapper.findAll('button').find(button=>button.text()==='修改类型')!.trigger('click');await flushPromises();
+ const dialog=new DOMWrapper(document.body).get('.report-type-form');wrapper.findAllComponents(FormSelect).find(select=>select.props('ariaLabel')==='资料类型')!.vm.$emit('update:modelValue','outpatient');await flushPromises();
+ await dialog.trigger('submit');await flushPromises();
+ const call=fetchMock.mock.calls.find(([,options])=>options?.method==='PUT')!;
+ expect(JSON.parse(String(call[1].body))).toEqual({reportType:'outpatient',expectedSourceVersion:7});
+ expect(document.querySelector('.report-type-form')).toBeNull();expect(current.summary).toBe('合成原有结论');
+ }finally{wrapper.unmount();}
+});
+it('offers confirmation on outpatient and inpatient clinical facts and links an already recorded vaccination',async()=>{
+ for(const reportType of ['outpatient','inpatient']){
+ const vaccinations=[{id:'v',vaccineName:'合成疫苗',doseNumber:'1',evidence:[],manualFields:[],confirmedVaccinationId:'confirmed'}];
+ fetchMock.mockImplementation(async(input:RequestInfo|URL)=>String(input).endsWith('/api/reports/r1')?jsonResponse({...detailPayload,reportType,observations:[],medications:[{id:'m',medicationName:'合成药品',evidence:[],manualFields:[]}],vaccinations}):String(input).includes('jobs')?jsonResponse([]):jsonResponse({}));
+ const wrapper=mount(ReportDetail,{attachTo:document.body,props:{reportId:'r1',variant:'panel'},global:{stubs:{RouterLink:{props:['to'],template:'<a><slot/></a>'},ReportNotesPanel:true,ReportPageAppend:true}}});
+ try{await flushPromises();await flushPromises();expect(wrapper.text()).toContain('报告所列用药');expect(wrapper.text()).toContain('确认实际使用');expect(wrapper.text()).toContain('查看已记录接种');expect(wrapper.text()).not.toContain('核对并记录');}finally{wrapper.unmount();}
+ }
 });

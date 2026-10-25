@@ -1,6 +1,7 @@
+import {memberBackgroundVersion,cleanMemberBackground} from './member-background';
 import { getAppConfig } from "../utils/runtime-config";
 import { createError } from "h3";
-import { rollbackAfterError, getDatabase, runInTransaction } from "../database/client";
+import { getDatabase, runInTransaction } from "../database/client";
 import { isAdministrator, type RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 
@@ -11,6 +12,7 @@ const bloodTypeAbos = new Set(["A", "B", "AB", "O"]);
 const bloodTypeRhs = new Set(["positive", "negative"]);
 
 type MemberInput = {
+  careAllergies?:unknown; careHistory?:unknown; careMedications?:unknown; careBackgroundVersion?:unknown;
   displayName?: unknown;
   relationship?: unknown;
   createSelf?: unknown;
@@ -103,12 +105,14 @@ function cleanBloodTypeRh(value: unknown) {
 function memberRow(memberId: string) {
   return getDatabase().prepare(`
     SELECT id, display_name AS displayName, relationship, birth_date AS birthDate,
+      care_allergies AS careAllergies,care_history AS careHistory,care_medications AS careMedications,
       sex, blood_type_abo AS bloodTypeAbo, blood_type_rh AS bloodTypeRh,
       blood_type_source_report_id AS bloodTypeSourceReportId,
       avatar_path AS avatarPath, created_by AS createdBy
     FROM health_members WHERE id = ? AND deleted_at IS NULL
   `).get(memberId) as {
     id: string;
+    careAllergies:string|null;careHistory:string|null;careMedications:string|null;
     displayName: string;
     relationship: string;
     birthDate: string | null;
@@ -186,9 +190,12 @@ function audit(user: RequestUser, action: string, targetId: string, detail: Reco
   `).run(createId("audit"), user.id, action, targetId, JSON.stringify(detail));
 }
 
+function background(value:unknown){try{return cleanMemberBackground(value===undefined?null:value);}catch{throw createError({statusCode:400,statusMessage:'健康背景最多填写 2000 字'});}}
+
 export function createMember(user: RequestUser, input: MemberInput) {
   requireAuthenticated(user);
   const member = {
+    careAllergies:background(input.careAllergies),careHistory:background(input.careHistory),careMedications:background(input.careMedications),
     id: createId("member"),
     displayName: cleanName(input.displayName),
     relationship: input.createSelf === true ? "self" : cleanRelationship(input.relationship),
@@ -198,30 +205,27 @@ export function createMember(user: RequestUser, input: MemberInput) {
     bloodTypeRh: cleanBloodTypeRh(input.bloodTypeRh)
   };
   const db = getDatabase();
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  let existingMember: (ReturnType<typeof requireMember> & {permission:"viewer"|"manager"}) | undefined;
+  runInTransaction(db, () => {
     if (input.createSelf === true) {
       const existing = db.prepare('SELECT self_member_id AS id FROM account_preferences WHERE user_id=?').get(user.id) as {id:string|null}|undefined;
-      if (existing?.id) { const permission=assertMemberAccess(user,existing.id); db.exec('COMMIT'); return {...requireMember(existing.id),permission}; }
+      if (existing?.id) { const permission=assertMemberAccess(user,existing.id); existingMember={...requireMember(existing.id),permission}; return; }
       const candidates = db.prepare("SELECT id FROM health_members WHERE created_by=? AND relationship='self' AND deleted_at IS NULL").all(user.id);
       if(candidates.length) throw createError({statusCode:409,statusMessage:'已有本人候选档案，请先确认关联，避免重复建档'});
     }
     db.prepare(`
-      INSERT INTO health_members (id, display_name, relationship, birth_date, sex, blood_type_abo, blood_type_rh, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(member.id, member.displayName, member.relationship, member.birthDate, member.sex, member.bloodTypeAbo, member.bloodTypeRh, user.id);
+      INSERT INTO health_members (id, display_name, relationship, birth_date, sex, blood_type_abo, blood_type_rh, created_by,care_allergies,care_history,care_medications)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(member.id, member.displayName, member.relationship, member.birthDate, member.sex, member.bloodTypeAbo, member.bloodTypeRh, user.id,member.careAllergies,member.careHistory,member.careMedications);
     db.prepare(`
       INSERT INTO member_permissions (member_id, user_id, permission, granted_by,can_manage_sharing)
       VALUES (?, ?, 'manager', ?,1)
     `).run(member.id, user.id, user.id);
     if (input.createSelf === true) db.prepare(`INSERT INTO account_preferences(user_id,self_member_id,self_profile_choice) VALUES (?,?,'created') ON CONFLICT(user_id) DO UPDATE SET self_member_id=excluded.self_member_id,self_profile_choice='created'`).run(user.id,member.id);
     audit(user, "member.create", member.id, { relationship: member.relationship });
-    db.exec("COMMIT");
-  } catch (error) {
-    rollbackAfterError(db);
-    throw error;
-  }
-  return { ...member, avatarPath: null, permission: "manager" as const };
+  });
+  if (existingMember) return existingMember;
+  return { ...member,careBackgroundVersion:memberBackgroundVersion(member), avatarPath: null, permission: "manager" as const };
 }
 
 export function updateMember(user: RequestUser, memberId: string, input: MemberInput) {
@@ -232,7 +236,10 @@ export function updateMember(user: RequestUser, memberId: string, input: MemberI
     : current.relationship === "self"
       ? "self"
       : cleanRelationship(input.relationship);
+  const backgroundTouched=['careAllergies','careHistory','careMedications'].some(key=>key in input);
+  if(backgroundTouched&&input.careBackgroundVersion!==memberBackgroundVersion(current))throw createError({statusCode:409,statusMessage:'成员健康背景已变化，请重新打开后核对'});
   const next = {
+    careAllergies:input.careAllergies===undefined?current.careAllergies:background(input.careAllergies),careHistory:input.careHistory===undefined?current.careHistory:background(input.careHistory),careMedications:input.careMedications===undefined?current.careMedications:background(input.careMedications),
     displayName: input.displayName === undefined ? current.displayName : cleanName(input.displayName),
     relationship: nextRelationship,
     birthDate: input.birthDate === undefined ? current.birthDate : cleanBirthDate(input.birthDate),
@@ -244,17 +251,17 @@ export function updateMember(user: RequestUser, memberId: string, input: MemberI
   const bloodTypeTouched = input.bloodTypeAbo !== undefined || input.bloodTypeRh !== undefined;
   getDatabase().prepare(`
     UPDATE health_members SET display_name = ?, relationship = ?, birth_date = ?, sex = ?,
-      blood_type_abo = ?, blood_type_rh = ?,
+      blood_type_abo = ?, blood_type_rh = ?,care_allergies=?,care_history=?,care_medications=?,
       blood_type_source_report_id = CASE WHEN ? THEN NULL ELSE blood_type_source_report_id END,
       updated_at = CURRENT_TIMESTAMP WHERE id = ?
-  `).run(next.displayName, next.relationship, next.birthDate, next.sex, next.bloodTypeAbo, next.bloodTypeRh, bloodTypeTouched ? 1 : 0, memberId);
+  `).run(next.displayName, next.relationship, next.birthDate, next.sex, next.bloodTypeAbo, next.bloodTypeRh,next.careAllergies,next.careHistory,next.careMedications, bloodTypeTouched ? 1 : 0, memberId);
   audit(user, "member.update", memberId);
   const permission = getDatabase().prepare(`
     SELECT permission FROM member_permissions WHERE member_id = ? AND user_id = ?
   `).get(memberId, user.id) as { permission: "viewer" | "manager" } | undefined;
   return {
     ...current,
-    ...next,
+    ...next,careBackgroundVersion:memberBackgroundVersion(next),
     bloodTypeSourceReportId: bloodTypeTouched ? null : current.bloodTypeSourceReportId,
     permission: permission?.permission || "manager"
   };

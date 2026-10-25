@@ -50,8 +50,14 @@ function updatePanelPosition() {
   }
   const width = rect ? Math.min(Math.max(rect.width, props.panelMinWidth || 0, contentWidth), window.innerWidth - 24) : 0;
   if (panel.value && rect) panel.value.style.width = `${width}px`;
+  const below = rect ? window.innerHeight - rect.bottom - 18 : 0;
+  const above = rect ? rect.top - 18 : 0;
+  const flip = below < Math.min(panel.value?.scrollHeight || 240, 240) && above > below;
+  const height = Math.max(0, Math.min(240, flip ? above : below));
   panelStyle.value = rect
-    ? { position: "fixed", left: `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`, top: `${rect.bottom + 6}px`, width: `${width}px` }
+    ? { position: "fixed", left: `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`,
+      ...(flip ? { bottom: `${window.innerHeight - rect.top + 6}px` } : { top: `${rect.bottom + 6}px` }),
+      maxHeight: `${height}px`, width: `${width}px` }
     : {};
 }
 
@@ -65,11 +71,14 @@ function toggle() {
 }
 
 function pick(option: Option) {
-  if (option.disabled) return;
+  if (props.disabled || option.disabled) return;
   emit("update:modelValue", option.value);
   emit("change", option.value);
   open.value = false;
+  root.value?.querySelector<HTMLButtonElement>('button')?.focus();
 }
+
+watch(() => props.disabled, (disabled) => { if (disabled) open.value = false; });
 
 function onDocPointerDown(event: Event) {
   const target = event.target as Node;
@@ -77,7 +86,26 @@ function onDocPointerDown(event: Event) {
   open.value = false;
 }
 function onKeydown(event: Event) {
-  if (event instanceof KeyboardEvent && event.key === "Escape") open.value = false;
+  if (!(event instanceof KeyboardEvent) || !open.value) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    open.value = false;
+    root.value?.querySelector<HTMLButtonElement>('button')?.focus();
+    return;
+  }
+  const buttons = [...(panel.value?.querySelectorAll<HTMLButtonElement>('.form-select-option:not(:disabled)') || [])];
+  if (!buttons.length || !panel.value?.contains(document.activeElement)) return;
+  const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+  if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+    event.preventDefault();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+      : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+    buttons[next]?.focus();
+  } else if (event.key === 'Tab') {
+    // Resume normal form tab order from the trigger, rather than the teleported panel.
+    open.value = false;
+    root.value?.querySelector<HTMLButtonElement>('button')?.focus();
+  }
 }
 
 watch(open, (value) => {
@@ -87,7 +115,11 @@ watch(open, (value) => {
   window[action]("keydown", onKeydown);
   window[action]("resize", updatePanelPosition);
   window[action]("scroll", updatePanelPosition, true);
-  if (value) nextTick(updatePanelPosition);
+  if (value) nextTick(() => {
+    updatePanelPosition();
+    (panel.value?.querySelector<HTMLButtonElement>('.form-select-option.selected:not(:disabled)')
+      || panel.value?.querySelector<HTMLButtonElement>('.form-select-option:not(:disabled)'))?.focus();
+  });
 });
 onBeforeUnmount(() => {
   document.removeEventListener("mousedown", onDocPointerDown);

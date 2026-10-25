@@ -229,3 +229,10 @@ test("normalizes report-type-specific facts into stable structures", () => {
   assert.equal(result.billingSummary?.totalAmount, 128);
   assert.equal(result.billingItems[0].itemName, "血常规");
 });
+
+test('clinical narrative tasks retain explicitly documented vaccinations and disambiguate dates and continuation rows',()=>{
+ for(const type of ['outpatient','inpatient'] as const){
+  const prompt=promptForInput({reportId:'synthetic',text:'合成接种记录',inputCharacters:6,pageCount:3,route:'narrative',primaryContentType:type,contentTypes:[type,'prescription'],documentContentType:type});
+  for(const key of ['vaccinations','administeredAt','nextDueAt','lotNumber','不能用就诊','同编号明确续表'])assert.ok(prompt.includes(key),key);
+ }
+});

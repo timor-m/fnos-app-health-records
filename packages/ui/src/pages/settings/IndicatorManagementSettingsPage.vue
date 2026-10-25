@@ -220,7 +220,7 @@ onBeforeUnmount(clearNormalizationPoll);
           </button>
         </div>
       </header>
-      <p class="preview-hint">这里只重新匹配指标字典，不重新 OCR 或调用 AI，也不会修改原始指标。原始名称或数值提取错误时，请回到报告详情重新识别。</p>
+      <p class="preview-hint">这里只重新匹配指标字典，不重新 OCR 或调用 AI，也不会修改原始指标。原始名称或数值提取错误时，请回到档案详情重新识别。</p>
       <div v-if="normalizationTaskActive && normalizationTask" class="maintenance-task-progress">
         <div class="maintenance-task-progress-head">
           <span>{{ normalizationTask.mode === "full" ? "全部重新匹配" : "匹配未归类项" }}</span>

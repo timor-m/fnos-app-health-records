@@ -38,11 +38,11 @@ test('organization attention scrolls only when outside the usable viewport', () 
 
 test('save prompts for organization before issuing any upload request', async () => {
   const script = page.slice(page.indexOf('async function submit()'), page.indexOf('\nonBeforeUnmount(() => {\n  clearQueue();'));
-  const create = new Function('uploading', 'batchRunning', 'importTasks', 'items', 'canSubmitOrganization', 'organizationMode', 'toast', 'organizationAttention', transpile(script + '\nreturn submit;', { target: ScriptTarget.ES2022 }));
+  const create = new Function('uploading', 'batchRunning', 'importTasks', 'items', 'canSubmitOrganization', 'organizationMode', 'toast', 'organizationAttention', 'contextMismatch', transpile(script + '\nreturn submit;', { target: ScriptTarget.ES2022 }));
   const mode = ref('');
   const messages: string[] = [];
   const attention = ref(0);
-  const submit = create(ref(false), ref(false), ref([]), ref([{ id: 'a' }, { id: 'b' }]), ref(false), mode, { show: (message: string) => messages.push(message) }, attention);
+  const submit = create(ref(false), ref(false), ref([]), ref([{ id: 'a' }, { id: 'b' }]), ref(false), mode, { show: (message: string) => messages.push(message) }, attention, ref(false));
   await submit();
   assert.equal(attention.value, 1);
   await submit();
@@ -53,7 +53,7 @@ test('save prompts for organization before issuing any upload request', async ()
   assert.equal(attention.value, 2);
   assert.match(organizer, /v-if="attention && !mode" :key="attention"/);
   assert.match(organizer, /prefers-reduced-motion: reduce/);
-  assert.match(page, /:disabled="uploading \|\| batchRunning" @click="submit"/);
+  assert.match(page, /:disabled="contextMismatch \|\| uploading \|\| batchRunning" @click="submit"/);
   assert.doesNotMatch(page, /:disabled="uploading \|\| !canSubmitOrganization"/);
 });
 

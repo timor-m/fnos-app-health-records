@@ -1,3 +1,5 @@
+import { registerUploadedReport, validateUploadContext } from './health-upload-workflow.service';
+import type { HealthUploadContext } from '../../shared/health-upload';
 import { classifySystemError } from "../utils/api-error";
 import { createHash } from "node:crypto";
 import {
@@ -5,7 +7,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { createError } from "h3";
-import { getDatabase } from "../database/client";
+import { getDatabase, runInTransaction } from "../database/client";
 import type { RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 import { getAppConfig } from "../utils/runtime-config";
@@ -209,27 +211,32 @@ function createValidatedUpload(
   memberId: string,
   validated: ValidatedUploadFile[],
   source: "browser_upload" | "nas_import",
-  requestKey?: string
+  requestKey?: string,
+  inputContext?: HealthUploadContext,
+  commit?: (upload: UploadCreated) => void
 ) {
   assertMemberManage(user, memberId);
   if (requestKey !== undefined && (typeof requestKey !== 'string' || !/^[a-zA-Z0-9_-]{16,100}$/.test(requestKey))) {
     throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: "上传请求编号无效" });
   }
+  const context = validateUploadContext(user, memberId, inputContext);
   const db = getDatabase();
   const readReceipt = () => requestKey ? db.prepare(
     'SELECT member_id, content_hash, report_id, response_json FROM upload_receipts WHERE user_id = ? AND request_key = ?'
   ).get(user.id, requestKey) as { member_id: string; content_hash: string; report_id: string | null; response_json: string } | undefined : undefined;
   const fingerprint = (files: Array<{sha256: string; originalName: string; rotation: number}>) =>
-    createHash('sha256').update(JSON.stringify({ memberId, source, files: files.map(page => [page.sha256, page.originalName, page.rotation]) })).digest('hex');
+    createHash('sha256').update(JSON.stringify({ memberId, source, files: files.map(page => [page.sha256, page.originalName, page.rotation]), ...(Object.keys(context).length ? {context} : {}) })).digest('hex');
   const receiptResult = (previous: NonNullable<ReturnType<typeof readReceipt>>, contentHash: string) => {
     if (previous.member_id !== memberId || previous.content_hash !== contentHash) throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: '重试内容与原上传不一致，请重新创建上传任务' });
-    if (!previous.report_id) throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: '该上传对应的报告已删除，请重新创建上传任务' });
+    if (!previous.report_id || !db.prepare("SELECT 1 FROM reports WHERE id=? AND member_id=? AND status<>'trashed'").get(previous.report_id,memberId)) throw createError({ statusCode: 409, data: { code: "UPLOAD_CONFLICT" }, statusMessage: '该上传对应的报告已删除或归属已改变，请刷新后重新创建上传任务' });
     return JSON.parse(previous.response_json) as UploadCreated;
   };
   const existing = readReceipt();
   if (existing) {
     // Hash the retry without creating another report directory or copying its files.
-    return receiptResult(existing, fingerprint(validated.map(file => ({ ...file, sha256: persistValidatedFile(file) }))));
+    const result = receiptResult(existing, fingerprint(validated.map(file => ({ ...file, sha256: persistValidatedFile(file) }))));
+    if (commit) runInTransaction(db, () => commit(result));
+    return result;
   }
   const reportTitle = "待识别报告";
   const reportId = createId("report");
@@ -255,13 +262,13 @@ function createValidatedUpload(
       };
     });
 
-    db.exec("BEGIN IMMEDIATE");
+    return runInTransaction(db, () => {
     const contentHash = fingerprint(prepared);
     // Another process may have committed the same key while files were being copied.
     const previous = readReceipt();
     if (previous) {
       const result = receiptResult(previous, contentHash);
-      db.exec('COMMIT');
+      commit?.(result);
       rmSync(absoluteDirectory, { recursive: true, force: true });
       return result;
     }
@@ -314,7 +321,9 @@ function createValidatedUpload(
       fileCount: prepared.length,
       totalBytes: prepared.reduce((sum, page) => sum + page.fileSize, 0)
     }));
+    const workflow = registerUploadedReport(user, memberId, reportId, context);
     const result = {
+      ...workflow,
       reportId,
       memberId,
       status: "queued" as const,
@@ -326,10 +335,10 @@ function createValidatedUpload(
       }))
     };
     if (requestKey) db.prepare('INSERT INTO upload_receipts (user_id, request_key, member_id, content_hash, report_id, response_json) VALUES (?, ?, ?, ?, ?, ?)').run(user.id, requestKey, memberId, contentHash, reportId, JSON.stringify(result));
-    db.exec("COMMIT");
+    commit?.(result);
     return result;
+    });
   } catch (error) {
-    try { db.exec("ROLLBACK"); } catch { /* Transaction may not have started yet. */ }
     try { rmSync(absoluteDirectory, { recursive: true, force: true }); } catch { /* Preserve original failure. */ }
     throw error;
   }
@@ -337,16 +346,16 @@ function createValidatedUpload(
 
 type UploadCreated = { reportId: string; memberId: string; status: 'queued'; title: string; pageCount: number; jobCount: number; pages: Array<{ id: string; pageNumber: number; originalName: string; mimeType: string; fileSize: number; rotation: number }> };
 
-export function createUpload(user: RequestUser, memberId: string, files: UploadInputFile[], requestKey?: string) {
-  return createValidatedUpload(user, memberId, validateFiles(files), "browser_upload", requestKey);
+export function createUpload(user: RequestUser, memberId: string, files: UploadInputFile[], requestKey?: string, context?: HealthUploadContext) {
+  return createValidatedUpload(user, memberId, validateFiles(files), "browser_upload", requestKey, context);
 }
 
-export function createUploadFromLocalFiles(user: RequestUser, memberId: string, files: LocalUploadInputFile[], requestKey?: string) {
-  return createValidatedUpload(user, memberId, validateLocalFiles(files), "nas_import", requestKey);
+export function createUploadFromLocalFiles(user: RequestUser, memberId: string, files: LocalUploadInputFile[], requestKey?: string, context?: HealthUploadContext) {
+  return createValidatedUpload(user, memberId, validateLocalFiles(files), "nas_import", requestKey, context);
 }
 
-export function createUploadFromStagedFiles(user: RequestUser, memberId: string, files: LocalUploadInputFile[], requestKey?: string) {
-  return createValidatedUpload(user, memberId, validateLocalFiles(files), "browser_upload", requestKey);
+export function createUploadFromStagedFiles(user: RequestUser, memberId: string, files: LocalUploadInputFile[], requestKey?: string, context?: HealthUploadContext) {
+  return createValidatedUpload(user, memberId, validateLocalFiles(files), "browser_upload", requestKey, context);
 }
 
 
@@ -509,4 +518,10 @@ export function listProcessingJobs(user: RequestUser, reportId: string) {
       layoutWarnings: layoutWarningsByJob.get(job.id) || [],
     };
   });
+}
+
+/** Save a record and its new original in the same database transaction and file cleanup boundary. */
+export function createUploadFromStagedFilesWithCommit(user: RequestUser, memberId: string, files: LocalUploadInputFile[],
+  requestKey: string, commit: (upload: UploadCreated) => void) {
+  return createValidatedUpload(user, memberId, validateLocalFiles(files), 'browser_upload', requestKey, undefined, commit);
 }

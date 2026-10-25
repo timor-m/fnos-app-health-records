@@ -1,3 +1,4 @@
+import { runHealthWorkflowRequest } from './health-workflow-request.service';
 import { createError } from 'h3';
 import { getDatabase, runInTransaction } from '../database/client';
 import type { RequestUser } from '../domain/request-user';
@@ -87,7 +88,14 @@ function validateExamination(input: unknown): ExaminationInput {
   return result as ExaminationInput;
 }
 /** One editor submission is atomic, protected by both source and examination revisions. */
-export function saveReportExamination(user: RequestUser, reportId: string, body: Record<string,unknown>) {
+export function saveReportExamination(user:RequestUser,reportId:string,body:Record<string,unknown>) {
+ const report=reportAccess(user,reportId,true);
+ // Short keys belong to older clients; keep their existing version-conflict behavior.
+ if(typeof body.requestKey!=='string'||body.requestKey.length<16)return saveReportExaminationRecord(user,reportId,body);
+ return runHealthWorkflowRequest(user,report.memberId,'report.examination.save',{...body,reportId},()=>saveReportExaminationRecord(user,reportId,body),()=>getReportExaminations(user,reportId));
+}
+
+function saveReportExaminationRecord(user: RequestUser, reportId: string, body: Record<string,unknown>) {
   reportAccess(user,reportId,true);
   if (!Number.isSafeInteger(body.version) || !Number.isSafeInteger(body.reportVersion)) invalid('缺少检查记录版本，请刷新后重试');
   if (body.id !== undefined && (typeof body.id !== 'string' || !body.id)) invalid('检查记录无效');

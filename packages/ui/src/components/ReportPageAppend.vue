@@ -32,6 +32,7 @@ import { useScrollLock } from "../composables/useScrollLock";
 const props = defineProps<{
   reportId: string;
   oldPageCount: number;
+  label?: string;
   reportTitle?: string;
   memberName?: string;
   busy?: boolean;
@@ -179,7 +180,7 @@ const triggerLabel = computed(() => {
       ? "补页 · 上传中"
       : "补页 · 提交中";
   if (!batch.value)
-    return localFiles.value.length ? "补页 · 待上传" : "补充报告页";
+    return localFiles.value.length ? "补页 · 待上传" : props.label || "补充报告页";
   const states: Record<string, string> = {
     uploading: "待上传",
     preparing: "准备中",
@@ -195,7 +196,7 @@ const triggerLabel = computed(() => {
   };
   return states[batch.value.state]
     ? `补页 · ${states[batch.value.state]}`
-    : "补充报告页";
+    : props.label || "补充报告页";
 });
 const steps = ["准备页面", "识别文字", "AI 整理", "完成"];
 const currentStep = computed(() => {
@@ -543,7 +544,7 @@ async function importNas() {
       type="button"
       ref="trigger"
       class="soft-action-button"
-      :aria-label="`补充报告页：${triggerLabel}`"
+      :aria-label="props.label ? triggerLabel : `补充报告页：${triggerLabel}`"
       :class="{
         'append-trigger-active': processing || working,
         'append-trigger-attention': needsAttention,
@@ -576,13 +577,13 @@ async function importNas() {
           role="dialog"
           aria-modal="true"
           class="sheet-panel append-panel"
-          aria-label="补充报告页"
+          :aria-label="props.label || '补充报告页'"
           @dragover.prevent
           @drop.prevent="dropped"
         >
           <header class="sheet-header append-header">
             <div>
-              <h4>补充报告页</h4>
+              <h4>{{ props.label || '补充报告页' }}</h4>
               <p v-if="reportTitle || memberName">
                 {{ reportTitle }} · {{ memberName }}
               </p>
@@ -590,14 +591,15 @@ async function importNas() {
             <button
               type="button"
               class="icon-button"
-              aria-label="关闭补充报告页"
+              :aria-label="props.label ? '关闭附件上传' : '关闭补充报告页'"
               @click="open = false"
             >
               <X :size="18" />
             </button>
           </header>
           <div class="append-body">
-            <p class="append-muted">
+            <p v-if="props.label" class="append-muted">附件将添加到当前原件中（已有 {{ oldPageCount }} 页），支持图片和 PDF。</p>
+            <p v-else class="append-muted">
               将页面补充到当前报告（已有
               {{ oldPageCount }}
               页）。可补充当前成员的漏页或其他检查；不同日期的检查分别记录，时间不明确时需核对。
@@ -606,7 +608,7 @@ async function importNas() {
             <template v-if="!batch">
               <div class="drop-zone">
                 <span class="drop-icon"><ImagePlus :size="30" /></span>
-                <strong>拖放报告页到这里</strong>
+                <strong>{{ props.label ? '拖放附件到这里' : '拖放报告页到这里' }}</strong>
                 <span class="drop-hint"
                   >HEIC、JPEG、PNG、WebP 或多页 PDF，每个文件最多 40 MB</span
                 >
@@ -618,7 +620,7 @@ async function importNas() {
                       multiple
                       :disabled="working"
                       accept="image/jpeg,image/png,image/webp,image/heic,.heif,application/pdf"
-                      aria-label="选择补充报告文件"
+                      :aria-label="props.label ? '选择附件' : '选择补充报告文件'"
                       @change="picked"
                     />
                   </label>
@@ -629,7 +631,7 @@ async function importNas() {
                       :disabled="working"
                       accept="image/*"
                       capture="environment"
-                      aria-label="拍摄补充报告照片"
+                      :aria-label="props.label ? '拍摄附件照片' : '拍摄补充报告照片'"
                       @change="picked"
                     />
                   </label>
@@ -1093,7 +1095,7 @@ async function importNas() {
 }
 .append-header h4 {
   margin: 0 0 4px;
-  font-size: 17px;
+  font-size: 16px;
 }
 .append-header p {
   color: var(--muted);
@@ -1137,7 +1139,7 @@ async function importNas() {
 }
 .append-panel h5 {
   margin: 0;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--ink-2);
 }
 .append-panel p {
@@ -1231,7 +1233,7 @@ async function importNas() {
   justify-content: center;
   gap: 4px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 .append-steps li.current,
@@ -1245,7 +1247,7 @@ async function importNas() {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  font-size: 10px;
+  font-size: 12px;
   flex-shrink: 0;
 }
 .append-progress-message {
@@ -1259,7 +1261,7 @@ async function importNas() {
   color: var(--brand);
 }
 .append-progress-message strong {
-  font-size: 13px;
+  font-size: 14px;
 }
 .append-progress-message p,
 .append-background-hint {
@@ -1303,7 +1305,7 @@ async function importNas() {
   white-space: nowrap;
 }
 .append-file-list small {
-  font-size: 11px;
+  font-size: 12px;
 }
 .append-page-grid {
   display: grid;
@@ -1355,7 +1357,7 @@ async function importNas() {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .append-page-tools {
   display: flex;
@@ -1409,7 +1411,7 @@ async function importNas() {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--ink-2);
 }

@@ -270,3 +270,10 @@ export function mergeContentClassifications(
   }
   return finalizeClassification(scores, reasons);
 }
+
+
+/** Preserve explicit vaccination sections in mixed clinical documents. */
+export function hasVaccinationContent(value:string){
+ const text=medicationText(value);
+ return /接种记录|接种凭证|疫苗名称|接种日期|接种剂次|疫苗批号|预防接种/.test(text);
+}

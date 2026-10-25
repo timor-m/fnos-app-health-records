@@ -180,7 +180,7 @@ test("reprocess protection is consistent in UI guards and the server active-job 
 test("report switches and keep-alive activation restore status reading safely", () => {
   assert.match(
     reportDetail,
-    /watch\(\(\) => props\.reportId,[\s\S]*?jobsPollingStopped\.value = false;/
+    /watch\(\(\) => \[props\.reportId, props\.expectedMemberId\] as const,[\s\S]*?jobsPollingStopped\.value = false;/
   );
   assert.match(
     reportDetail,

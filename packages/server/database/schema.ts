@@ -1,3 +1,5 @@
+import { healthRecordProcessSchemaSql } from './health-record-process-draft';
+import { healthCategorySchemaSql } from './health-category-draft';
 import { memberMergeSchemaSql } from "./member-merge-draft";
 import { feedbackNotificationsSchemaSql } from "./feedback-notifications";
 import { reportExaminationDraftSql } from "./report-examination-draft";
@@ -22,6 +24,11 @@ import {
 
 import { reportNotesSchemaSql } from "./report-notes-draft";
 import { trendGroupsSchemaSql } from "./trend-groups-draft";
+import { healthEventDraftSql } from "./health-event-draft";
+import { healthProcessSchemaSql } from "./health-process-draft";
+import { healthWorkflowDraftSql } from "./health-workflow-draft";
+import { healthUploadSchemaSql } from "./health-upload-draft";
+import { medicationDraftSchemaSql } from "./medication-draft";
 export const schemaVersion = latestSchemaVersion;
 
 export const schemaSql = `
@@ -58,6 +65,7 @@ CREATE TABLE IF NOT EXISTS health_members (
   id TEXT PRIMARY KEY,
   display_name TEXT NOT NULL,
   relationship TEXT NOT NULL DEFAULT 'self',
+  care_allergies TEXT, care_history TEXT, care_medications TEXT,
   birth_date TEXT,
   sex TEXT CHECK (sex IS NULL OR sex IN ('male', 'female', 'unknown')),
   blood_type_abo TEXT CHECK (blood_type_abo IS NULL OR blood_type_abo IN ('A', 'B', 'AB', 'O')),
@@ -594,4 +602,11 @@ ${uploadReceiptSchemaSql}
 ${pageAppendSchemaSql}
 ${reportDuplicateDraftSql}
 ${reportExaminationDraftSql}
+${healthEventDraftSql}
+${healthProcessSchemaSql}
+${healthWorkflowDraftSql}
+${healthUploadSchemaSql}
+${medicationDraftSchemaSql}
+${healthCategorySchemaSql}
+${healthRecordProcessSchemaSql}
 `;

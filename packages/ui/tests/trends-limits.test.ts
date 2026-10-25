@@ -37,6 +37,20 @@ function series(texts: string[]) {
     firstDate: points[0].reportIssuedAt, lastDate: points.at(-1)!.reportIssuedAt};
 }
 
+it('shows only the calendar date on chart nodes while retaining precise source times', async () => {
+  const item = series(['2', '3']);
+  Object.assign(item.points[0], {reportIssuedAt: '2026-01-01T08:30:45', examinationId: 'exam-a', timePrecision: 'second'});
+  Object.assign(item.points[1], {reportIssuedAt: '2026-01-01 16:20:10', examinationId: 'exam-b', timePrecision: 'second'});
+  request.mockImplementation(async (path: string) => path.startsWith('trends?') ? [item] : []);
+  const wrapper = shallowMount(TrendsPage, {global: {stubs: {RouterLink: true}}});
+  try {
+    await flushPromises();
+    expect(wrapper.findAll('.trend-chart-node time').map(node => node.text())).toEqual(['2026-01-01', '2026-01-01']);
+    expect(wrapper.findAll('.trend-chart-node')[0].attributes('aria-label')).toContain('08:30:45');
+    expect(item.points[0].reportIssuedAt).toBe('2026-01-01T08:30:45');
+  } finally { wrapper.unmount(); }
+});
+
 it('renders qualified limit values and breaks lines on both sides of limit records', async () => {
   const item = series(['2', '3', '<99.0', '4', '5', '≥100']);
   request.mockImplementation(async (path: string) => path.startsWith('trends?') ? [item] : []);

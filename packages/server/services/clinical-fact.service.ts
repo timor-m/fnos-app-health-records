@@ -1,5 +1,7 @@
+import { assertReportWriteVersion,bumpReportWriteVersion } from './report-write-version';
+import { runHealthWorkflowRequest } from './health-workflow-request.service';
 import { assertNoPageAppend } from "./page-append-lock.service";
-import { rollbackAfterError, getDatabase } from "../database/client";
+import { rollbackAfterError, getDatabase, runInTransaction } from "../database/client";
 import { createError } from "h3";
 import type { RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
@@ -174,9 +176,19 @@ function appendAudit(
     id,
     JSON.stringify({ reportId, factType: type, fields })
   );
+  bumpReportWriteVersion(reportId);
 }
 
-export function createClinicalFact(
+export function createClinicalFact(user:RequestUser,reportId:string,rawType:unknown,input:Record<string,unknown>) {
+ const report=reportForManage(user,reportId);const type=factType(rawType);
+ return runHealthWorkflowRequest(user,report.memberId,'clinical.fact.create',{...input,reportId,type},()=>createClinicalFactRecord(user,reportId,type,input),saved=>{
+  const fact=factForManage(user,type,saved.id);
+  if(fact.reportId!==reportId||!getDatabase().prepare(`SELECT 1 FROM ${configs[type].table} WHERE id=? AND is_deleted=0`).get(saved.id))throw createError({statusCode:409,statusMessage:'已保存条目发生变化，请刷新报告核对'});
+  return saved;
+ });
+}
+
+function createClinicalFactRecord(
   user: RequestUser,
   reportId: string,
   rawType: unknown,
@@ -188,8 +200,8 @@ export function createClinicalFact(
   const fields = fieldsFor(type, input, true);
   const id = createId(config.idPrefix);
   const db = getDatabase();
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  return runInTransaction(db,()=>{
+    assertReportWriteVersion(reportId,input.expectedSourceVersion);
     if (type === "billingSummary") {
       const existing = db.prepare("SELECT id FROM billing_summaries WHERE report_id = ?").get(reportId) as
         | { id: string }
@@ -201,7 +213,6 @@ export function createClinicalFact(
           updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
           .run(...fields.values(), existing.id);
         appendAudit(user, "update", type, existing.id, reportId, [...fields.keys()]);
-        db.exec("COMMIT");
         return { id: existing.id, reportId, type };
       }
     }
@@ -211,12 +222,8 @@ export function createClinicalFact(
     ) VALUES (?, ?, ${columns.map(() => "?").join(", ")}, '[]', 'manual', '["*"]', 0)`)
       .run(id, reportId, ...fields.values());
     appendAudit(user, "create", type, id, reportId, columns);
-    db.exec("COMMIT");
-  } catch (error) {
-    rollbackAfterError(db);
-    throw error;
-  }
-  return { id, reportId, type };
+    return { id, reportId, type };
+  });
 }
 
 export function updateClinicalFact(
@@ -232,6 +239,7 @@ export function updateClinicalFact(
   const db = getDatabase();
   db.exec("BEGIN IMMEDIATE");
   try {
+    assertReportWriteVersion(fact.reportId,input.expectedSourceVersion);
     const manualFields = protectedManualFields(type, id);
     db.prepare(`UPDATE ${configs[type].table} SET ${assignments.join(", ")},
       source = 'manual', manual_fields_json = ?, is_deleted = 0,

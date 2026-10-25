@@ -433,7 +433,7 @@ async function editorSaved() {
     </nav>
     <PullIndicator :distance="pullDistance" :refreshing="refreshing" />
 
-    <div v-if="loading" class="loading-list"><span v-for="index in 3" :key="index"></span></div>
+    <div v-if="loading" class="loading-list"><span v-for="index in 8" :key="index"></span></div>
     <p v-else-if="loadError" class="inline-panel-error">
       {{ loadError }}
       <button class="error-retry" type="button" @click="reload">重试</button>
@@ -664,7 +664,7 @@ async function editorSaved() {
     />
     <ImageViewer v-if="sourcePreview" :pages="sourceViewerPages" @close="sourcePreview = null">
       <template #actions>
-        <button type="button" title="打开来源报告详情" @click="openSourceReport"><FileText :size="18" /></button>
+        <button type="button" title="打开来源档案详情" @click="openSourceReport"><FileText :size="18" /></button>
       </template>
     </ImageViewer>
 

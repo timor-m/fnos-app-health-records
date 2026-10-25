@@ -40,7 +40,8 @@ const dateTo = ref("");
 const sortFilter = ref("report_date_desc");
 const selectedId = ref("");
 const mobileDetailOpen = ref(false);
-useScrollLock(computed(() => mobileDetailOpen.value));
+useScrollLock(computed(() => mobileDetailOpen.value && route.path === '/records'));
+watch(() => route.path, path => { if (path !== '/records') mobileDetailOpen.value = false; }, { flush: 'sync' });
 let listSeq = 0;
 let loadMoreObserver: IntersectionObserver | null = null;
 let pendingRouteReportId = "";
@@ -61,7 +62,7 @@ const recordCountSubtitle = computed(() => {
   if (!totalReports) return "";
   return `共 ${totalReports} 份报告${totalPages ? ` · ${totalPages} 页原件` : ""}`;
 });
-const selected = computed(() => filtered.value.find((report) => report.id === selectedId.value) || null);
+const selected = computed(() => reports.value.find((report) => report.id === selectedId.value) || null);
 
 const typeLabels: Record<string, string> = {
   checkup: "体检", laboratory: "检验", imaging: "影像", functional: "功能检查", pathology: "病理",
@@ -78,7 +79,8 @@ const statusMeta: Record<string, { label: string; chip: string }> = {
 };
 const typeOptions = [
   { value: "all", label: "全部类型" },
-  ...Object.entries(typeLabels).map(([value, label]) => ({ value, label }))
+  ...Object.entries(typeLabels).filter(([value]) => value !== "imaging").map(([value, label]) => ({ value, label })),
+  { value: "imaging", label: "影像（暂未开放）", disabled: true }
 ];
 const statusOptions = [
   { value: "all", label: "全部状态" },
@@ -122,10 +124,23 @@ function syncFiltersFromRoute() {
   statusFilter.value = allowedStatusFilters.has(routeStatus) ? routeStatus : "all";
 }
 
-function applyPendingRouteSelection() {
-  if (!pendingRouteReportId || !reports.value.some((report) => report.id === pendingRouteReportId)) return false;
-  selectedId.value = pendingRouteReportId;
+async function applyRouteSelection() {
+  const openFromRoute = Boolean(pendingRouteReportId);
+  const reportId = pendingRouteReportId || (route.query.reportId === selectedId.value ? selectedId.value : '');
+  const memberId = app.selectedMemberId.value;
+  if (!reportId || !memberId || route.path !== '/records') return false;
+  let report = reports.value.find((item) => item.id === reportId);
+  if (!report) {
+    // 事件卡片可能指向第一页之外的报告，按 ID 取回后再打开详情。
+    report = await request<ReportDetailType>(`reports/${encodeURIComponent(reportId)}`);
+    const stillSelected = openFromRoute ? pendingRouteReportId === reportId : selectedId.value === reportId;
+    if (!stillSelected || app.selectedMemberId.value !== memberId || route.path !== '/records') return true;
+    if (report.memberId !== memberId) throw new Error('该报告不属于当前成员，请切换成员后查看');
+    reports.value = [report, ...reports.value.filter(item => item.id !== reportId)];
+  }
+  selectedId.value = reportId;
   pendingRouteReportId = "";
+  if (openFromRoute && window.matchMedia('(max-width: 760px)').matches) mobileDetailOpen.value = true;
   return true;
 }
 
@@ -172,7 +187,8 @@ async function load(memberId: string, silent = false, limit = PAGE_SIZE) {
     hasMore.value = page.hasMore;
     summaryStats.value = stats;
     /* URL 中的 reportId 只在路由进入/变化时消费一次，后台刷新不能把用户刚切换的报告改回旧值 */
-    if (applyPendingRouteSelection()) return;
+    if (await applyRouteSelection()) return;
+    if (seq !== listSeq) return;
     if (!reports.value.some((report) => report.id === selectedId.value)) {
       selectedId.value = reports.value[0]?.id || "";
     }
@@ -284,7 +300,9 @@ watch(recordCountSubtitle, (subtitle) => app.setTopbarSubtitle("records", subtit
 
 watch(() => route.query.reportId, (reportId) => {
   pendingRouteReportId = typeof reportId === "string" ? reportId : "";
-  applyPendingRouteSelection();
+  if (!loading.value) void applyRouteSelection().catch(cause => {
+    loadError.value = cause instanceof Error ? cause.message : '报告加载失败';
+  });
 }, { immediate: true });
 
 watch(() => route.query.status, () => {
@@ -335,7 +353,7 @@ useRefreshOnActivate(() => { void reloadList(); });
 <template>
   <div ref="root" class="records-page">
     <section class="page-intro">
-      <div><h2>健康时间轴</h2><p>按医院报告生成日期整理，点击报告可查看处理进度和原件</p></div>
+      <div><h2>档案</h2><p>按医院报告生成日期整理，点击报告可查看处理进度和原件</p></div>
       <div class="intro-actions">
         <span class="count-label">{{ summaryStats?.totalReports ?? reports.length }} 份报告</span>
         <button class="icon-button refresh-action" type="button" title="刷新" :disabled="refreshing" @click="refresh">
@@ -361,7 +379,7 @@ useRefreshOnActivate(() => { void reloadList(); });
           {{ loadError }}<button class="error-retry" type="button" @click="retryLoad">重试</button>
         </p>
         <EmptyState v-else-if="!filtered.length" title="还没有健康报告" description="上传第一份报告后，会按报告日期出现在这里。">
-          <RouterLink class="primary-button" to="/upload">上传报告</RouterLink>
+          <RouterLink class="primary-button" to="/upload">上传档案</RouterLink>
         </EmptyState>
         <template v-else>
           <button
@@ -375,6 +393,7 @@ useRefreshOnActivate(() => { void reloadList(); });
             <span class="timeline-date"><CalendarDays :size="14" />{{ report.reportIssuedAt || "日期待确认" }}</span>
             <strong>{{ report.title }}</strong>
             <small>{{ metaLine(report) }}</small>
+            <small v-if="report.eventTitle">关联事件：{{ report.eventTitle }}{{ (report.eventCount || 0) > 1 ? ` 等 ${report.eventCount} 个` : '' }}</small>
             <span class="chip-row">
               <span class="chip chip--type">{{ typeLabel(report.reportType) }}</span>
               <span v-if="statusMeta[report.status]" class="chip" :class="statusMeta[report.status].chip">{{ statusMeta[report.status].label }}</span>
@@ -414,7 +433,7 @@ useRefreshOnActivate(() => { void reloadList(); });
       </section>
     </div>
 
-    <ReportDetailSheet v-if="mobileDetailOpen && selected" :report-id="selectedId" :summary="selected"
+    <ReportDetailSheet v-if="route.path === '/records' && mobileDetailOpen && selected" :report-id="selectedId" :summary="selected"
       @updated="reloadList" @close="closeMobileDetail" @open-candidate="openDuplicateCandidate" />
     <BackToTop />
   </div>

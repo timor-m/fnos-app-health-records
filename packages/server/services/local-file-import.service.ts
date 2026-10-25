@@ -1,3 +1,4 @@
+import type { HealthUploadContext } from '../../shared/health-upload';
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, readdirSync, rmSync, statSync, type Dirent } from "node:fs";
 import { tmpdir } from "node:os";
@@ -434,7 +435,8 @@ export function importLocalFiles(
   user: RequestUser,
   memberId: string,
   files: Array<{ rootId?: unknown; path?: unknown; rotation?: unknown }>,
-  requestKey?: string
+  requestKey?: string,
+  context?: HealthUploadContext
 ) {
   if (!Array.isArray(files)) throw createError({ statusCode: 400, statusMessage: "请选择要导入的文件" });
   if (!files.length) throw createError({ statusCode: 400, statusMessage: "请选择至少一个报告文件" });
@@ -461,7 +463,7 @@ export function importLocalFiles(
       rotation: Number(file.rotation || 0)
     };
   });
-  return createUploadFromLocalFiles(user, memberId, resolved, requestKey);
+  return createUploadFromLocalFiles(user, memberId, resolved, requestKey, context);
 }
 
 function resolveFilesFromRoots(
@@ -545,9 +547,9 @@ export async function resolveAuthorizedFnosFiles(
   return resolved;
 }
 
-export async function importLocalFilesForUser(user: RequestUser, memberId: string, files: Array<{rootId?:unknown;path?:unknown;rotation?:unknown}>,requestKey?:string) {
- return createUploadFromLocalFiles(user,memberId,await resolveLocalFilesForUser(user,files),requestKey);
+export async function importLocalFilesForUser(user: RequestUser, memberId: string, files: Array<{rootId?:unknown;path?:unknown;rotation?:unknown}>,requestKey?:string, context?:HealthUploadContext) {
+ return createUploadFromLocalFiles(user,memberId,await resolveLocalFilesForUser(user,files),requestKey,context);
 }
-export async function importAuthorizedFnosFiles(user: RequestUser, memberId:string, paths:unknown,requestKey?:string) {
- return createUploadFromLocalFiles(user,memberId,await resolveAuthorizedFnosFiles(user,paths),requestKey);
+export async function importAuthorizedFnosFiles(user: RequestUser, memberId:string, paths:unknown,requestKey?:string, context?:HealthUploadContext) {
+ return createUploadFromLocalFiles(user,memberId,await resolveAuthorizedFnosFiles(user,paths),requestKey,context);
 }

@@ -184,7 +184,7 @@ async function rebuildMorphologyTracking() {
       <header class="maintenance-group-header"><h3 id="maintenance-logs-title">日志与诊断</h3><p>查看运行情况与操作记录，排查异常</p></header>
     <nav class="settings-menu" aria-label="日志与诊断">
       <RouterLink to="/me/system-logs"><ScrollText :size="20" /><div><strong>系统日志</strong><span>运行异常、日志占用与清理</span></div><ChevronRight :size="18" /></RouterLink>
-      <RouterLink to="/me/audit"><ClipboardList :size="20" /><div><strong>用户操作日志</strong><span>报告、成员、提醒和维护操作记录</span></div><ChevronRight :size="18" /></RouterLink>
+      <RouterLink to="/me/audit"><ClipboardList :size="20" /><div><strong>用户操作日志</strong><span>健康记录、历程关联与维护操作记录</span></div><ChevronRight :size="18" /></RouterLink>
       <RouterLink to="/me/ai-audit"><Bot :size="20" /><div><strong>AI 审计</strong><span>调用次数、失败、耗时和 Token 消耗</span></div><ChevronRight :size="18" /></RouterLink>
     </nav>
     </section>
@@ -206,7 +206,7 @@ async function rebuildMorphologyTracking() {
   display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
   padding: 17px 2px 15px; border-bottom: 1px solid var(--line);
 }
-.maintenance-group-header h3 { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: .02em; }
+.maintenance-group-header h3 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: .02em; }
 .maintenance-group-header p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .maintenance-group .settings-menu { border-radius: 0; box-shadow: none; background: transparent; overflow: visible; }
 .maintenance-group .settings-menu a {
@@ -225,7 +225,7 @@ async function rebuildMorphologyTracking() {
 .maintenance-tool { border-top: 1px solid var(--line); }
 .maintenance-tool > header { display: flex; align-items: center; gap: 16px; padding: 19px 2px; min-height: 84px; }
 .maintenance-tool > header > div { display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0; }
-.maintenance-tool h4 { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.6; }
+.maintenance-tool h4 { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.6; }
 .maintenance-tool p { margin: 3px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 .maintenance-action {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
@@ -245,7 +245,7 @@ async function rebuildMorphologyTracking() {
   .maintenance-page { gap: 14px; }
   .maintenance-group { padding: 3px 14px; border-radius: 16px; }
   .maintenance-group-header { display: block; padding: 14px 0 12px; }
-  .maintenance-group-header p { margin-top: 3px; font-size: 11px; }
+  .maintenance-group-header p { margin-top: 3px; font-size: 12px; }
   .maintenance-group .settings-menu a { grid-template-columns: 36px minmax(0, 1fr) 16px; gap: 11px; padding: 15px 0; }
   .maintenance-group .settings-menu a > svg:first-child,
   .maintenance-tool > header > div > svg { padding: 8px; border-radius: 11px; }

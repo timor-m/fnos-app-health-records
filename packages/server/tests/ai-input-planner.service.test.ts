@@ -5125,3 +5125,13 @@ test('keeps fused reference/unit fields and panel ordinals in their own columns'
   assert.equal(rbc?.numericValue,7.5,'shared dictionary codes must not discard a verified measurement');
   assert.equal(rbc?.unit,null,'a verified name does not resolve an ambiguous unit');
 });
+
+test('overview retains a vaccination attachment in a mixed discharge document without making the whole document a vaccine record',()=>{
+ const plan=planRebuiltOcrPages('synthetic',rebuildOcrPages([
+  page(1,['出院小结','住院号 QA-1','出院带药清单','1 合成药品甲片 10mg/片 每次1片 每日2次 口服']),
+  page(2,['出院小结附件','接种记录：合成测试疫苗 第2剂 2026-10-22','接种部位：右上臂 批号 QA-2'])
+ ]),'overview');
+ const narrative=plan.units.filter(unit=>unit.route==='narrative').map(unit=>unit.text).join('\n');
+ assert.match(narrative,/合成测试疫苗/);assert.match(narrative,/2026-10-22/);
+ assert.equal(plan.documentClassification.primaryType,'inpatient');
+});

@@ -89,7 +89,7 @@ test("settled jobs retry final detail synchronization while the report still loo
 test("switching reports clears page-refresh recovery state", () => {
   assert.match(
     reportDetail,
-    /watch\(\(\) => props\.reportId,[\s\S]*?pageRefreshAwaitingJobs\.value = false/
+    /watch\(\(\) => \[props\.reportId, props\.expectedMemberId\] as const,[\s\S]*?pageRefreshAwaitingJobs\.value = false/
   );
 });
 

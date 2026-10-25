@@ -96,7 +96,7 @@ describe("SetupGuideModal 首次使用引导", () => {
     expect(saveBody).toMatchObject({ enabled: true, provider: "deepseek", baseUrl: "https://api.deepseek.com", apiKey: "sk-test-key" });
     expect(wrapper.text()).toContain("配置完成");
 
-    const finishButton = wrapper.findAll(".setup-guide-actions button").find((button) => button.text().includes("开始上传报告"));
+    const finishButton = wrapper.findAll(".setup-guide-actions button").find((button) => button.text().includes("开始上传档案"));
     await finishButton!.trigger("click");
     await flushPromises();
     expect(callsTo("/api/setup/guide-dismissed", "PUT").length).toBe(1);

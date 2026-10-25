@@ -1266,7 +1266,10 @@ test("supports manual review edits, page edits, search filters, reminders, backu
 
 	    const reminder = createReminder(manager, { memberId: "records-member", title: "手工复查", dueAt: "2026-10-21" });
 	    assert.equal((listReminders(manager, "records-member") as Array<{ id: string }>).some((item) => item.id === reminder.id), true);
-	    assert.deepEqual(updateReminderStatus(manager, reminder.id, "completed"), { id: reminder.id, status: "completed" });
+	    const completion = updateReminderStatus(manager, reminder.id, "completed");
+        assert.equal(completion.id, reminder.id);
+        assert.equal(completion.status, "completed");
+        assert.equal(completion.completedRecord, null);
 	    db.prepare(`
 	      INSERT INTO app_notifications (id, member_id, report_id, type, title, message, severity)
 	      VALUES ('notice-records-done', 'records-member', ?, 'report_processed', '报告处理完成', '报告已完成识别', 'success')

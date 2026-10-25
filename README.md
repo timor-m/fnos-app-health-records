@@ -6,6 +6,7 @@
 
 ## 功能介绍
 
+- **五类健康记录（开发中）**：报告、影像、症状、用药和接种统一展示，概览汇总分类、待办和当前关注，上传后自动归类，同次资料可集中整理，无需先创建事件。用药单可确认用药并查看服用历史；接种支持手动登记、凭证确认与下一剂提醒；健康历程按需串联症状、就诊、治疗和复查。[架构说明](docs/HEALTH_EVENT_EPISODE.md)
 - **补充记录**：为报告追加文字或多张图片，记录口头交代、后续说明等资料；与报告原件分开保存，不参与自动解析。[使用说明](docs/REPORT_NOTES.md)
 - **报告归档**：支持拍照、多图、HEIC、JPEG、PNG、WebP 和多页 PDF，支持从 NAS 目录导入。
 - **OCR 与 AI 整理**：提取医院、日期、科室、结论、建议、定量/定性指标和形态发现，长报告支持后台处理和断点恢复。
@@ -71,6 +72,7 @@ docker compose up -d
 - [Docker 部署](./docs/DOCKER_DEPLOYMENT.md)
 - [配置说明](./docs/CONFIGURATION.md)
 - [多文件报告导入](./docs/REPORT_IMPORT.md)
+- [健康记录与健康历程](./docs/HEALTH_EVENT_EPISODE.md)
 - [趋势分组筛选](./docs/TREND_GROUPS.md)
 - [备份、恢复与迁移](./docs/BACKUP_RESTORE.md)
 - [常见问题排查](./docs/TROUBLESHOOTING.md)

@@ -9,6 +9,7 @@ import {
   detectTableSerialGapPages,
   executeAiExtractionPlan,
   mergeAiExtractionResults,
+  deduplicateMedicationContinuations,
   visionReviewCandidates,
   finalLayoutWarnings,
   withoutSupersededOcrObservations
@@ -4041,3 +4042,19 @@ test('glued ordinals on single-character table names retain row evidence through
     assert.deepEqual(rows.map(row=>[row.name,row.value]).sort(),[['乙',8.6],['甲',6.4]].sort());
   }, () => ['项目 | 结果 | 单位 | 参考范围','1甲 | 6.4 | mmol/L | 1-9','2乙 | 8.6 | mmol/L | 1-9']);
 });
+
+test('deduplicates only unique explicit adjacent-page numbered medication continuations and retains both sources',async()=>{await withReport(2,async()=>{
+ const makePlan=(heading='出院带药清单续表')=>planRebuiltOcrPages('continuation-test',rebuildOcrPages([
+  {pageId:'p1',pageNumber:1,linesJson:JSON.stringify([{text:'出院小结'},{text:'1 合成药品甲片 10mg/片'}])},
+  {pageId:'p2',pageNumber:2,linesJson:JSON.stringify([{text:heading},{text:'1 每次1片 每日2次 口服'}])}
+ ]),'overview');
+ const medications=normalizeAiExtraction({medications:[
+  {medicationName:'合成药品甲片',context:'discharge',specification:'10mg/片',dose:'1',doseUnit:'片',frequency:'每日2次',route:'口服',p:1,q:'1 合成药品甲片 10mg/片'},
+  {medicationName:'合成药品甲片',context:'discharge',dose:'1',doseUnit:'片',frequency:'每日2次',route:'口服',p:2,q:'1 每次1片 每日2次 口服'}
+ ]}).fields.medications;
+ const merged=deduplicateMedicationContinuations(makePlan(),medications);assert.equal(merged.length,1);assert.equal(merged[0].specification,'10mg/片');assert.deepEqual(merged[0].evidence.map(item=>item.pageNumber),[1,2]);
+ assert.equal(deduplicateMedicationContinuations(makePlan('普通用药清单'),medications).length,2);
+ assert.equal(deduplicateMedicationContinuations(makePlan(),[medications[0],{...medications[1],dose:'2'}]).length,2);
+ assert.equal(deduplicateMedicationContinuations(makePlan(),[medications[0],{...medications[1],specification:'20mg/片'}]).length,2);
+ assert.equal(deduplicateMedicationContinuations(makePlan(),[medications[0],{...medications[0]},medications[1]]).length,3);
+});});

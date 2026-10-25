@@ -53,7 +53,7 @@ import {
 } from "./observation-interpretation.service";
 import { assessObservationReference } from "./observation-reference.service";
 
-export const aiExtractionPromptVersion = "health-record-routed-v12-result-review";
+export const aiExtractionPromptVersion = "health-record-routed-v12-result-review-clinical-vaccination";
 const maxInputCharacters = 80_000;
 const reportTypeAliases: Record<string, string> = {
   physical_exam: "checkup",
@@ -1582,7 +1582,7 @@ function narrativeContract(input: AiExtractionInput) {
     );
   }
   if (types.has("prescription")) parts.push(`处方只输出 medications。用药可出现在门诊病历、住院记录、出院带药或独立用药清单中，不要求有“处方”标题。
-编号列表、表格、药名与用法分行、多栏和跨页续表均按同一药品条目关联；只有相同编号、明确表格列或连续上下文能证明归属时才合并，不能把相邻栏或下一药品的剂量拼给上一药品。跨页证据分别保留页码；证据不足的规格、剂量、频次留空。
+编号列表、表格、药名与用法分行、多栏和跨页续表均按同一药品条目关联；只有相同编号、明确表格列或连续上下文能证明归属时才合并，不能把相邻栏或下一药品的剂量拼给上一药品。跨页证据分别保留页码；同编号明确续表的同一药品只输出一条，规格与用法分别保留各页证据，不再输出缺少规格的重复条目；不同规格或无明确续表对应关系不能合并。证据不足的规格、剂量、频次留空。
 药品规格不是每次剂量，数量不是疗程；保留盐型、剂型及不同规格，不根据商品名推断通用名。频次缩写及即刻、必要时等原样保留，不换算或补全。处方 context=prescription、门诊用药 context=outpatient、住院用药 context=inpatient、出院带药 context=discharge；按条目所在章节判断。
 停用、暂停、调整或既往用药只能按原文明示保留在 instructions，不能改成当前正在使用；单纯过敏史、药品说明书中的示例及收费明细不作为用药事实。不得添加任何用药建议。`);
   if (types.has("billing"))
@@ -1590,6 +1590,7 @@ function narrativeContract(input: AiExtractionInput) {
       `票据只输出 billingSummary、billingItems，金额必须来自原文，不得自行计算。`,
     );
   if (types.has("vaccination")) parts.push(`接种记录只输出 vaccinations。`);
+  if (types.has("vaccination")||types.has("outpatient")||types.has("inpatient")) parts.push(`允许提取当前门诊、住院资料及其附件中原文明示的接种条目 vaccinations，不得因为文档主类型不是接种而丢弃。每项使用 vaccineName、doseNumber、manufacturer、lotNumber、administeredAt、administrationSite、nextDueAt、p、q；administeredAt 是本次已接种日期，nextDueAt 是明确的下次日期，不能用就诊、出院或上传日期代替。日期与批号出现在邻行时仍需核对并保留对应原文证据；缺失才留空。计划接种或接种建议不能改写为已接种事实。`);
   parts.push(
     `diagnoses 每项使用 diagnosisText、diagnosisType、diagnosisCode、codeSystem、isPrimary、sectionName、p、q；medications 使用 medicationName、genericName、specification、dosageForm、dose、doseUnit、frequency、route、duration、quantity、quantityUnit、instructions、context、sectionName、p、q；procedures 使用 procedureName、procedureType、procedureCode、bodyPart、performedAt、resultText、sectionName、p、q；reportSections 使用 sectionKey、title、content、p、q，title 只写对应类型的简短中文标题，不得抄录英文副标题或整行双语页眉。只返回当前类型允许且原文明示的数组。`,
   );

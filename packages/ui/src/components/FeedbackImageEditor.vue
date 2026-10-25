@@ -263,18 +263,18 @@ footer { flex-shrink: 0; padding: 16px 22px; display: flex; align-items: center;
 .draw-settings { display: flex; align-items: center; gap: 12px; }
 .brush-size { min-width: 18px; text-align: right; font-variant-numeric: tabular-nums; }
 .view-tools { display: flex; align-items: center; justify-content: space-between; padding: 0 22px 10px; gap: 12px; }
-.view-tools > span { color: var(--muted); font-size: 11px; }
+.view-tools > span { color: var(--muted); font-size: 12px; }
 @media (max-width:760px), (pointer:coarse) {
   .image-editor { height: 98dvh; max-height: 98dvh; }
   .image-editor > .sheet-grabber { order: 0; }
   .image-editor > header { order: 1; padding: 10px 16px 12px; flex-shrink: 0; }
   .image-editor > header p { display: none; }
   .image-editor > .view-tools { order: 2; padding: 8px 16px; flex-shrink: 0; background: var(--fill-2); }
-  .view-tools .reset-view { min-height: 32px; padding: 5px 9px; font-size: 11px; border: 0; background: var(--surface); }
+  .view-tools .reset-view { min-height: 32px; padding: 5px 9px; font-size: 12px; border: 0; background: var(--surface); }
   .image-editor > .editor-stage { order: 3; flex: 1 1 0; min-height: 100px; overflow: hidden; display: flex; align-items: center; justify-content: center; padding: 12px; }
   .editor-stage canvas { max-width: 100%; max-height: 100%; width: auto; height: auto; flex-shrink: 0; margin: 0; }
-  .image-editor > .editor-hint { order: 4; padding: 8px 16px; font-size: 11px; flex-shrink: 0; }
-  .image-editor > .editor-error { order: 5; padding: 4px 16px; font-size: 11px; flex-shrink: 0; }
+  .image-editor > .editor-hint { order: 4; padding: 8px 16px; font-size: 12px; flex-shrink: 0; }
+  .image-editor > .editor-error { order: 5; padding: 4px 16px; font-size: 12px; flex-shrink: 0; }
   .image-editor > .editor-toolbar { order: 6; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); flex-shrink: 0; }
   .editor-toolbar > .editor-modes { display: contents; }
   .editor-modes > button, .mask-selector > button, .undo-tool, .reset-tool { width: 100%; min-height: 48px; padding: 8px 4px; border: 0; background: var(--fill-2); border-radius: 12px; font-size: 12px; }
@@ -287,7 +287,7 @@ footer { flex-shrink: 0; padding: 16px 22px; display: flex; align-items: center;
   .mask-dropdown { top: auto; bottom: calc(100% + 8px); min-width: 150px; }
   .mask-dropdown button { min-height: 44px; }
   .image-editor > footer { order: 7; display: grid; grid-template-columns: 1fr; padding: 10px 16px max(12px, env(safe-area-inset-bottom)); gap: 8px; }
-  footer > p { font-size: 10px; text-align: center; }
+  footer > p { font-size: 12px; text-align: center; }
   .export-size-note { display: none; }
   footer > div { display: grid; grid-template-columns: 1fr 2fr; margin: 0; width: 100%; gap: 10px; }
   footer button { min-height: 44px; border-radius: 12px; }
@@ -303,7 +303,7 @@ footer { flex-shrink: 0; padding: 16px 22px; display: flex; align-items: center;
   .image-editor { position: relative; }
   .image-editor > header { padding: 6px 12px 8px; gap: 8px; }
   .image-editor > header > div { flex: 1; }
-  .image-editor header h3 { font-size: 14px; }
+  .image-editor header h3 { font-size: 16px; }
   .image-editor header button { min-height: 34px; padding: 6px 10px; border-radius: 8px; }
   .image-editor header .mobile-save { display: inline-flex; font-size: 12px; }
   .image-editor > .view-tools { padding: 0; position: absolute; z-index: 2; top: 68px; right: 10px; background: transparent; }
@@ -312,7 +312,7 @@ footer { flex-shrink: 0; padding: 16px 22px; display: flex; align-items: center;
   .image-editor > .editor-stage { padding: 4px; }
   .image-editor > .editor-hint,.image-editor > footer { display: none; }
   .image-editor > .editor-toolbar { position: relative; gap: 5px; padding: 7px 10px max(7px, env(safe-area-inset-bottom)); }
-  .editor-modes > button,.mask-selector > button,.undo-tool,.reset-tool { min-height: 36px; padding: 6px 3px; border-radius: 8px; font-size: 11px; gap: 4px; }
+  .editor-modes > button,.mask-selector > button,.undo-tool,.reset-tool { min-height: 36px; padding: 6px 3px; border-radius: 8px; font-size: 12px; gap: 4px; }
   .editor-modes > button svg,.mask-selector > button svg,.undo-tool svg,.reset-tool svg { width: 15px; height: 15px; }
   .brush-caret { display: inline; }
   .editor-toolbar > .draw-settings { display: none; position: absolute; bottom: calc(100% + 8px); left: 10px; right: 10px; z-index: 6; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-m); }

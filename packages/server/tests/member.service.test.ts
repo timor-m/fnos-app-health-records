@@ -184,3 +184,13 @@ test("validates blood type input on create and update", () => {
     );
   });
 });
+
+test('member health background is optional, retained through ordinary edits and protected from stale overwrites',()=>withDatabase(()=>{
+ const member=createMember(admin,{displayName:'Synthetic member',relationship:'child',careAllergies:'不清楚',careHistory:'Synthetic history',careMedications:'Synthetic long term medication'});
+ const row=listMembers(admin).find(item=>item.id===member.id)!;assert.equal(row.careAllergies,'不清楚');assert.ok(row.careBackgroundVersion);
+ updateMember(admin,member.id,{displayName:'Synthetic renamed'});assert.equal(listMembers(admin).find(item=>item.id===member.id)!.careHistory,'Synthetic history');
+ const saved=updateMember(admin,member.id,{careBackgroundVersion:row.careBackgroundVersion,careAllergies:'明确无已知过敏',careHistory:'',careMedications:'Synthetic updated'});assert.equal(saved.careHistory,null);assert.notEqual(saved.careBackgroundVersion,row.careBackgroundVersion);
+ assert.throws(()=>updateMember(admin,member.id,{careBackgroundVersion:row.careBackgroundVersion,careHistory:'stale'}),error=>(error as {statusCode:number}).statusCode===409);
+ assert.throws(()=>updateMember(admin,member.id,{careBackgroundVersion:saved.careBackgroundVersion,careHistory:'x'.repeat(2001)}),error=>(error as {statusCode:number}).statusCode===400);
+ assert.throws(()=>updateMember(viewer,member.id,{careBackgroundVersion:saved.careBackgroundVersion,careHistory:'unapproved'}));assert.equal(listMembers(viewer).some(item=>item.id===member.id),false);
+}));

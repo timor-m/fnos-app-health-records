@@ -1,0 +1,21 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {mkdtempSync,rmSync,readdirSync,writeFileSync,existsSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {getDatabase,closeDatabaseForTests} from '../database/client';
+async function fixture(run:(dir:string)=>void){const previous=process.env.STORAGE_DIR;const dir=mkdtempSync(join(tmpdir(),'process-metadata-upgrade-'));process.env.STORAGE_DIR=dir;try{await run(dir);}finally{closeDatabaseForTests();if(previous===undefined)delete process.env.STORAGE_DIR;else process.env.STORAGE_DIR=previous;rmSync(dir,{recursive:true,force:true});}}
+test('old v19 database receives metadata storage only after backup; existing data and repeated boots remain intact',()=>fixture(dir=>{
+ let db=getDatabase();db.exec("INSERT INTO users(id,display_name) VALUES('synthetic','Synthetic'); INSERT INTO health_members(id,display_name,created_by) VALUES('synthetic','Synthetic','synthetic'); INSERT INTO health_record_processes(id,member_id,title_override) VALUES('synthetic','synthetic','Synthetic retained title'); DROP TABLE health_record_process_metadata;");closeDatabaseForTests();
+ db=getDatabase();assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE name='health_record_process_metadata'").get());assert.equal(db.prepare("SELECT title_override AS title FROM health_record_processes WHERE id='synthetic'").get()!.title,'Synthetic retained title');
+ const backups=readdirSync(join(dir,'backups','db'));assert.ok(backups.some(name=>name.endsWith('.sqlite')));assert.equal(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()!.version,19);
+ db.exec("INSERT INTO health_record_process_metadata(process_id,status,onset_at,ended_at) VALUES('synthetic','resolved','2026-01-01','2026-01-02')");closeDatabaseForTests();db=getDatabase();assert.equal(db.prepare("SELECT status FROM health_record_process_metadata WHERE process_id='synthetic'").get()!.status,'resolved');assert.equal(readdirSync(join(dir,'backups','db')).length,backups.length);
+}));
+test('a failed pre-repair backup stops startup and leaves the old structure available for a safe retry',()=>fixture(dir=>{
+ const db=getDatabase();db.exec('DROP TABLE health_record_process_metadata');closeDatabaseForTests();const blocker=join(dir,'backups','db');assert.equal(existsSync(blocker),false);writeFileSync(blocker,'Synthetic backup-path blocker');assert.throws(()=>getDatabase());closeDatabaseForTests();rmSync(blocker);assert.ok(getDatabase().prepare("SELECT name FROM sqlite_master WHERE name='health_record_process_metadata'").get());
+}));
+test('doctor context columns are backed up before additive repair, preserve existing lifecycle and survive repeated startup',()=>fixture(dir=>{
+ let db=getDatabase();db.exec("INSERT INTO users(id,display_name) VALUES('synthetic','Synthetic'); INSERT INTO health_members(id,display_name,created_by) VALUES('synthetic','Synthetic','synthetic'); INSERT INTO health_record_processes(id,member_id,title_override) VALUES('synthetic','synthetic','Synthetic'); INSERT INTO health_record_process_metadata(process_id,status,onset_at) VALUES('synthetic','active','2026-01-01'); ALTER TABLE health_record_process_metadata DROP COLUMN visit_concern; ALTER TABLE health_members DROP COLUMN care_allergies; ALTER TABLE health_members DROP COLUMN care_history; ALTER TABLE health_members DROP COLUMN care_medications;");closeDatabaseForTests();
+ db=getDatabase();const backups=readdirSync(join(dir,'backups','db'));assert.ok(backups.length);assert.equal(db.prepare("SELECT onset_at FROM health_record_process_metadata WHERE process_id='synthetic'").get()!.onset_at,'2026-01-01');
+ db.exec("UPDATE health_members SET care_allergies='Synthetic retained background' WHERE id='synthetic'; UPDATE health_record_process_metadata SET visit_concern='Synthetic retained concern' WHERE process_id='synthetic'");closeDatabaseForTests();db=getDatabase();assert.equal(db.prepare("SELECT care_allergies FROM health_members WHERE id='synthetic'").get()!.care_allergies,'Synthetic retained background');assert.equal(readdirSync(join(dir,'backups','db')).length,backups.length);assert.equal(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()!.version,19);
+}));

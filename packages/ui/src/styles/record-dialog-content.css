@@ -1,0 +1,180 @@
+/* One inset per content section, regardless of the dialog entry point. */
+.form-actions.record-form-actions { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 8px; }
+.form-actions.record-form-actions > button { flex: 0 0 auto; min-height: 40px; padding: 8px 16px; font-size: 14px; line-height: 20px; }
+@media (max-width: 760px), (pointer: coarse) {
+  .form-actions.record-form-actions { gap: 8px; padding-top: 4px; padding-bottom: max(4px, env(safe-area-inset-bottom)); }
+  .form-actions.record-form-actions > button { position: relative; min-height: 32px; padding: 5px 12px; font-size: 14px; line-height: 20px; }
+  .form-actions.record-form-actions > button::after { content: ''; position: absolute; inset: -6px 0; }
+}
+.record-dialog-body { --record-inset: 16px; padding: 0; overflow: auto; min-height: 0; overscroll-behavior: contain; }
+.record-dialog-body .preview-stack > .preview-card { width: 100%; max-width: none; padding: var(--record-inset); }
+.record-dialog-body .process-symptoms > .event-empty,
+.record-dialog-body .process-symptoms > .inline-panel-error { padding: 12px var(--record-inset); }
+.record-dialog-body .medication-records { padding: var(--record-inset); }
+.record-dialog-body .medication-records .medication-editor,
+.record-dialog-body .medication-records .medication-start,
+.record-dialog-body .medication-records .medication-card { border: 0; border-radius: 0; box-shadow: none; }
+.record-dialog-body .medication-records .medication-card,
+.record-dialog-body .medication-form-body { padding: 0; }
+.record-dialog-body .medication-one-time { padding: 10px 0 0; }
+.record-dialog-body .medication-start-actions { padding: 2px 0 8px; }
+.record-dialog-body .health-record-detail-content > .inline-panel-error,
+.record-dialog-body .health-record-detail-content > .mini-loading,
+.record-dialog-body .health-record-detail-content > .empty-state { margin: var(--record-inset); width: auto; }
+.record-dialog-body .settings-band > header { min-height: 50px; padding: 12px var(--record-inset); }
+.record-dialog-body .medication-editor > header,
+.record-dialog-body .medication-start-description { padding: 0 0 10px; }
+.record-dialog-body .process-symptom { padding: 12px var(--record-inset); }
+@media (max-width: 760px) { .record-dialog-body { --record-inset: 14px; } }
+
+/* Explicit content containers also work on standalone detail pages. */
+.record-detail-inset { padding: var(--record-inset, 16px); min-width: 0; }
+.record-detail-state { margin: var(--record-inset, 16px); width: auto; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.record-detail-caption { margin: 0; color: var(--muted); font-size: 12px; line-height: 18px; }
+.record-bundle-toolbar, .record-detail-stack, .vaccination-confirm { display: grid; gap: 12px; }
+.record-detail-stack > .record-detail-title { margin: 0; font-size: 16px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.record-detail-note { margin: 0; font-size: 14px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.record-detail-actions.form-actions, .record-detail-actions { display: flex; justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
+.record-detail-actions > button, .record-detail-actions > a { max-width: 100%; white-space: normal; overflow-wrap: anywhere; font-size: 14px; }
+.record-detail-actions > a { display: inline-flex; align-items: center; min-height: 38px; padding: 6px 12px; border-radius: 999px; color: var(--brand-strong); background: var(--brand-soft); }
+.record-detail-actions .record-danger-action { color: var(--danger); }
+.record-document-switch { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.record-document-switch button { max-width: 100%; min-height: 32px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink-2); font: inherit; font-size: 14px; line-height: 20px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.record-document-switch button[aria-pressed=true] { background: var(--brand-soft); color: var(--brand-strong); border-color: var(--brand); }
+.record-detail-toolbar > .preview-heading { flex: 1; min-width: 0; width: auto; }
+.record-detail-facts { min-width: 0; }
+.record-detail-facts > div { min-width: 0; align-items: flex-start; }
+.record-detail-facts dd { min-width: 0; overflow-wrap: anywhere; font-size: 14px; font-weight: 400; }
+.record-detail-status { padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 18px; background: var(--fill-2); color: var(--muted); }
+.record-detail-status.is-active, .record-detail-status.is-resolved { background: var(--green-ok-soft); color: var(--green-ok); }
+.record-detail-compact-actions { width: 100%; display: flex; flex-wrap: wrap; gap: 8px; }
+.record-detail-compact-actions > button { min-height: 34px; max-width: 100%; font-size: 12px; font-weight: 600; white-space: normal; }
+.record-detail-disclosure > summary { cursor: pointer; color: var(--muted); font-size: 12px; line-height: 24px; }
+@media (max-width: 760px), (pointer: coarse) {
+  .record-detail-compact-actions { gap: 6px; }
+  .record-detail-compact-actions > button { min-height: 32px; padding-inline: 10px; }
+}
+.vaccination-form { margin: 0; }
+.vaccination-fields, .vaccination-extra-fields { min-width: 0; margin: 0; padding: 0; border: 0; display: grid; gap: 14px; }
+.vaccination-fields label, .vaccination-field { display: grid; align-content: start; min-width: 0; gap: 7px; color: var(--muted); font-size: 12px; }
+.vaccination-fields .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.vaccination-fields textarea { width: 100%; min-height: 88px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--ink); background: var(--surface); font: inherit; font-size: 14px; line-height: 1.6; resize: vertical; }
+.vaccination-fields textarea:focus { outline: 0; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.vaccination-fields summary { padding: 4px 0; color: var(--ink-2); font-size: 12px; cursor: pointer; }
+.vaccination-extra-fields { padding-top: 10px; }
+.vaccination-fields .datetime-picker-field input { border: 0; box-shadow: none; background: transparent; }
+.symptom-record-detail > .process-symptoms { margin-bottom: 0; }
+@media (hover:hover) { .record-document-switch button:hover:not([aria-pressed=true]) { background: var(--fill-2); } }
+@media (max-width:760px) {
+  .record-detail-inset { padding: var(--record-inset, 14px); }
+  .record-detail-state { margin: var(--record-inset, 14px); }
+  .vaccination-fields .form-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.health-record-detail-page { font-size: 14px; line-height: 1.6; }
+.health-record-detail-page .subpage-header { margin-bottom: 12px; }
+.health-record-detail-page .subpage-header h2 { font-size: 16px; }
+.health-record-detail-page h3 { font-size: 16px; line-height: 1.5; font-weight: 600; }
+
+/* Detail pages use the entire content column, including report cards. */
+.health-record-detail-page, .health-record-detail-page .health-record-detail-content,
+.health-record-detail-page .preview-stack, .health-record-detail-page .preview-card { width: 100%; max-width: none; min-width: 0; }
+.record-sheet-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.record-sheet-title > .health-category-icon { flex: 0 0 auto; color: var(--brand-strong); }
+.record-detail-loading { display: flex; flex: 1 1 auto; min-height: 180px; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 16px; color: var(--muted); font-size: 14px; line-height: 1.6; text-align: center; }
+.record-detail-loading.report-detail-loading { padding: 16px; }
+.health-record-detail-body { flex: 1 1 auto; display: flex; flex-direction: column; }
+.health-record-detail-content { min-width: 0; width: 100%; }
+.health-record-detail-body > .health-record-detail-content { flex: 1 1 auto; display: flex; flex-direction: column; }
+.health-record-detail-body .health-record-detail-content > * { min-width: 0; }
+.health-record-detail-content:has(.record-detail-loading),
+.health-record-detail-content :is(.report-bundle-detail,.vaccination-document-detail,.symptom-record-detail,.vaccination-record-detail,.medication-records):has(.record-detail-loading) { flex: 1 1 auto; display: flex; flex-direction: column; }
+.health-record-detail-page .health-record-detail-content:has(.record-detail-loading) { min-height: calc(100dvh - 144px); }
+
+/* Vaccination forms keep their main action visible while only fields scroll. */
+.settings-form.vaccination-form { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; gap: 0; min-width: 0; padding: 0; }
+.vaccination-form > .vaccination-fields { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--record-inset, 16px); gap: 12px; }
+.vaccination-fields .form-grid.vaccination-core-secondary { grid-template-columns: minmax(0,.7fr) minmax(0,1.3fr); }
+.vaccination-field-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.vaccination-inline-action { padding: 2px 4px; border: 0; background: transparent; color: var(--brand-strong); font: inherit; font-size: 12px; line-height: 20px; cursor: pointer; }
+.vaccination-source-toolbar { display: flex; justify-content: flex-end; min-width: 0; }
+.vaccination-source-toolbar .vaccination-source-picker { width: auto; max-width: min(280px, 100%); min-width: 0; }
+.vaccination-source-picker .form-select-trigger { height: 32px; min-height: 32px; padding: 6px 10px; border-color: var(--line); background: var(--fill-2); color: var(--brand-strong); font-size: 14px; }
+.vaccination-source-picker .form-select-trigger > span.placeholder { color: var(--brand-strong); }
+.vaccination-source-feedback { display: grid; gap: 6px; min-width: 0; }
+.vaccination-source-feedback .record-detail-caption { margin: 0; }
+.vaccination-source-feedback .record-detail-actions { margin: 0; gap: 12px; }
+.vaccination-field-error { color: var(--danger); font-size: 12px; line-height: 1.6; }
+.vaccination-fields [aria-invalid=true] { border-color: var(--danger); }
+.vaccination-reminder-toggle { display: flex !important; align-items: center; gap: 8px; font-size: 14px; color: var(--ink-2); }
+.vaccination-reminder-toggle input { width: 16px; height: 16px; accent-color: var(--brand); }
+.vaccination-fields summary small { font-size: 12px; color: var(--muted); }
+.vaccination-form > .vaccination-save-bar { flex: 0 0 auto; padding: 10px var(--record-inset,16px) max(10px,env(safe-area-inset-bottom)); margin: 0; border-top: 1px solid var(--line); border-bottom: 0; background: var(--surface); }
+.vaccination-editor-actions.form-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: nowrap; gap: 8px; }
+.vaccination-editor-actions.form-actions > button { flex: 0 0 auto; height: 40px; min-height: 40px; min-width: 88px; max-width: 100%; width: auto; margin: 0; padding: 0 18px; justify-content: center; border-radius: 999px; font-size: 14px; font-weight: 600; line-height: 20px; white-space: nowrap; }
+.vaccination-editor-actions.form-actions > .primary-button { min-width: 120px; }
+.vaccination-editor-actions.form-actions > .soft-action-button { background: var(--fill-2); color: var(--ink-2); box-shadow: none; }
+.vaccination-editor-actions.form-actions > .soft-action-button:hover:not(:disabled) { background: var(--fill-1); }
+.vaccination-editor-actions.form-actions > button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.vaccination-editor-actions.form-actions > button:disabled { filter: none; transform: none; box-shadow: none; }
+.vaccination-fact-choices { display: grid; gap: 6px; }
+.vaccination-fact-choices button { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink-2); text-align: left; font: inherit; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.vaccination-fact-choices button[aria-pressed=true] { border-color: var(--brand); background: var(--brand-soft); color: var(--brand-strong); }
+.health-record-detail-body:has(.vaccination-form) { overflow: hidden; }
+:is(.health-record-detail-body,.health-record-detail-page) .health-record-detail-content:has(.vaccination-form),
+:is(.health-record-detail-body,.health-record-detail-page) :is(.report-bundle-detail,.vaccination-document-detail,.vaccination-record-detail):has(.vaccination-form) { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
+.health-record-detail-page:has(.vaccination-form) { display: flex; flex-direction: column; height: calc(100dvh - 94px); min-height: 0; gap: 0; }
+.health-record-detail-page:has(.vaccination-form) > .subpage-header { flex: 0 0 auto; }
+.health-record-detail-body .record-bundle-toolbar { flex: 0 0 auto; }
+.record-sheet .vaccination-detail-name { display: none; }
+.vaccination-supplement summary,.vaccination-original > summary { font-size: 12px; line-height: 22px; color: var(--muted); cursor: pointer; }
+.vaccination-next-dose { display: grid; gap: 8px; padding: 12px; border-radius: 10px; background: var(--brand-soft); }
+.vaccination-next-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
+.vaccination-next-heading strong { font-size: 14px; font-weight: 500; }
+.vaccination-next-heading span { font-size: 12px; color: var(--muted); }
+.vaccination-reminder-form,.vaccination-reminder-form fieldset { display: grid; min-width: 0; gap: 8px; margin: 0; padding: 0; border: 0; }
+.vaccination-add-reminder { justify-self: start; font-size: 14px; }
+.vaccination-confirm-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.vaccination-confirm-row > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.vaccination-confirm-row strong { font-size: 14px; font-weight: 500; }
+.vaccination-confirm-row > button { flex: 0 0 auto; font-size: 14px; }
+.vaccination-confirmed-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.vaccination-original > .preview-stack { margin-top: 10px; }
+.vaccination-original > .preview-stack > .preview-card { padding-inline: 0; }
+.new-vaccination-page { height: calc(100dvh - 94px); display: flex; flex-direction: column; min-height: 0; }
+.new-vaccination-page > .subpage-header { flex: 0 0 auto; margin-bottom: 12px; }
+.new-vaccination-page > .subpage-header h2 { font-size: 16px; white-space: nowrap; }
+.new-vaccination-page > .subpage-header > div:not(.vaccination-header-actions) { flex: 1 0 auto; }
+.new-vaccination-page > .subpage-header > .vaccination-header-actions { display: flex; flex: 0 1 auto; justify-content: flex-end; min-width: 0; max-width: min(280px, 45%); }
+.vaccination-header-actions .vaccination-source-toolbar { max-width: 100%; }
+.new-vaccination-page .vaccination-fields,.new-vaccination-page .vaccination-save-bar { padding-inline: 0; }
+.new-vaccination-page .vaccination-save-bar { background: transparent; }
+.vaccination-previous-dose { flex: 0 0 auto; margin-bottom: 8px; }
+@media(max-width:760px) {
+  .app-shell.is-vaccination-entry .workspace { display: flex; flex-direction: column; height: 100dvh; min-height: 0; padding-bottom: calc(66px + var(--safe-bottom)); }
+  .app-shell.is-vaccination-entry .mobile-topbar { flex: 0 0 auto; }
+  .app-shell.is-vaccination-entry .page-content { flex: 1 1 auto; min-height: 0; padding-top: 8px; padding-bottom: 0; overflow: hidden; }
+  .new-vaccination-page { height: 100%; }
+  .vaccination-form > .vaccination-save-bar { padding-top: 4px; padding-bottom: max(4px, env(safe-area-inset-bottom)); border-top: 0; }
+  .new-vaccination-page .vaccination-save-bar { padding-bottom: 4px; }
+  .vaccination-editor-actions.form-actions > button { position: relative; flex: 0 0 auto; height: 32px; min-height: 32px; min-width: 72px; padding-inline: 14px; }
+  .vaccination-editor-actions.form-actions > button::after { content: ''; position: absolute; inset: -8px 0 -4px; }
+  .vaccination-editor-actions.form-actions > .primary-button { min-width: 104px; }
+}
+@media(max-width:390px) {
+  .vaccination-fields .form-grid.vaccination-core-secondary { grid-template-columns: minmax(0,1fr); }
+}
+
+@media (max-width: 760px) { .vaccination-source-picker .form-select-trigger { height: 44px; } }
+
+@media (max-width: 760px), (pointer: coarse) {
+  .new-vaccination-page > .subpage-header { min-height: 32px; gap: 6px; margin-bottom: 6px; }
+  .new-vaccination-page > .subpage-header h2 { font-size: 16px; line-height: 22px; }
+  .new-vaccination-page > .subpage-header > .health-category-icon { width: 22px; height: 22px; }
+  .new-vaccination-page > .subpage-header .subpage-back { position: relative; width: 28px; height: 28px; border-radius: 8px; background: transparent; box-shadow: none; }
+  .new-vaccination-page > .subpage-header .subpage-back::after { content: ''; position: absolute; inset: -8px; }
+  .new-vaccination-page > .subpage-header .subpage-back svg { width: 18px; height: 18px; }
+  .new-vaccination-page .vaccination-header-actions .form-select-trigger { position: relative; height: 32px; min-height: 32px; padding: 4px 8px; font-size: 14px; }
+  .new-vaccination-page .vaccination-header-actions .form-select-trigger::after { content: ''; position: absolute; inset: -6px 0; }
+  .new-vaccination-page .vaccination-fields { padding-top: 8px; }
+}

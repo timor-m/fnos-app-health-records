@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { useUnsavedRecord } from "../composables/useUnsavedRecord";
+import { createSubmissionKey } from "../utils/submission-key";
+import { onBeforeUnmount, computed, reactive, ref, watch } from "vue";
 import { LoaderCircle, Pencil, X } from "@lucide/vue";
 import FormSelect from "./FormSelect.vue";
 import { useScrollLock } from "../composables/useScrollLock";
@@ -12,6 +14,7 @@ import type {
 
 const props = defineProps<{
   open: boolean;
+  expectedSourceVersion?:number;
   reportId: string;
   reportType: string;
   section: ReportStructuredSection | null;
@@ -78,13 +81,19 @@ const sectionOptions = computed(() => {
   return effective.map((value) => ({ value, label: structuredSectionLabels[value] }));
 });
 
-watch(() => [props.open, props.section, props.reportType] as const, ([open]) => {
-  if (!open) return;
+const editVersion=ref<number>();
+let generation=0;let alive=true;onBeforeUnmount(()=>{alive=false;generation++;});
+const leave=useUnsavedRecord(()=>props.open?JSON.stringify(form):'',saving);
+const submissionKey=createSubmissionKey();
+async function close(){if(await leave.confirmLeave())emit('close');}
+watch(() => [props.open, props.reportId, props.section] as const, ([open]) => {
+  generation++;saving.value=false;editVersion.value=props.expectedSourceVersion;if(!open){leave.reset();return;}
   const fallback = sectionOptions.value[0]?.value || "checkup_package";
   form.sectionKey = props.section?.sectionKey || fallback;
   form.title = props.section?.title || structuredSectionLabels[form.sectionKey];
   form.content = props.section?.content || "";
   error.value = "";
+  leave.reset();submissionKey.reset();
 }, { immediate: true });
 
 watch(() => form.sectionKey, (key, previous) => {
@@ -96,39 +105,41 @@ watch(() => form.sectionKey, (key, previous) => {
 useScrollLock(computed(() => props.open));
 
 async function save() {
+  if(saving.value||!props.open)return;const token=generation;
   saving.value = true;
   error.value = "";
   try {
     const payload = {
       sectionKey: form.sectionKey,
       title: form.title,
-      content: form.content
+      content: form.content,expectedSourceVersion:editVersion.value
     };
     if (props.section?.id) {
       await request(`report-structured-sections/${encodeURIComponent(props.section.id)}`, {
         method: "PUT",
-        body: JSON.stringify(payload)
+        body: JSON.stringify({...payload,requestKey:submissionKey.forRequest(props.reportId,payload)})
       });
     } else {
       await request(`reports/${encodeURIComponent(props.reportId)}/structured-sections`, {
         method: "POST",
-        body: JSON.stringify(payload)
+        body: JSON.stringify({...payload,requestKey:submissionKey.forRequest(props.reportId,payload)})
       });
     }
+    if(!alive||token!==generation||!props.open)return;
     toast.show("报告专属内容已保存");
-    emit("saved");
+    leave.reset();emit("saved");
     emit("close");
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "保存失败";
+    if(alive&&token===generation)error.value = cause instanceof Error ? cause.message : "保存失败";
   } finally {
-    saving.value = false;
+    if(token===generation)saving.value = false;
   }
 }
 </script>
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="modal-backdrop structured-section-editor-backdrop" @click.self="emit('close')">
+    <div v-if="open" class="modal-backdrop structured-section-editor-backdrop" @click.self="close">
       <section class="modal-panel structured-section-editor" role="dialog" aria-modal="true" aria-label="校对报告专属内容">
         <header>
           <div>
@@ -138,7 +149,7 @@ async function save() {
               <small>人工结果在后续 AI 重跑时保持优先</small>
             </span>
           </div>
-          <button class="plain-icon-button" type="button" title="关闭" @click="emit('close')"><X :size="18" /></button>
+          <button class="plain-icon-button" type="button" title="关闭" @click="close"><X :size="18" /></button>
         </header>
         <form class="settings-form structured-section-editor-form" @submit.prevent="save">
           <div class="form-grid">
@@ -153,8 +164,8 @@ async function save() {
             </label>
           </div>
           <p v-if="error" class="inline-panel-error">{{ error }}</p>
-          <footer>
-            <button type="button" @click="emit('close')">取消</button>
+          <footer class="form-actions record-form-actions">
+            <button type="button" @click="close">取消</button>
             <button class="primary-button" type="submit" :disabled="saving">
               <LoaderCircle v-if="saving" class="spin-icon" :size="16" />{{ saving ? "保存中" : "保存校对" }}
             </button>

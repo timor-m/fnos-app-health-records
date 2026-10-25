@@ -1,3 +1,4 @@
+import { assertReportWriteVersion,bumpReportWriteVersion } from './report-write-version';
 import { assertNoPageAppend } from "./page-append-lock.service";
 import { createHash } from "node:crypto";
 import { createError } from "h3";
@@ -1135,9 +1136,11 @@ export function updateMorphologyFinding(user: RequestUser, findingId: string, in
   const db = getDatabase();
   db.exec("BEGIN IMMEDIATE");
   try {
+    assertReportWriteVersion(finding.reportId,input.expectedSourceVersion);
     db.prepare(`UPDATE morphology_findings SET ${updates.join(", ")}, source = 'manual',
       manual_fields_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
       .run(...values, JSON.stringify([...manualFields]), findingId);
+    bumpReportWriteVersion(finding.reportId);
     appendAudit(user, "morphology.update", findingId, { memberId: finding.memberId, fields: [...changed] });
     db.exec("COMMIT");
   } catch (error) {

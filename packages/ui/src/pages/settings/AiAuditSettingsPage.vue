@@ -60,7 +60,7 @@ function statusText(value: string) {
 }
 
 function sourceText(value: string) {
-  return value === "indicator_normalization" ? "指标归一化" : "报告整理";
+  return ({indicator_normalization:"指标归一化",health_process_summary:"健康历程整理",report_extraction:"报告整理"} as Record<string,string>)[value]||"AI 任务";
 }
 
 function routeText(value: string | null) {
@@ -147,7 +147,7 @@ onBeforeUnmount(() => observer?.disconnect());
     <section class="settings-band">
       <header>
         <Bot :size="20" />
-        <div><h3>调用概览</h3><p>统计报告整理和指标归一化的 AI 调用，Token 来自已返回的模型用量。</p></div>
+        <div><h3>调用概览</h3><p>统计报告整理、指标归一化和健康历程整理的 AI 调用，Token 来自已返回的模型用量。</p></div>
         <button class="plain-icon-button" type="button" :disabled="loading || refreshing" title="刷新" @click="refresh">
           <RefreshCw :size="17" :class="{ 'spin-icon': loading || refreshing }" />
         </button>

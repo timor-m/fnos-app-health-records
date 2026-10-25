@@ -322,7 +322,7 @@ watch(() => props.files.map(file => file.id), ids => {
 .organizer-modes button > span { flex: 1; min-width: 0; }
 .organizer-modes strong, .organizer-modes small { display: block; }
 .organizer-modes small, .organizer-preview-note { color: var(--muted); font-size: 12px; margin-top: 4px; }
-.organizer-section-heading { margin-top: 20px; font-size: 13px; line-height: 1.5; color: var(--muted); }
+.organizer-section-heading { margin-top: 20px; font-size: 12px; line-height: 1.5; color: var(--muted); }
 .organizer-files { display: grid; grid-template-columns: repeat(auto-fill,minmax(120px,1fr)); gap: 8px; }
 .organizer-file { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
 .organizer-file { transition: background-color .15s, border-color .15s; }
@@ -334,12 +334,12 @@ watch(() => props.files.map(file => file.id), ids => {
 .organizer-file img { width: 100%; height: 80px; object-fit: contain; }
 .organizer-file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .organizer-assignment, .organizer-switch { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-block: 12px; }
-.organizer-switch { padding: 10px 12px; border: 1px solid var(--amber); border-radius: 10px; background: var(--amber-soft); color: var(--amber); font-size: 13px; line-height: 1.5; }
+.organizer-switch { padding: 10px 12px; border: 1px solid var(--amber); border-radius: 10px; background: var(--amber-soft); color: var(--amber); font-size: 14px; line-height: 1.5; }
 .organizer-switch > svg { flex-shrink: 0; }
 .organizer-switch > span { flex: 1 1 180px; min-width: 0; }
 .organizer-switch > button { font-size: 12px; min-height: 32px; padding: 6px 12px; }
 .organizer-assignment > :deep(.form-select) { max-width: 200px; }
-.organizer-path { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 20px; font-size: 13px; }
+.organizer-path { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 20px; font-size: 14px; }
 .organizer-path button { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; color: var(--brand); padding: 6px 0; cursor: pointer; }
 .organizer-folder { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 8px; padding: 18px 10px; min-height: 154px; border: 1px solid var(--line); border-radius: 10px; background: var(--fill-2); color: var(--ink); cursor: pointer; min-width: 0; }
 .organizer-folder svg { color: var(--brand); }
@@ -355,7 +355,7 @@ watch(() => props.files.map(file => file.id), ids => {
 .organizer-file-order .organizer-sort-handle:active { cursor: grabbing; }
 .organizer-file-order button { border: 0; background: var(--fill-2); color: var(--ink); border-radius: 999px; width: 32px; height: 32px; display: grid; place-items: center; cursor: pointer; }
 .upload-organizer button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
-.organizer-summary { margin: 14px 0 0; font-size: 13px; }
+.organizer-summary { margin: 14px 0 0; font-size: 12px; }
 .upload-organizer button:disabled { opacity: .4; cursor: default; }
 @media (max-width: 760px) {
   .upload-organizer { padding: 10px; margin-block: 12px; }
@@ -381,7 +381,7 @@ watch(() => props.files.map(file => file.id), ids => {
   .organizer-modes button > svg:first-child { display: none; }
   .organizer-modes button > svg:last-child { position: absolute; top: 3px; right: 3px; width: 10px; height: 10px; }
   .organizer-modes strong { font-size: 12px; line-height: 1.5; }
-  .organizer-modes small { margin-top: 2px; font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+  .organizer-modes small { margin-top: 2px; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
 }
 @media (max-width: 359px) {
   .organizer-files { grid-template-columns: repeat(2, minmax(0, 1fr)); }

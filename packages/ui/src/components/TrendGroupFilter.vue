@@ -48,12 +48,12 @@ function expand(key: string) {
 </template>
 
 <style scoped>
-.trend-group-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px 8px; font-size: 15px; }
+.trend-group-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px 8px; font-size: 16px; }
 .trend-group-search { display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin: 0 4px 8px; border: 1px solid var(--line); border-radius: var(--radius-m); }
 .trend-group-search input { width: 100%; min-width: 0; padding: 0; background: transparent; border: 0; font: inherit; }
 .trend-group-domain { justify-content: flex-start; }
 .trend-group-content small { margin-left: auto; white-space: nowrap; color: var(--muted); font-size: 12px; }
 .trend-group-children { padding-left: 20px; }
-.trend-group-show-all { display: flex; align-items: center; gap: 8px; padding: 12px 8px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+.trend-group-show-all { display: flex; align-items: center; gap: 8px; padding: 12px 8px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
 .trend-group-show-all input { width: 16px; height: 16px; accent-color: var(--brand); }
 </style>

@@ -13,17 +13,17 @@
 | 项 | 当前值 | 来源 |
 | --- | --- | --- |
 | 应用 ID | `fnos-app-health-records` | `template.config.json` |
-| 应用版本 | `0.2.15` | `package.json` |
-| fnOS manifest 版本 | `0.2.15` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
-| fnOS sub_version | `0.2.15.0` | `scripts/prepare-package.mjs` 生成 |
-| Docker 镜像版本 | 本轮目标 `0.2.15`，发布后稳定版另提供 `latest` | GitHub Tag 工作流从 `package.json` 生成 |
+| 应用版本 | `0.3.0` | `package.json` |
+| fnOS manifest 版本 | `0.3.0` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
+| fnOS sub_version | `0.3.0.0` | `scripts/prepare-package.mjs` 生成 |
+| Docker 镜像版本 | 本轮目标 `0.3.0`，发布后稳定版另提供 `latest` | GitHub Tag 工作流从 `package.json` 生成 |
 | Docker 镜像仓库 | `docker.io/timorm/fnos-app-health-records` | Docker Hub，可通过 `DOCKERHUB_IMAGE` 覆盖 |
 | 数据库 schema | `v19` | `packages/server/database/migrations.ts` 最后一个迁移版本 |
 | 数据库记录表 | `schema_migrations`、`app_upgrade_history` | 服务端首次启动时初始化或迁移 |
 
 发布前必须确认：当前应用版本支持的目标 schema 版本明确、可初始化新库、可从上一发布版本迁移。
 
-0.2.12 已冻结发布内容，目标数据库 schema 保持 v19，不新增编号迁移；成员合并记录通过备份后的幂等结构补齐提供。0.2.13 已封板，变更记录冻结在 `0.2.13`，包含飞牛与 Docker 双向备份恢复接管、PDF 补页修复和取消 Docker 镜像签名。相对 0.2.12 数据库结构未变，schema 保持 v19，无新增结构或迁移；实际发布状态以 GitHub Release 为准。`v0.2.14` tag 已存在，本轮版本为 `0.2.15`，变更记录已封板，schema 保持 v19；实际发布状态以 `v0.2.15` tag 和 GitHub Release 为准。发布后的新开发先记入无编号 `Unreleased`，不自动递增下一版本。
+0.2.12、0.2.13 和 0.2.14 已发布。0.2.15 的变更记录已封板，目标数据库 schema 保持 v19，无新增结构或迁移；0.2.15 版本提交及 `v0.2.15` tag 已存在，实际发布状态以 GitHub Release 为准。当前暂存区的健康事件与持续健康历程归入 `0.3.0 - Unreleased`，应用迭代版本为 `0.3.0`，schema 编号仍为 v19。0.3.0 的结构草案须在发版前对照上一正式发布基线核对兼容性，不因新增表自动升号；正式发布后新开发先使用无编号 `Unreleased`。
 
 0.2.11 的目标数据库 schema 为 v19。保留原 v18 OCR 页面方向迁移，新增 v19 反馈状态、通知和管理员阅读记录；支持 0.2.10 的 v17、原 0.2.11 的 v18，以及已补齐反馈结构但仍记录 v18 的测试库，升级前自动备份，幂等保留数据。历史同号但不同内容的 v18 草案仍拒绝自动升级，保留数据并单独评审。0.2.11 撤回重发时保持同一应用版本，不改已发布迁移或清理旧安装数据；原镜像的已下载副本不会自动更新，需要主动拉取并重建容器。
 
@@ -143,6 +143,8 @@ schema v6 -> v7
 - 中间任一包含数据库变化的版本 -> 最新版本。
 - 缺少 `schema_migrations` 的早期开发库 -> 最新版本，如果这个版本曾经对外发布或已有用户数据。
 - 高版本数据库 -> 低版本应用，必须停止业务并保留维护页。
+
+0.3.0 直升验收还须覆盖实际交付的 0.2.15 安装包及其数据库、最近正式发布基线、空库和已有本轮结构的测试库，分别在 fnOS 与 Docker 验证。不能仅用 schema 同号或代码级测试替代安装验收。必须核对快照失败停止、同秒重试不覆盖快照、补齐异常整体回滚、强制中断后恢复与重试、大库耗时及空间压力、完整备份恢复、原件及权限保留。0.2.15 直接写入升级后数据库存在已确认的业务关联兼容风险，回到旧包不作为失败恢复方案，处理规则见[备份与恢复](BACKUP_RESTORE.md#0215-直接升级至-030)。
 
 ## 开发阶段流程
 

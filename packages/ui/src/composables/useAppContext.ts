@@ -1,4 +1,4 @@
-import { computed, readonly, ref, shallowRef, watch, type Ref } from "vue";
+import { computed, readonly, ref, shallowRef, shallowReadonly, watch, type Ref } from "vue";
 import { ApiRequestError, request } from "../utils/api";
 import { readStorage, writeStorage } from "../utils/storage";
 import type { AppNotification, HealthMember, Reminder, Session } from "../types/api";
@@ -151,7 +151,7 @@ export function useAppContext() {
     selectedMemberId,
     selectedMember,
     topbarSubtitles: readonly(topbarSubtitles),
-    topbarSearch: readonly(topbarSearch),
+    topbarSearch: shallowReadonly(topbarSearch),
     pendingReminderCount: readonly(pendingReminderCount),
     dataVersion: readonly(dataVersion),
     accessVersion: readonly(accessVersion),

@@ -1,5 +1,5 @@
 import { createError } from "h3";
-import { rollbackAfterError, getDatabase } from "../database/client";
+import { runInTransaction, getDatabase } from "../database/client";
 import { createId } from "../utils/identifier";
 import type { RequestUser } from "../domain/request-user";
 import { patientSexFromOcrText } from "./ai-input-planner.service";
@@ -442,45 +442,44 @@ export function assignReportMember(
       },
 ) {
   const db = getDatabase();
-  const report = db
-    .prepare(
-      "SELECT id, member_id AS memberId FROM reports WHERE id = ? AND status <> 'trashed'",
-    )
-    .get(reportId) as { id: string; memberId: string } | undefined;
-  if (!report) throw createError({ statusCode: 404, statusMessage: "报告不存在" });
-  assertMemberManage(user, report.memberId);
-  const targetMemberId =
-    "memberId" in input
-      ? input.memberId
-      : createMember(user, input.newMember).id;
-  if (targetMemberId === report.memberId)
-    throw createError({ statusCode: 409, statusMessage: "报告已归属该成员" });
-  assertMemberManage(user, targetMemberId);
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.prepare(
-      "UPDATE reports SET member_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-    ).run(targetMemberId, reportId);
-    db.prepare(
-      "UPDATE app_notifications SET member_id = ? WHERE report_id = ?",
-    ).run(targetMemberId, reportId);
-    db.prepare(
-      `
-      UPDATE health_members
-      SET blood_type_abo = NULL, blood_type_rh = NULL, blood_type_source_report_id = NULL,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND blood_type_source_report_id = ?
-    `,
-    ).run(report.memberId, reportId);
-    db.prepare(
-      "DELETE FROM report_field_overrides WHERE report_id = ? AND field_key = ?",
-    ).run(reportId, identityDismissedFieldKey);
-    db.exec("COMMIT");
-  } catch (error) {
-    rollbackAfterError(db);
-    throw error;
-  }
-  return { reportId, memberId: targetMemberId };
+  let targetMemberId = '';
+  runInTransaction(db, () => {
+    const report = db.prepare("SELECT id, member_id AS memberId FROM reports WHERE id=? AND status<>'trashed'")
+      .get(reportId) as {id:string;memberId:string}|undefined;
+    if (!report) throw createError({statusCode:404,statusMessage:'报告不存在'});
+    assertMemberManage(user, report.memberId);
+    targetMemberId = 'memberId' in input ? input.memberId : createMember(user, input.newMember).id;
+    if (targetMemberId === report.memberId) throw createError({statusCode:409,statusMessage:'报告已归属该成员'});
+    assertMemberManage(user, targetMemberId);
+
+    // Event/process and confirmed medication records belong to the original person.
+    // Move the report evidence, preserving those independent records and their snapshots.
+    const eventLinks = db.prepare("SELECT id,event_id AS eventId FROM health_event_resources WHERE resource_type='report' AND resource_id=?").all(reportId);
+    const courses = db.prepare('SELECT id FROM medication_courses WHERE source_report_id=?').all(reportId);
+    const reminders = db.prepare("SELECT id FROM reminders WHERE report_id=? AND source='report_suggestion'").all(reportId);
+    db.prepare("DELETE FROM health_event_resources WHERE resource_type='report' AND resource_id=?").run(reportId);
+    db.prepare("UPDATE health_upload_items SET context_json='{}',state='pending',event_id=NULL,updated_at=CURRENT_TIMESTAMP WHERE report_id=?").run(reportId);
+    db.prepare("DELETE FROM health_record_links WHERE (source_kind='report' AND source_id=?) OR (target_kind='report' AND target_id=?)").run(reportId,reportId);
+    db.prepare("DELETE FROM health_record_process_nodes WHERE kind='report' AND record_id=?").run(reportId);
+    db.prepare("DELETE FROM health_record_reminders WHERE anchor_kind IN ('report','medication_document') AND anchor_id=?").run(reportId);
+    db.prepare("UPDATE health_record_reminders SET completed_kind=NULL,completed_id=NULL WHERE completed_kind IN ('report','medication_document') AND completed_id=?").run(reportId);
+    db.prepare('UPDATE health_vaccinations SET source_report_id=NULL,source_fact_id=NULL,revision=revision+1 WHERE source_report_id=?').run(reportId);
+    db.prepare('UPDATE medication_courses SET source_report_id=NULL,source_medication_id=NULL,updated_at=CURRENT_TIMESTAMP WHERE source_report_id=?').run(reportId);
+    db.prepare('UPDATE medication_intakes SET source_report_id=NULL,source_medication_id=NULL,revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE source_report_id=?').run(reportId);
+    db.prepare("UPDATE reminders SET member_id=? WHERE report_id=? AND source='report_suggestion'").run(targetMemberId,reportId);
+    db.prepare("UPDATE reminders SET report_id=NULL WHERE report_id=? AND source='manual'").run(reportId);
+    db.prepare('UPDATE reports SET member_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(targetMemberId,reportId);
+    db.prepare('UPDATE app_notifications SET member_id=? WHERE report_id=?').run(targetMemberId,reportId);
+    db.prepare(`UPDATE health_members SET blood_type_abo=NULL,blood_type_rh=NULL,blood_type_source_report_id=NULL,
+      updated_at=CURRENT_TIMESTAMP WHERE id=? AND blood_type_source_report_id=?`).run(report.memberId,reportId);
+    db.prepare('DELETE FROM report_field_overrides WHERE report_id=? AND field_key=?').run(reportId,identityDismissedFieldKey);
+    db.prepare(`INSERT INTO audit_logs(id,actor_user_id,action,target_type,target_id,detail_json)
+      VALUES(?,?,'report.member.assign','report',?,?)`).run(createId('audit'),user.id,reportId,JSON.stringify({
+        fromMemberId:report.memberId,toMemberId:targetMemberId,
+        detachedEventLinks:eventLinks,detachedMedicationCourseIds:courses.map(row=>row.id),movedReminderIds:reminders.map(row=>row.id)
+      }));
+  });
+  return {reportId,memberId:targetMemberId};
 }
 
 export function dismissReportMemberIdentity(user: RequestUser, reportId: string) {

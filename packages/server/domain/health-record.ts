@@ -187,6 +187,7 @@ export type ReportProcedure = {
 };
 
 export type VaccinationRecord = {
+  confirmedVaccinationId?: string | null;
   id: string;
   reportId: string;
   vaccineName: string;
@@ -298,6 +299,9 @@ export type ReportPage = {
 };
 
 export type ReportSummary = {
+  eventId?: string | null;
+  eventTitle?: string | null;
+  eventCount?: number;
   deletedAt?: string | null;
   purgeAfter?: string | null;
   id: string;
@@ -445,6 +449,7 @@ export type ReportDuplicateDecisionRecord = {
 };
 
 export type ReportDetail = ReportSummary & {
+  sourceVersion: number;
   pageAppend?: {originalRevision:number;recognizedRevision:number|null;state:string;reviewWarnings?:string[]};
   createdAt: string;
   updatedAt: string;

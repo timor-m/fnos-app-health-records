@@ -1,0 +1,23 @@
+import { afterEach,beforeEach,expect,it,vi } from 'vitest';
+import { mount,flushPromises } from '@vue/test-utils';
+import { ref } from 'vue';
+import Action from '../src/components/HealthRecordTrashAction.vue';
+const mocks=vi.hoisted(()=>({request:vi.fn(),ask:vi.fn(),toast:vi.fn()}));
+const app={selectedMemberId:ref('member'),selectedMember:ref({id:'member',permission:'manager'}),notifyDataChanged:vi.fn(),refreshReminderCount:vi.fn()};
+vi.mock('../src/utils/api',()=>({request:mocks.request}));
+vi.mock('../src/composables/useAppContext',()=>({useAppContext:()=>app}));
+vi.mock('../src/composables/useConfirm',()=>({useConfirm:()=>({ask:mocks.ask,state:ref(null),cancel:vi.fn()})}));
+vi.mock('../src/composables/useToast',()=>({useToast:()=>({show:mocks.toast})}));
+const wrappers:ReturnType<typeof mount>[]=[];
+function render(kind:'symptom'|'medication'|'intake'|'vaccination'|'report'='symptom'){const wrapper=mount(Action,{props:{target:{kind,id:'target',title:'合成记录',memberId:'member',revision:7}}});wrappers.push(wrapper);return wrapper;}
+beforeEach(()=>{vi.clearAllMocks();app.selectedMemberId.value='member';app.selectedMember.value={id:'member',permission:'manager'};mocks.request.mockResolvedValue({});});
+afterEach(()=>wrappers.splice(0).forEach(wrapper=>wrapper.unmount()));
+it.each(['symptom','medication','intake','vaccination','report'] as const)('%s has the same visible toolbar and preserves exact deletion semantics',async kind=>{
+ const wrapper=render(kind);expect(wrapper.get('.record-detail-toolbar > button').attributes('aria-label')).toBe('移入回收站');expect(wrapper.get('.record-trash-button').text()).toBe('');expect(wrapper.get('.record-trash-button').attributes('title')).toBe('移入回收站');await wrapper.get('button').trigger('click');expect(mocks.request).not.toHaveBeenCalled();const confirm=mocks.ask.mock.calls[0][0];expect(confirm.title).toBe('移入回收站');expect(confirm.message).toContain('保留 30 天');if(kind==='medication')expect(confirm.message).toContain('服药补充会一并隐藏');await confirm.run();await flushPromises();
+ if(kind==='report')expect(mocks.request).toHaveBeenCalledWith('reports/target',{method:'DELETE'});else if(kind==='vaccination')expect(mocks.request).toHaveBeenCalledWith('vaccinations/target',{method:'DELETE',body:JSON.stringify({revision:7})});else expect(mocks.request).toHaveBeenCalledWith('health-records/trash',{method:'POST',body:JSON.stringify({kind,id:'target',revision:7,operation:'trash'})});expect(wrapper.emitted('trashed')).toHaveLength(1);expect(app.notifyDataChanged).toHaveBeenCalledOnce();
+});
+it('a viewer or a different member never gets a deletion button',async()=>{app.selectedMember.value.permission='viewer';const wrapper=render();expect(wrapper.find('button').exists()).toBe(false);app.selectedMember.value.permission='manager';app.selectedMemberId.value='other';await flushPromises();expect(wrapper.find('button').exists()).toBe(false);});
+it('a stale confirmation cannot delete a replacement record or another member',async()=>{const wrapper=render();await wrapper.get('button').trigger('click');const confirm=mocks.ask.mock.calls[0][0];await wrapper.setProps({target:{kind:'intake',id:'new',title:'合成新记录',memberId:'member',revision:1}});await confirm.run();expect(mocks.request).not.toHaveBeenCalled();await wrapper.get('button').trigger('click');app.selectedMemberId.value='other';await mocks.ask.mock.calls[1][0].run();expect(mocks.request).not.toHaveBeenCalled();});
+it('failed trash preserves the detail and a late successful request cannot close a replacement detail',async()=>{const wrapper=render();await wrapper.get('button').trigger('click');mocks.request.mockRejectedValueOnce(Error('合成冲突'));await expect(mocks.ask.mock.calls[0][0].run()).rejects.toThrow('合成冲突');expect(wrapper.emitted('trashed')).toBeUndefined();expect(wrapper.get('button').attributes('disabled')).toBeUndefined();await wrapper.get('button').trigger('click');let finish!:(value:unknown)=>void;mocks.request.mockReturnValueOnce(new Promise(resolve=>finish=resolve));const pending=mocks.ask.mock.calls[1][0].run();await wrapper.setProps({target:{kind:'symptom',id:'new',title:'合成新记录',memberId:'member',revision:1}});finish({});await pending;expect(wrapper.emitted('trashed')).toBeUndefined();});
+
+it('a deletion that completes after the selected member changes cannot close or notify that member',async()=>{const wrapper=render();await wrapper.get('button').trigger('click');let finish!:(value:unknown)=>void;mocks.request.mockReturnValueOnce(new Promise(resolve=>finish=resolve));const pending=mocks.ask.mock.calls[0][0].run();app.selectedMemberId.value='other';finish({});await pending;expect(wrapper.emitted('trashed')).toBeUndefined();expect(app.notifyDataChanged).not.toHaveBeenCalled();});

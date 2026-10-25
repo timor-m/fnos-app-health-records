@@ -8,6 +8,7 @@ export type ConfirmOptions = {
   confirmText?: string;
   cancelText?: string;
   danger?: boolean;
+  onCancel?: () => void;
   choice?: { label: string; checked: boolean; change: (checked: boolean) => Promise<string> };
   run: () => Promise<void> | void;
 };
@@ -19,11 +20,14 @@ const state = ref<ConfirmState | null>(null);
 /** App-wide in-app confirm dialog. Mount <ConfirmDialog /> once in App.vue. */
 export function useConfirm() {
   function ask(options: ConfirmOptions) {
+    state.value?.onCancel?.();
     state.value = { ...options, loading: false };
   }
   function cancel() {
     if (state.value?.loading) return;
+    const previous = state.value;
     state.value = null;
+    previous?.onCancel?.();
   }
   async function confirm() {
     if (!state.value || state.value.loading) return;

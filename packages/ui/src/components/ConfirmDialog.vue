@@ -1,12 +1,37 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { CircleAlert, LoaderCircle } from "@lucide/vue";
 import { useConfirm } from "../composables/useConfirm";
 import { useScrollLock } from "../composables/useScrollLock";
 
 const confirmDialog = useConfirm();
 const open = computed(() => Boolean(confirmDialog.state.value));
+const panel = ref<HTMLElement | null>(null);
+let returnFocus: HTMLElement | null = null;
 useScrollLock(open);
+watch(open, async visible => {
+  if (visible) {
+    returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    await nextTick();
+    if (open.value) panel.value?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({preventScroll:true});
+  } else {
+    if (returnFocus?.isConnected) returnFocus.focus({preventScroll:true});
+    returnFocus = null;
+  }
+});
+function onKeydown(event: KeyboardEvent) {
+  if (!open.value || !panel.value) return;
+  if (event.key==='Escape') { event.preventDefault(); event.stopImmediatePropagation(); confirmDialog.cancel(); return; }
+  if (event.key!=='Tab') return;
+  event.stopPropagation();
+  const controls=[...panel.value.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled)')];
+  const first=controls[0]; const last=controls.at(-1);
+  if (!first) { event.preventDefault(); panel.value.focus(); return; }
+  if (event.shiftKey && (document.activeElement===first || !panel.value.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
+  else if (!event.shiftKey && (document.activeElement===last || !panel.value.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
+}
+onMounted(()=>window.addEventListener('keydown',onKeydown,true));
+onBeforeUnmount(()=>{window.removeEventListener('keydown',onKeydown,true);if(returnFocus?.isConnected)returnFocus.focus({preventScroll:true});});
 async function changeChoice(event: Event) {
   const input=event.target as HTMLInputElement;
   await confirmDialog.choose(input.checked);
@@ -17,7 +42,7 @@ async function changeChoice(event: Event) {
 <template>
   <Teleport to="body">
     <div v-if="confirmDialog.state.value" class="modal-backdrop report-edit-backdrop confirm-backdrop" @click.self="confirmDialog.cancel">
-      <section class="modal-panel confirm-modal" role="alertdialog" aria-modal="true" :aria-label="confirmDialog.state.value.title">
+      <section ref="panel" class="modal-panel confirm-modal" role="alertdialog" aria-modal="true" :aria-label="confirmDialog.state.value.title" tabindex="-1">
         <header>
           <div><CircleAlert :size="20" /><h3>{{ confirmDialog.state.value.title }}</h3></div>
         </header>

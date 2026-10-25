@@ -126,7 +126,7 @@ onBeforeUnmount(() => {
 .about-wechat-content { display: flex; align-items: center; gap: 24px; padding: 20px; }
 .about-wechat-content img { display: block; width: min(360px, 55%); height: auto; max-width: 100%; background: #fff; flex-shrink: 0; border: 1px solid var(--line); border-radius: 12px; }
 .about-wechat-description { display: grid; gap: 12px; min-width: 0; overflow-wrap: anywhere; }
-.about-wechat-description strong { font-size: 15px; color: var(--ink); }
+.about-wechat-description strong { font-size: 14px; color: var(--ink); }
 .about-wechat-description p { line-height: 1.7; }
 .about-wechat-intro { white-space: pre-wrap; }
 @media (max-width: 600px) {

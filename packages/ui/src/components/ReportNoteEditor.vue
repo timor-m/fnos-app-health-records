@@ -5,7 +5,7 @@ import { ArrowLeft, ArrowRight, FileImage, LoaderCircle, Plus, Trash2, X } from 
 import ImageViewer, { type ImageViewerPage } from './ImageViewer.vue';
 import { request, requestUpload, apiUrl } from '../utils/api';
 import { useScrollLock } from '../composables/useScrollLock';
-import { useConfirm } from '../composables/useConfirm';
+import { useUnsavedRecord } from '../composables/useUnsavedRecord';
 import { reportNoteLimits, type ReportNote } from '../../../shared/report-notes';
 import { maxUploadFileBytes } from '../../../shared/upload-limits';
 
@@ -29,9 +29,8 @@ onMounted(() => {
   panel.value?.focus({ preventScroll: true });
 });
 const viewer = ref<{ pages: ImageViewerPage[]; index: number } | null>(null);
-const confirm = useConfirm();
 const busy = computed(() => saving.value || images.value.some(image => image.status === 'uploading'));
-const dirty = computed(() => content.value !== (props.note?.contentText || '') || images.value.map(image => image.id || image.key).join(',') !== (props.note?.assets || []).map(image => image.id).join(','));
+const leave=useUnsavedRecord(()=>JSON.stringify([content.value,images.value.map(image=>image.id||image.key)]),busy);
 const objectUrls = new Set<string>();
 useScrollLock(computed(() => true));
 onBeforeUnmount(() => {
@@ -47,11 +46,8 @@ function trapFocus(event: KeyboardEvent) {
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
 }
 const formatSize = (bytes: number) => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-function close() {
-  if (busy.value) return;
-  if (!dirty.value) { emit('close'); return; }
-  confirm.ask({ title: '放弃未保存的补充记录？', message: '尚未保存的文字和图片不会加入报告。', confirmText: '放弃', run: () => emit('close') });
-}
+async function close(){if(await leave.confirmLeave())emit('close');}
+
 async function upload(image: SelectedImage) {
   if (!image.file) return;
   image.status = 'uploading'; image.error = ''; image.progress = 0;
@@ -92,7 +88,7 @@ async function save() {
     const note = await request<ReportNote>(`reports/${props.reportId}/notes${props.note ? `/${props.note.id}` : ''}`, {
       method: props.note ? 'PATCH' : 'POST', body: JSON.stringify({ id: createId, contentText: content.value, updatedAt: props.note?.updatedAt,
         assets: images.value.map(image => image.id ? { id: image.id } : { uploadToken: image.uploadToken }) }) });
-    emit('saved', note);
+    leave.reset();emit('saved', note);
   } catch (cause) { error.value = cause instanceof Error ? cause.message : '保存失败，请重试'; }
   finally { saving.value = false; }
 }
@@ -124,7 +120,7 @@ async function save() {
             <p class="preview-hint">补充资料不会改变报告原件，也不会参与 OCR 或 AI 识别。</p>
             <p v-if="error" class="inline-panel-error" role="alert">{{ error }}</p>
           </div>
-          <footer class="form-actions report-note-editor-actions"><button type="button" :disabled="busy" @click="close">取消</button><button type="submit" class="primary-button" :disabled="busy"><LoaderCircle v-if="saving" class="spin-icon" :size="16" />{{ saving ? '保存中…' : '保存' }}</button></footer>
+          <footer class="form-actions report-note-editor-actions record-form-actions"><button type="button" :disabled="busy" @click="close">取消</button><button type="submit" class="primary-button" :disabled="busy"><LoaderCircle v-if="saving" class="spin-icon" :size="16" />{{ saving ? '保存中…' : '保存' }}</button></footer>
         </form>
       </section>
     </div>

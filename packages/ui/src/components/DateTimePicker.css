@@ -121,7 +121,7 @@
 
 .datetime-wheel-item {
   height: 40px; display: flex; align-items: center; justify-content: center;
-  font-size: 18px;
+  font-size: 14px;
   color: var(--ink-2, #55554f);
   transition: color .15s, transform .15s;
 }
@@ -129,7 +129,7 @@
 .datetime-wheel-item.selected {
   color: var(--ink, #232422);
   font-weight: 600;
-  transform: scale(1.1);
+  transform: none;
 }
 
 /* 滚动条隐藏 */
@@ -162,7 +162,7 @@
     padding-inline: 8px;
   }
 
-  .datetime-wheel-item { font-size: 16px; }
+  .datetime-wheel-item { font-size: 14px; }
 }
 
 @keyframes slide-up {
@@ -172,8 +172,8 @@
 
 @media (max-width: 360px) {
   .datetime-picker-wheels { gap: 0; padding-inline: 4px; }
-  .datetime-wheel-label { font-size: 11px; }
-  .datetime-wheel-item { font-size: 15px; }
+  .datetime-wheel-label { font-size: 12px; }
+  .datetime-wheel-item { font-size: 14px; }
 }
 
 /* When the viewport is shorter than the picker, keep all controls reachable. */
@@ -192,7 +192,7 @@
   .datetime-picker-header { padding: 10px 14px; }
   .datetime-picker-wheels { height: 232px; padding-block: 12px; }
   .wheel-scroll-wrapper { --datetime-wheel-center-offset: 75px; }
-  .datetime-wheel-item { font-size: 16px; }
+  .datetime-wheel-item { font-size: 14px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
