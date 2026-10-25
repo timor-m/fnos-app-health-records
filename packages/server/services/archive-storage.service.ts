@@ -41,7 +41,7 @@ export async function getArchiveStorageStatus(user: RequestUser) {
     capacityBytes,
     deployment: config.authMode === 'fnos' ? 'fnos' : 'development',
     migrationAvailable: !error,
-    roots: listLocalImportRoots(),
+    roots: [...(config.storageRelocated ? [{id:'default',path:config.runtimeDir,label:`默认位置 · ${config.runtimeDir}`}] : []),...listLocalImportRoots()],
     migration: getStorageMigration(),
     paused: storageMigrationPaused(),
   };

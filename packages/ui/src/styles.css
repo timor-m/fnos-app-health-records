@@ -876,7 +876,11 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .trend-points a:hover, .trend-points button:not(.trend-flag):hover { background: var(--brand-softer); color: var(--brand); }
 .trend-points .trend-source-button {
   width: auto; min-width: 42px; padding: 0 9px; background: var(--brand-softer); color: var(--brand-strong);
-  font-size: 12px; font-weight: 800;
+  font-size: 12px; font-weight: 800; white-space: nowrap;
+}
+@media (max-width: 760px), (pointer: coarse) {
+  .trend-points article { padding-right: 2px; column-gap: 0; }
+  .trend-points button.trend-source-button { width: max-content; min-width: 32px; padding-inline: 4px; }
 }
 .trend-source-modal { width: min(960px, calc(100vw - 28px)); }
 .trend-source-body { min-height: 0; padding: 14px; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 12px; }

@@ -3,6 +3,8 @@ export type IdentityProvider = "fnos_gateway" | "local" | "development";
 export type RequestUser = {
   id: string;
   displayName: string;
+  /** Original UID from the trusted fnOS gateway; never use the mapped application ID for platform ACLs. */
+  fnosUid?: string;
   provider: IdentityProvider;
   authenticated: boolean;
   isAdmin?: boolean;

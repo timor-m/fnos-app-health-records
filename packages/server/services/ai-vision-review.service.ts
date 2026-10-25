@@ -348,7 +348,8 @@ export function acceptVisionObservations(
       && review.sourceLineIds.length && review.sourceLineIds.every(id => matched.sourceLineIds.includes(id)));
     const shortCellName = /^[a-z]$/i.test(name) && matched.sourceCells?.some(cell =>
       compactNameText(cell.text) === name && cell.sourceLineIds?.length);
-    const anchored = (name.length >= 2 || shortCellName) && sourceName.includes(name)
+    const singleHanName = /^\p{Script=Han}$/u.test(name);
+    const anchored = (name.length >= 2 || shortCellName || singleHanName) && sourceName.includes(name)
       || code.length >= 2 && sourceName.includes(code) || nameCorrected;
     const time = observation.examination?.timeText;
     const scopedResults = measurementEvidenceRegions(matched.text, [nameCorrected ? review!.originalName : observation.itemName, observation.itemCode || '']);
@@ -359,7 +360,13 @@ export function acceptVisionObservations(
         ? number === leadingMeasurementNumber(observation.resultText) && (observation.numericValue === null || number === observation.numericValue)
         : compactNameText(region).startsWith(compactNameText(observation.resultText));
     });
-    if ((scopedResults.length ? scopedResults : [matched.text]).some(region => hasLostMeasurementBound(observation.resultText, observation.numericValue, region)) || !anchored || /^(?:备注|说明|参考范围|参考值|单位|签名|审核)$/.test(name)
+    // A single Han character must identify its own result, never a substring or reference value.
+    const singleHanResultMatches = !singleHanName || scopedResults.some(region => {
+      const number = leadingMeasurementNumber(region);
+      return number !== null && number === leadingMeasurementNumber(observation.resultText)
+        && (observation.numericValue === null || number === observation.numericValue);
+    });
+    if (!singleHanResultMatches || (scopedResults.length ? scopedResults : [matched.text]).some(region => hasLostMeasurementBound(observation.resultText, observation.numericValue, region)) || !anchored || /^(?:备注|说明|参考范围|参考值|单位|签名|审核)$/.test(name)
       || !correctedResultMatches
       || (time && !compactNameText([matched.text, matched.tableHeaderText].join(' ')).includes(compactNameText(time)))) {
       rejected += 1;

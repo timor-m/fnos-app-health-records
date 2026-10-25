@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { H3 } from 'h3';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import handler from '../routes/api/wechat-group.get';
@@ -28,6 +28,7 @@ const unavailable = { group: null, serverTime: localNow.toISOString() };
 test('group response preserves the original non-QR image and uses upstream time despite local clock skew', async () => {
   let calls = 0;
   const result = await getWechatGroup({
+    cachePath: null,
     now: () => localNow,
     request: async (path, options) => {
       calls++;
@@ -110,12 +111,13 @@ test('network errors, HTTP failures and invalid remote envelopes never escape or
     ];
     for (const response of responses) {
       const result = await getWechatGroup({
+        cachePath: null,
         now: () => localNow,
         request: (path, options) => sendFeedbackRequest(path, options, { identity: () => 'synthetic', fetch: async () => response() }),
       });
       assert.deepEqual(result, unavailable);
     }
-    assert.deepEqual(await getWechatGroup({ now: () => localNow, request: async () => { throw new Error('SYNTHETIC_PRIVATE'); } }), unavailable);
+    assert.deepEqual(await getWechatGroup({ cachePath: null, now: () => localNow, request: async () => { throw new Error('SYNTHETIC_PRIVATE'); } }), unavailable);
     assert.deepEqual(logs, []);
   } finally {
     console.error = originalError;
@@ -127,6 +129,7 @@ test('short upstream timeout aborts and returns an empty result without exposing
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const result = await getWechatGroup({
+      cachePath: null,
       now: () => localNow,
       timeoutSignal: milliseconds => {
         assert.equal(milliseconds, 5000);
@@ -140,10 +143,10 @@ test('short upstream timeout aborts and returns an empty result without exposing
     });
     assert.deepEqual(result, unavailable);
   } finally { clearTimeout(timer); }
-  assert.deepEqual(await getWechatGroup({ now: () => localNow, timeoutSignal: () => AbortSignal.abort(), request: async () => valid }), unavailable);
+  assert.deepEqual(await getWechatGroup({ cachePath: null, now: () => localNow, timeoutSignal: () => AbortSignal.abort(), request: async () => valid }), unavailable);
 });
 
-test('local route retains login guard, disables caches and reuses installation identity, version and deployment UA', async () => {
+test('local route retains login guard and browser no-store, reuses installation identity and caches upstream image in app storage', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'wechat-group-route-'));
   const env = { ...process.env }, originalFetch = globalThis.fetch;
   process.env.STORAGE_DIR = dir;
@@ -168,7 +171,10 @@ test('local route retains login guard, disables caches and reuses installation i
     const response = await app.request('http://localhost/api/wechat-group', { headers: { 'x-client-id': 'forged', 'x-version': 'forged', 'User-Agent': 'private', Authorization: 'Bearer private', Cookie: 'private=1' } });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get('cache-control'), 'no-store');
-    assert.deepEqual(await response.json(), { ok: true, data: valid });
+    const first = await response.json();
+    assert.equal(first.ok, true);
+    assert.deepEqual(first.data.group, group);
+    assert.ok(Date.parse(first.data.serverTime) >= Date.parse(serverTime));
     const config = getAppConfig();
     assert.equal(calls[0].url, 'https://gateway.lby.link/health/v1/wechat-group');
     assert.equal(calls[0].headers.get('x-client-id'), identity);
@@ -182,9 +188,10 @@ test('local route retains login guard, disables caches and reuses installation i
     assert.equal(fallback.headers.get('cache-control'), 'no-store');
     const result = await fallback.json();
     assert.equal(result.ok, true);
-    assert.equal(result.data.group, null);
+    assert.deepEqual(result.data.group, group);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, 'cache', 'wechat-group.json'), 'utf8')).result.group, group);
     assert.ok(Number.isFinite(Date.parse(result.data.serverTime)));
-    assert.equal(calls[1].headers.get('x-client-id'), identity);
   } finally {
     globalThis.fetch = originalFetch;
     closeDatabaseForTests();

@@ -1,3 +1,7 @@
+import { readFile, stat } from 'node:fs/promises';
+import { join } from 'node:path';
+import { getAppConfig } from '../utils/runtime-config';
+import { atomicStorageJson } from '../utils/storage-migration-state';
 import { sendFeedbackRequest } from './feedback-remote.service';
 
 export interface WechatGroup {
@@ -44,7 +48,7 @@ function timestamp(value: unknown): number | null {
   return Number.isFinite(result) ? result : null;
 }
 
-export function parseWechatGroupResult(value: unknown, now = new Date()): WechatGroupResult {
+function parseGroupResult(value: unknown, now: Date, keepExpired: boolean): WechatGroupResult {
   const unavailable: WechatGroupResult = { group: null, serverTime: now.toISOString() };
   if (!isRecord(value)) return unavailable;
   const serverTime = timestamp(value.serverTime);
@@ -57,7 +61,7 @@ export function parseWechatGroupResult(value: unknown, now = new Date()): Wechat
     || !Number.isSafeInteger(group.revision) || (group.revision as number) <= 0
     || typeof group.name !== 'string' || !group.name.trim() || group.name.length > 120
     || typeof group.description !== 'string' || group.description.length > 1000
-    || !isWechatGroupQrContent(group.qrContent) || expiresAt === null || expiresAt <= serverTime) return unavailable;
+    || !isWechatGroupQrContent(group.qrContent) || expiresAt === null || (!keepExpired && expiresAt <= serverTime)) return unavailable;
   return {
     group: {
       id: group.id as number,
@@ -71,16 +75,86 @@ export function parseWechatGroupResult(value: unknown, now = new Date()): Wechat
   };
 }
 
-export async function getWechatGroup(dependencies: {
+export function parseWechatGroupResult(value: unknown, now = new Date()): WechatGroupResult {
+  return parseGroupResult(value, now, false);
+}
+
+const retryInterval = 60 * 60 * 1000;
+const maxCacheBytes = Math.ceil(5 * 1024 * 1024 / 3) * 4 + 64 * 1024;
+interface WechatGroupCache {
+  version: 1;
+  requestedAt: number;
+  nextCheckAt: number;
+  result: WechatGroupResult;
+}
+interface WechatGroupDependencies {
   request?: typeof sendFeedbackRequest;
   now?: () => Date;
   timeoutSignal?: (milliseconds: number) => AbortSignal;
-} = {}): Promise<WechatGroupResult> {
+  // null bypasses persistence for isolated remote/validation tests.
+  cachePath?: string | null;
+}
+const pending = new Map<string, Promise<WechatGroupResult>>();
+
+async function readCache(path: string, now: Date): Promise<WechatGroupCache | null> {
+  try {
+    if ((await stat(path)).size > maxCacheBytes) return null;
+    const value: unknown = JSON.parse(await readFile(path, 'utf8'));
+    if (!isRecord(value) || value.version !== 1
+      || !Number.isSafeInteger(value.requestedAt) || (value.requestedAt as number) < 0
+      || (value.requestedAt as number) > now.getTime()
+      || !Number.isSafeInteger(value.nextCheckAt) || (value.nextCheckAt as number) < (value.requestedAt as number)
+      || !isRecord(value.result) || timestamp(value.result.serverTime) === null) return null;
+    const result = parseGroupResult(value.result, now, true);
+    if (value.result.group !== null && result.group === null) return null;
+    return { version: 1, requestedAt: value.requestedAt as number, nextCheckAt: value.nextCheckAt as number, result };
+  } catch { return null; }
+}
+
+function cachedResult(cache: WechatGroupCache, now: Date): WechatGroupResult {
+  // Advance upstream time by local elapsed time; returning the saved time would renew
+  // the browser's countdown on every refresh. Absolute NAS clock skew is harmless.
+  const serverTime = Date.parse(cache.result.serverTime) + now.getTime() - cache.requestedAt;
+  if (!Number.isFinite(serverTime) || Math.abs(serverTime) > 8.64e15) return { group: null, serverTime: now.toISOString() };
+  return parseWechatGroupResult({ ...cache.result, serverTime: new Date(serverTime).toISOString() }, now);
+}
+
+async function loadGroup(path: string | null, dependencies: WechatGroupDependencies): Promise<WechatGroupResult> {
   const now = dependencies.now ?? (() => new Date());
+  const cached = path ? await readCache(path, now()) : null;
+  if (cached && now().getTime() < cached.nextCheckAt) return cachedResult(cached, now());
+  const requestedAt = now().getTime();
+  let result: WechatGroupResult | null = null;
   try {
     const signal = (dependencies.timeoutSignal ?? AbortSignal.timeout)(5000);
     const value = await (dependencies.request ?? sendFeedbackRequest)('/wechat-group', { signal });
-    if (!signal.aborted) return parseWechatGroupResult(value, now());
+    if (!signal.aborted) result = parseGroupResult(value, now(), true);
   } catch { /* Optional About content must not surface remote failures or log payloads. */ }
-  return { group: null, serverTime: now().toISOString() };
+  const receivedAt = now().getTime();
+  const validUntil = result?.group
+    ? requestedAt + Date.parse(result.group.expiresAt) - Date.parse(result.serverTime) : 0;
+  // Keep the last image even when the gateway no longer returns it. Expired images
+  // remain on disk only; responses always filter them out before reaching the UI.
+  const cache: WechatGroupCache = !result?.group && cached ? { ...cached, nextCheckAt: receivedAt + retryInterval } : {
+    version: 1,
+    // Anchor at request start so network time cannot extend the image's lifetime.
+    requestedAt,
+    nextCheckAt: validUntil > receivedAt ? validUntil : receivedAt + retryInterval,
+    result: result ?? { group: null, serverTime: new Date(receivedAt).toISOString() },
+  };
+  if (path) {
+    try { atomicStorageJson(path, cache); } catch { /* Cache storage must not break optional About content. */ }
+  }
+  return cachedResult(cache, now());
+}
+
+export async function getWechatGroup(dependencies: WechatGroupDependencies = {}): Promise<WechatGroupResult> {
+  const path = dependencies.cachePath === undefined
+    ? join(getAppConfig().runtimeDir, 'cache', 'wechat-group.json') : dependencies.cachePath;
+  if (path === null) return loadGroup(null, dependencies);
+  const existing = pending.get(path);
+  if (existing) return existing;
+  const request = loadGroup(path, dependencies);
+  pending.set(path, request);
+  try { return await request; } finally { pending.delete(path); }
 }

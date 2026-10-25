@@ -3,8 +3,10 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { RotateCw } from '@lucide/vue';
 import { originalOrientationLayout } from '../utils/original-orientation';
 
-const props = defineProps<{ image: HTMLImageElement | null; pageKey: string; initialRotation?: number }>();
+const props = defineProps<{ image: HTMLImageElement | null; pageKey: string; initialRotation?: number; toolbarTarget?: HTMLElement | null }>();
+const emit = defineEmits<{ rotationChange: [rotation: number] }>();
 const rotation = ref(props.initialRotation || 0);
+watch(rotation, value => emit("rotationChange",value), {immediate:true});
 const viewport = ref<HTMLElement | null>(null);
 const size = ref({ width: 0, imageWidth: 0, imageHeight: 0 });
 let observer: ResizeObserver | undefined;
@@ -34,6 +36,7 @@ const contentStyle = computed(() => layout.value ? {
 
 <template>
   <div class="original-orientation">
+    <Teleport :to="toolbarTarget || 'body'" :disabled="!toolbarTarget">
     <div class="original-orientation-toolbar">
       <button class="plain-icon-button" type="button" :disabled="!layout"
         title="顺时针旋转 90°" aria-label="顺时针旋转 90°"
@@ -41,6 +44,7 @@ const contentStyle = computed(() => layout.value ? {
         <RotateCw :size="18" />
       </button>
     </div>
+    </Teleport>
     <div ref="viewport" class="original-orientation-viewport" :style="layout ? { height: `${layout.stageHeight}px` } : undefined">
       <div class="original-orientation-content" :style="contentStyle"><slot /></div>
     </div>

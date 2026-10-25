@@ -501,6 +501,8 @@ export type OcrLineDetail = {
   text: string;
   confidence: number;
   box: number[] | null;
+  /** OCR 阅读方向中的位置，不随原件查看旋转变化。 */
+  readingBox?: number[] | null;
 };
 
 export type OcrPageDetail = {
@@ -513,6 +515,8 @@ export type OcrPageDetail = {
   /** 坐标无法可靠转换时为 true；已转换的坐标对应图片原件或当前 PDF 预览。 */
   orientationChanged: boolean;
   lines: OcrLineDetail[];
+  readingCoordWidth?: number | null;
+  readingCoordHeight?: number | null;
 };
 
 export type ObservationEvidence = {
@@ -520,6 +524,8 @@ export type ObservationEvidence = {
   lineIds: string[];
   sourceText: string;
   confidence: number | null;
+  region?: [number,number,number,number];
+  readingRegion?: [number,number,number,number];
 };
 
 export type Observation = {

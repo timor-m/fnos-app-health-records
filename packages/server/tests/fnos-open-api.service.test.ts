@@ -8,7 +8,8 @@ import type { RequestUser } from "../domain/request-user.ts";
 import { checkFnosUserAcl, getFnosUserAccessibleFolders } from "../services/fnos-open-api.service.ts";
 
 const user: RequestUser = {
-  id: "1001",
+  id: "user-synthetic-mapped",
+  fnosUid: "1001",
   displayName: "普通用户",
   provider: "fnos_gateway",
   authenticated: true,
@@ -49,6 +50,21 @@ test("queries fnOS personal folders and checks the current user's file ACL", asy
       writable: false,
       deletable: false
     }]);
+    assert.equal(requests.length, 2);
+    assert.deepEqual((requests[1]!.body.data as { uid: number }).uid, 1001);
+    for (const invalid of [
+      { ...user, id: "1001", fnosUid: undefined },
+      { ...user, fnosUid: "user-synthetic-mapped" },
+      { ...user, fnosUid: "9007199254740992" },
+      { ...user, fnosUid: "1.5" },
+      { ...user, fnosUid: "-1" },
+      { ...user, fnosUid: "1001", provider: "local" as const },
+      { ...user, fnosUid: "1001", provider: "development" as const },
+      { ...user, authenticated: false }
+    ]) {
+      await assert.rejects(() => getFnosUserAccessibleFolders(invalid), (e: unknown) => (e as {statusCode?: number}).statusCode === 403);
+      await assert.rejects(() => checkFnosUserAcl(invalid, ["/synthetic/blocked"]), (e: unknown) => (e as {statusCode?: number}).statusCode === 403);
+    }
     assert.equal(requests.length, 2);
     assert.equal(requests.every((item) => item.authorization === "Bearer test-token"), true);
     assert.equal(requests.every((item) => item.body.appName === "fnos-app-health-records"), true);

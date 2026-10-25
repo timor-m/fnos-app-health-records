@@ -106,3 +106,19 @@ test('a changed archive cannot reuse the old database connection before an expli
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test('an explicit default location still requires its matching archive identity and database',()=>{
+  const runtime=realpathSync(mkdtempSync(join(tmpdir(),'archive-default-')));
+  const archiveId='11111111-1111-4111-8111-111111111111';
+  try {
+    mkdirSync(join(runtime,'db'));mkdirSync(join(runtime,'config'));
+    const db=new DatabaseSync(join(runtime,'db/health-records.sqlite'));db.exec('CREATE TABLE synthetic(id INTEGER)');db.close();
+    writeFileSync(join(runtime,archiveIdentityFile),JSON.stringify({version:1,archiveId}));
+    writeFileSync(join(runtime,'config',archiveLocationFile),JSON.stringify({version:1,path:runtime,archiveId}));
+    const resolved=resolveArchiveLocation(runtime,true);
+    assert.equal(resolved.error,null);assert.equal(resolved.relocated,false);
+    writeFileSync(join(runtime,archiveIdentityFile),JSON.stringify({version:1,archiveId:'22222222-2222-4222-8222-222222222222'}));
+    assert.ok(resolveArchiveLocation(runtime,true).error);
+  } finally {rmSync(runtime,{recursive:true,force:true});}
+});

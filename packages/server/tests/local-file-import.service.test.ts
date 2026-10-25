@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import test from "node:test";
+import { H3, type H3Event } from "h3";
+import errorHandler from "../error-handler.ts";
+import localFiles from "../routes/api/local-files.get.ts";
+import importFiles from "../routes/api/local-files/import.post.ts";
+import { getRequestUser } from "../utils/request-user.ts";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
 import type { RequestUser } from "../domain/request-user.ts";
 import {
@@ -149,26 +154,26 @@ test("reloads the fnOS authorized-path snapshot and explains unavailable roots",
   }
 });
 
-test("lets a regular fnOS user browse and import only personally authorized files", async () => {
+for (const administrator of [false, true]) test(`lets a mapped fnOS ${administrator ? "administrator" : "regular user"} browse and import only authorized files`, async () => {
   const testRoot = mkdtempSync(join(tmpdir(), "health-records-user-import-"));
   const importRoot = join(testRoot, "personal-reports");
   const sourceFile = join(importRoot, "report.png");
   const blockedFile = join(importRoot, "blocked.png");
   const storageDir = join(testRoot, "storage");
   const socketPath = join(testRoot, "open-api.sock");
-  const regularUser: RequestUser = {
-    id: "1002",
-    displayName: "普通用户",
-    provider: "fnos_gateway",
-    authenticated: true,
-    isAdmin: false,
-    isGatewayAdmin: false
-  };
+  const gatewayEvent = {
+    context: {},
+    node: { req: { healthAccessMode: "gateway", headers: {
+      "x-trim-userid": "1002", "x-trim-username": "Synthetic", "x-trim-isadmin": String(administrator)
+    } } }
+  } as unknown as H3Event;
+  const requestedUids: number[] = [];
   const server = createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk: Buffer) => chunks.push(chunk));
     request.on("end", () => {
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { req?: string; reqId?: string; data?: { path?: string | string[] } };
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { req?: string; reqId?: string; data?: { uid?: number; path?: string | string[] } };
+      requestedUids.push(body.data?.uid as number);
       const paths = Array.isArray(body.data?.path) ? body.data.path : body.data?.path ? [body.data.path] : [];
       const data = body.req === "trim.file.getUserAccessibleFolders"
         ? { paths: [importRoot] }
@@ -192,6 +197,9 @@ test("lets a regular fnOS user browse and import only personally authorized file
       server.listen(socketPath, resolve);
     });
 
+    const regularUser = getRequestUser(gatewayEvent);
+    assert.notEqual(regularUser.id, "1002");
+    assert.equal(regularUser.fnosUid, "1002");
     const roots = await listLocalImportDirectoryForUser(regularUser);
     assert.equal(roots.personalAuthorization, true);
     assert.equal(roots.roots.length, 1);
@@ -199,7 +207,7 @@ test("lets a regular fnOS user browse and import only personally authorized file
     assert.deepEqual(directory.entries.map((entry) => entry.name), ["report.png"]);
 
     const db = getDatabase();
-    db.prepare("INSERT INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 0)")
+    db.prepare("INSERT OR IGNORE INTO users (id, display_name, is_gateway_admin) VALUES (?, ?, 0)")
       .run(regularUser.id, regularUser.displayName);
     db.prepare(`
       INSERT INTO health_members (id, display_name, relationship, created_by)
@@ -209,8 +217,28 @@ test("lets a regular fnOS user browse and import only personally authorized file
       INSERT INTO member_permissions (member_id, user_id, permission, granted_by)
       VALUES ('regular-member', ?, 'manager', ?)
     `).run(regularUser.id, regularUser.id);
+    const app = new H3({ onError: errorHandler });
+    app.use(event => { event.context.requestUser = getRequestUser(gatewayEvent); });
+    app.get('/api/local-files', localFiles);
+    app.post('/api/local-files/import', importFiles);
+    const listed = await app.request('http://localhost/api/local-files');
+    assert.equal(listed.status, 200);
+    assert.equal((await listed.json()).data.roots.length, 1);
+    const submit = (path: string) => app.request('http://localhost/api/local-files/import', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ memberId: 'regular-member', files: [{ rootId: roots.roots[0]!.id, path }] })
+    });
+    const response = await submit('report.png');
+    assert.equal(response.status, 201);
+    const result = (await response.json()).data;
+    const stored = db.prepare('SELECT member_id AS memberId,created_by AS createdBy FROM reports WHERE id=?').get(result.reportId) as {memberId:string;createdBy:string};
+    assert.equal(stored.memberId, 'regular-member');
+    assert.equal(stored.createdBy, regularUser.id);
+    assert.equal((await submit('blocked.png')).status, 403);
     const imported = await importAuthorizedFnosFiles(regularUser, "regular-member", [sourceFile]);
     assert.equal(imported.pageCount, 1);
+    assert.ok(requestedUids.length > 0);
+    assert.ok(requestedUids.every(uid => uid === 1002));
     await assert.rejects(
       () => importAuthorizedFnosFiles(regularUser, "regular-member", [blockedFile]),
       (error: unknown) => (error as { statusCode?: number }).statusCode === 403

@@ -5,7 +5,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { H3Event } from "h3";
+import { H3, type H3Event } from "h3";
+import session from "../routes/api/session.get.ts";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
 import forcePasswordChange from "../middleware/03-password-change.ts";
 import { getRequestUser } from "../utils/request-user.ts";
@@ -69,7 +70,7 @@ test("ignores historical local session cookies outside the fnOS gateway", () => 
   }
 });
 
-test("keeps fnOS gateway identity and administrator permissions in fnOS mode", () => {
+test("keeps fnOS gateway identity and administrator permissions in fnOS mode", async () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-fnos-auth-"));
   process.env.STORAGE_DIR = storageDir;
   process.env.AUTH_MODE = "fnos";
@@ -90,12 +91,26 @@ test("keeps fnOS gateway identity and administrator permissions in fnOS mode", (
     assert.notEqual(resolved.id,"fnos-user-1000");
     assert.deepEqual(resolved, {
       id: resolved.id,
+      fnosUid: "fnos-user-1000",
       displayName: "飞牛管理员",
       provider: "fnos_gateway",
       authenticated: true,
       isAdmin: true,
       isGatewayAdmin: true
     });
+    const app = new H3();
+    app.use(e => { e.context.requestUser = resolved; });
+    app.get('/api/session', session);
+    const response = await app.request('http://localhost/api/session');
+    assert.equal(response.status, 200);
+    const publicUser = (await response.json()).data;
+    assert.equal(publicUser.id, resolved.id);
+    assert.equal('fnosUid' in publicUser, false);
+    const untrusted = getRequestUser({ node: { req: { healthAccessMode: 'port', headers: {
+      'x-trim-userid': '1000', 'x-trim-isadmin': 'true'
+    } } } } as unknown as H3Event);
+    assert.equal(untrusted.authenticated, false);
+    assert.equal(untrusted.fnosUid, undefined);
     const stored = getDatabase().prepare(`
       SELECT display_name AS displayName, is_gateway_admin AS isAdmin FROM users WHERE id = ?
     `).get(resolved.id) as { displayName: string; isAdmin: number };

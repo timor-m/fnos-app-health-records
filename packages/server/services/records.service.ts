@@ -1,3 +1,4 @@
+import {sourceRegion,rotateRegionBox} from "../../shared/source-region";
 import { listFeedbackNotifications, updateFeedbackNotification } from './feedback-sync.service';
 import { splitMeasurementBound, type MeasurementComparator } from '../../shared/measurement-result';
 import { preserveFeedbackInstallation } from './feedback-installation.service';
@@ -1263,10 +1264,11 @@ export function getReportDetail(
     if (exists) assertMemberAccess(user, exists.memberId);
     throw createError({ statusCode: 404, statusMessage: "报告不存在" });
   }
+  const pageSourceSpaces = new Map<string,{sha256:string;readingRotation:number}>();
   const pages = getDatabase()
     .prepare(
       `
-    SELECT p.id, p.report_id AS reportId, p.page_number AS pageNumber, p.original_name AS originalName,
+    SELECT p.id, p.sha256 AS sourceSha256, p.report_id AS reportId, p.page_number AS pageNumber, p.original_name AS originalName,
       p.mime_type AS mimeType, p.file_size AS fileSize, p.width, p.height, p.rotation,
       p.ocr_rotation AS ocrRotation, o.id AS ocrResultId,
       o.coord_width AS coordWidth, o.coord_height AS coordHeight,
@@ -1279,7 +1281,8 @@ export function getReportDetail(
     )
     .all(reportId)
     .map(value => {
-      const { ocrRotation, ocrResultId, coordWidth, coordHeight, ...page } = value as unknown as ReportPage & Pick<OcrPageRow, "ocrRotation" | "ocrResultId" | "coordWidth" | "coordHeight">;
+      const { sourceSha256, ocrRotation, ocrResultId, coordWidth, coordHeight, ...page } = value as unknown as ReportPage & {sourceSha256:string} & Pick<OcrPageRow, "ocrRotation" | "ocrResultId" | "coordWidth" | "coordHeight">;
+      pageSourceSpaces.set(page.id,{sha256:sourceSha256,readingRotation:ocrRotation ?? 0});
       return {
         ...page,
         ocrStale: Boolean(ocrResultId) && ocrOverlayRotation({ ...page, ocrRotation, coordWidth, coordHeight }) === null
@@ -1325,7 +1328,7 @@ export function getReportDetail(
         dictionaryReferenceJson: string | null;
         catalogDefaultUnit: string | null;
       };
-      const evidence = parseJson<Array<{ pageNumber?: number; quote?: string; confidence?: number; imageOnly?: boolean; nameCorrected?: boolean; ocrLowConfidence?: boolean }> | null>(
+      const evidence = parseJson<Array<{ pageId?: string; manualRegion?: {pageSha256?:string}; pageNumber?: number; quote?: string; confidence?: number; imageOnly?: boolean; nameCorrected?: boolean; ocrLowConfidence?: boolean }> | null>(
         row.evidenceJson,
         null,
       );
@@ -1367,13 +1370,13 @@ export function getReportDetail(
       const evidencePageNumber = firstEvidence && Number.isInteger(firstEvidence.pageNumber)
         ? Number(firstEvidence.pageNumber)
         : null;
-      const evidencePage = evidencePageNumber
-        ? pages.find((page) => page.pageNumber === evidencePageNumber)
-        : null;
+      const evidencePage = firstEvidence?.pageId
+        ? pages.find(page => page.id === firstEvidence.pageId)
+        : evidencePageNumber ? pages.find(page => page.pageNumber === evidencePageNumber) : null;
       const tableEvidence = observationTableEvidence(row.evidenceJson);
       const matchedEvidence = tableEvidence?.rowLineIds.length
         ? { rowLineIds: tableEvidence.rowLineIds }
-        : evidencePageNumber && firstEvidence?.quote
+        : evidencePage && firstEvidence?.quote
           ? matchQuoteToOcrLines(
               firstEvidence.quote,
               row.itemName,
@@ -1382,16 +1385,20 @@ export function getReportDetail(
               ocrLinesForTrendEvidence(
                 detailOcrLineCache,
                 row.reportId,
-                evidencePageNumber,
+                evidencePage.pageNumber,
               ),
             )
           : null;
+      const storedRegion = sourceRegion(firstEvidence?.manualRegion);
+      const regionValid = storedRegion && evidencePage && firstEvidence?.manualRegion?.pageSha256 === pageSourceSpaces.get(evidencePage.id)?.sha256;
       const detailEvidence = evidencePage
         ? {
             pageId: evidencePage.id,
             lineIds: matchedEvidence?.rowLineIds || [],
             sourceText: firstEvidence?.quote || "",
             confidence: null,
+            ...(regionValid ? {region:rotateRegionBox(storedRegion.box,(evidencePage.mimeType==='application/pdf' ? evidencePage.rotation : 0)-storedRegion.rotation),
+              readingRegion:rotateRegionBox(storedRegion.box,(pageSourceSpaces.get(evidencePage.id)?.readingRotation ?? 0)-storedRegion.rotation)} : {}),
           }
         : null;
       const {
@@ -2172,6 +2179,7 @@ export type OcrLineDetail = {
   text: string;
   confidence: number;
   box: number[] | null;
+  readingBox?: number[] | null;
 };
 
 export type OcrPageDetail = {
@@ -2183,6 +2191,8 @@ export type OcrPageDetail = {
   coordHeight: number | null;
   orientationChanged: boolean;
   lines: OcrLineDetail[];
+  readingCoordWidth?: number | null;
+  readingCoordHeight?: number | null;
 };
 
 function normalizeOcrBox(
@@ -2468,10 +2478,12 @@ export async function getReportPageOcrDetail(
       if (box && coordinateRotation) {
         box = rotateOcrPointBox(box, coordinateRotation, sourceCoordWidth!, sourceCoordHeight!);
       }
-      return { id, text, confidence, box };
+      return { id, text, confidence, box, ...(coordinateRotation && !orientationChanged ? {readingBox: normalizeOcrBox(line.box)} : {}) };
     })
     .filter((line): line is OcrLineDetail => line !== null);
   return {
+    readingCoordWidth: sourceCoordWidth,
+    readingCoordHeight: sourceCoordHeight,
     pageId: row.pageId,
     pageNumber: row.pageNumber,
     engine: row.engine,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { FolderInput, HardDrive, RefreshCw } from '@lucide/vue';
+import { FolderInput, HardDrive, LoaderCircle, RefreshCw } from '@lucide/vue';
 import FormSelect from '../../components/FormSelect.vue';
 import SubPageHeader from '../../components/SubPageHeader.vue';
 import { request } from '../../utils/api';
@@ -13,14 +13,16 @@ type StorageStatus = {
   availableBytes: number | null; capacityBytes: number | null;
   deployment: 'fnos' | 'development';
   migrationAvailable: boolean; paused: boolean;
-  roots: { id: string; path: string }[];
+  roots: { id: string; path: string; label?: string }[];
   migration: { id: string; source: string; phase: string; error: string | null; cleanupAvailable: boolean; cleaning: boolean; cleanupCompletedAt?: string } | null;
 };
 const storage = ref<StorageStatus | null>(null);
 const loading = ref(false);
 const error = ref('');
+const migrationError = ref('');
+const checkingMigration = ref(false);
 const selectedRoot = ref('');
-const rootOptions = computed(() => storage.value?.roots.map(root => ({ value: root.id, label: root.path })) || []);
+const rootOptions = computed(() => storage.value?.roots.map(root => ({ value: root.id, label: root.label || root.path })) || []);
 const confirm = useConfirm();
 const toast = useToast();
 async function cleanOldArchive() {
@@ -42,30 +44,38 @@ async function cleanOldArchive() {
           });
           toast.show(`已删除 ${result.deletedFiles} 个旧文件${result.skipped ? `，${result.skipped} 个变化文件已保留` : ''}。运行环境和备份保留。`, 5000);
           await refresh();
-        } catch (cause) { error.value = cause instanceof Error ? cause.message : '清理未完成，未处理文件保留'; }
+        } catch (cause) { error.value = cause instanceof Error ? cause.message : '清理未完成，未处理文件保留'; toast.show(error.value, 5000); }
         finally { loading.value = false; }
       }
     });
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : '无法核对旧副本'; }
+  } catch (cause) { error.value = cause instanceof Error ? cause.message : '无法核对旧副本'; toast.show(error.value, 5000); }
   finally { loading.value = false; }
 }
 async function migrate() {
   if (!selectedRoot.value || loading.value) return;
-  loading.value = true; error.value = '';
+  loading.value = true; checkingMigration.value = true; migrationError.value = '';
   const rootId = selectedRoot.value;
   try {
-    const preview = await request<{ files: number; bytes: number; parent: string }>('storage/preview', {
+    const preview = await request<{ files: number; bytes: number; parent: string; target?:string; returnToDefault?:boolean }>('storage/preview', {
       method: 'POST', headers: { 'x-storage-operation': '1' }, body: JSON.stringify({ rootId })
     });
-    confirm.ask({ title: '迁移档案存储', confirmText: '确认并开始迁移',
-      message: `将 ${preview.files} 个文件（约 ${size(preview.bytes)}）迁移到 ${preview.parent} 下的专属目录。期间暂停所有用户的业务操作，原目录数据保留。请先完成独立备份。`,
+    confirm.ask({ title: preview.returnToDefault ? '迁回默认位置' : '迁移档案存储', confirmText: '确认并开始迁移',
+      message: `将 ${preview.files} 个文件（约 ${size(preview.bytes)}）迁移到 ${preview.returnToDefault ? preview.target + '（默认位置）' : preview.parent + ' 下的专属目录'}。${preview.returnToDefault ? '默认目录中的旧档案会另行保留，不会直接读回旧结果。' : ''}期间暂停所有用户的业务操作，原目录数据保留。请先完成独立备份。`,
       run: async () => {
-        await request('storage/migrate', { method: 'POST', headers: { 'x-storage-operation': '1' }, body: JSON.stringify({ rootId }) });
-        window.location.reload();
+        loading.value = true; migrationError.value = '';
+        try {
+          await request('storage/migrate', { method: 'POST', headers: { 'x-storage-operation': '1' }, body: JSON.stringify({ rootId }) });
+          window.location.reload();
+        } catch (cause) {
+          migrationError.value = cause instanceof Error ? cause.message : '迁移未能启动';
+          toast.show(migrationError.value, 5000);
+        } finally { loading.value = false; }
       }
     });
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : '迁移检查未通过'; }
-  finally { loading.value = false; }
+  } catch (cause) {
+    migrationError.value = cause instanceof Error ? cause.message : '迁移检查未通过';
+    toast.show(migrationError.value, 5000);
+  } finally { loading.value = false; checkingMigration.value = false; }
 }
 function size(bytes: number | null) {
   if (bytes === null) return '暂不可用';
@@ -76,7 +86,7 @@ async function refresh() {
   loading.value = true;
   error.value = '';
   try { storage.value = await request<StorageStatus>('storage'); }
-  catch (cause) { error.value = cause instanceof Error ? cause.message : '无法读取存储信息'; }
+  catch (cause) { error.value = cause instanceof Error ? cause.message : '无法读取存储信息'; toast.show(error.value, 5000); }
   finally { loading.value = false; }
 }
 onMounted(refresh);
@@ -103,7 +113,7 @@ onMounted(refresh);
             <div><dt>运行目录<span>应用配置与 OCR 环境</span></dt><dd>{{ storage.runtimeDir }}</dd></div>
           </dl>
           <div v-if="storage.migration?.phase === 'completed'" class="archive-cleanup">
-            <div><strong>{{ storage.migration.cleanupCompletedAt ? '旧档案副本已清理' : '旧档案副本仍保留' }}</strong>
+            <div><strong>{{ storage.migration.cleanupCompletedAt ? '来源目录旧副本已清理' : '来源目录旧副本仍保留' }}</strong>
               <p v-if="storage.migration.cleanupCompletedAt">运行环境、配置、密钥及备份未删除。</p>
               <p v-else-if="storage.migration.cleanupAvailable">确认新档案正常后，可清理已迁移的旧文件以释放空间。</p>
               <p v-else>本次迁移没有文件校验清单，暂不能自动清理。请勿直接删除整个旧目录。</p>
@@ -122,8 +132,10 @@ onMounted(refresh);
           <div class="archive-target"><span>目标存储目录</span>
             <FormSelect v-model="selectedRoot" :options="rootOptions" placeholder="请选择已授权目录" aria-label="目标存储目录" empty-text="暂无已授权目录" :disabled="loading || storage.paused || !storage.roots.length" />
           </div>
-          <div class="form-actions"><button type="button" class="primary-button" :disabled="loading || !selectedRoot || !storage.migrationAvailable || storage.paused" @click="migrate"><FolderInput :size="16" />检查并迁移</button></div>
+          <div class="form-actions"><button type="button" class="primary-button" :disabled="loading || !selectedRoot || !storage.migrationAvailable || storage.paused" @click="migrate"><LoaderCircle v-if="checkingMigration" :size="16" class="spin-icon" /><FolderInput v-else :size="16" />{{ checkingMigration ? '检查中…' : '检查并迁移' }}</button></div>
         </div>
+        <p v-if="checkingMigration" role="status">正在检查目录、权限与可用空间，请稍候，检查完成后会显示迁移确认。</p>
+        <p v-if="migrationError" class="form-error" role="alert">{{ migrationError }}</p>
         <p v-if="!storage.roots.length" class="archive-guidance">{{ storage.deployment === 'fnos' ? '请先在飞牛应用设置中授权目标目录的读写权限。' : '请通过 IMPORT_ROOTS 配置本地测试目录。' }}</p>
         <p class="archive-guidance">迁移前会检查目录与空间，确认后才开始。旧副本保留，成功后可另行确认清理。</p>
         <details class="archive-safety">
@@ -142,7 +154,7 @@ onMounted(refresh);
 .archive-cleanup > div { flex: 1; min-width: 0; }
 .archive-cleanup strong { font-size: 13px; font-weight: 500; }
 .archive-cleanup button { flex-shrink: 0; white-space: nowrap; }
-.archive-storage-panel p { line-height: 1.65; }
+.archive-storage-panel p { line-height: 1.65; overflow-wrap: anywhere; }
 .archive-capacity { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; background: var(--fill-2); border-radius: var(--radius-m); }
 .archive-capacity > div { display: grid; gap: 6px; min-width: 0; }
 .archive-capacity span, .archive-capacity small { font-size: 12px; color: var(--muted); font-weight: 400; }

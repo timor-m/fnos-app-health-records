@@ -1,3 +1,4 @@
+import {DOMWrapper} from '@vue/test-utils';
 import { mount,flushPromises } from '@vue/test-utils';
 import { describe,it,expect,vi,beforeEach } from 'vitest';
 import FeedbackImageEditor from '../src/components/FeedbackImageEditor.vue';
@@ -7,7 +8,7 @@ import { feedbackEnvironmentPayload } from '../src/utils/feedback-environment';
 const request=vi.hoisted(()=>vi.fn());
 vi.mock('../src/utils/api',()=>({apiUrl:(path:string)=>'/app/api/'+path,request:(path:string,...args:unknown[])=>path==='feedback/identity'?Promise.resolve({clientId:'a'.repeat(43)}):request(path,...args)}));
 const ticket={number:'B0001',title:'测试反馈',category:'problem',status:'released_pending_verification',version:2,fixedVersion:'0.2.12',description:'合成描述',createdAt:'2026-01-01T00:00:00Z',updatedAt:'2026-01-01T00:00:00Z',events:[{id:1,actorType:'admin',content:'已更新',toStatus:'released_pending_verification',fixedVersion:'0.2.12',createdAt:'2026-01-01T00:00:00Z',attachments:[]}],eventTotal:1};
-function render(){return mount(Page,{global:{stubs:{SubPageHeader:true,Teleport:true,FeedbackImageEditor:true}}});}
+function render(){return withTeleportDom(mount(Page,{attachTo:document.body,global:{stubs:{SubPageHeader:true,Teleport:false,FeedbackImageEditor:true}}}));}
 beforeEach(()=>{request.mockReset();request.mockImplementation(async(path:string)=>path==='feedback-diagnostics'?{}:path.includes('?page=')?{items:[],total:0}:ticket);});
 describe('live feedback workflows',()=>{
  it('renders primary and follow-up PDFs as private file links, preserving image previews',async()=>{
@@ -75,3 +76,9 @@ describe('live feedback workflows',()=>{
  it('retries an unchanged submission with the same operation key',()=>{const operation=createFeedbackOperation();const key=operation.key('submit','body');expect(operation.key('submit','body')).toBe(key);expect(operation.key('submit','changed')).not.toBe(key);});
  it('diagnostics payload has no build ID, raw UA or credentials',()=>{const body=feedbackEnvironmentPayload({appVersion:'1',ocr:{available:false},ai:{enabled:false,visionEnabled:false}},{userAgent:'SYNTHETIC_UA',width:360,height:740});expect(body.app).toEqual({version:'1'});expect(body.ocr.available).toBe(false);expect(JSON.stringify(body)).not.toContain('SYNTHETIC_UA');expect(JSON.stringify(body)).not.toContain('buildId');});
 });
+
+// The generic Teleport stub remounts child pickers on updates; exercise real Teleports.
+function withTeleportDom<T extends {get:any;find:any;findAll:any;text:any}>(page:T):T {
+  const dom=new DOMWrapper(document.body);
+  return Object.assign(page,{get:dom.get.bind(dom),find:dom.find.bind(dom),findAll:dom.findAll.bind(dom),text:dom.text.bind(dom)});
+}
