@@ -1205,6 +1205,7 @@ export function suppressDuplicateMeasurementCandidates(observations: Observation
 export function getReportDetail(
   user: RequestUser,
   reportId: string,
+  options: { includeDuplicateCandidates?: boolean } = {},
 ): ReportDetail {
   const row = getDatabase()
     .prepare(
@@ -1782,7 +1783,7 @@ export function getReportDetail(
         left.title.localeCompare(right.title, "zh-CN")
       );
     }) as ReportStructuredSection[];
-  const duplicateCandidates = findDuplicateCandidates(row);
+  const duplicateCandidates = options.includeDuplicateCandidates === false ? [] : findDuplicateCandidates(row);
   return {
     ...row,
     bodyParts: parseJson(row.bodyPartsJson, []),
@@ -1800,7 +1801,8 @@ export function getReportDetail(
     structuredSections,
     manualFieldKeys: [...listManualReportFieldKeys(reportId)],
     duplicateCandidates,
-    duplicateSearch: duplicateSearchInfo(reportId,duplicateCandidates.length),
+    duplicateSearch: options.includeDuplicateCandidates === false ? undefined : duplicateSearchInfo(reportId,duplicateCandidates.length),
+    ...(options.includeDuplicateCandidates === false ? {duplicateCandidatesPending: row.status === 'needs_review'} : {}),
     duplicatePause: getDuplicatePause(reportId),
     duplicateVerification: getDuplicateVerification(reportId),
     memberIdentityAssessment: assessReportMemberIdentity(user, reportId),
@@ -1811,6 +1813,17 @@ export function getReportDetail(
       return {...summary,reviewWarnings:batch.state === 'complete' ? appendReviewWarnings(jobId) : []};
     })(),
   };
+}
+
+export function getReportDuplicateCandidates(user: RequestUser, reportId: string) {
+  const report = getDatabase().prepare("SELECT member_id AS memberId FROM reports WHERE id=? AND status<>'trashed' AND deleted_at IS NULL").get(reportId) as {memberId:string}|undefined;
+  if (!report) throw createError({statusCode:404,statusMessage:'报告不存在'});
+  assertMemberAccess(user, report.memberId);
+  const source = duplicateSourceRowsByIds(report.memberId, [reportId])[0];
+  if (!source) throw createError({statusCode:404,statusMessage:'报告不存在'});
+  const duplicateCandidates = findDuplicateCandidates(source);
+  return {id:source.id,memberId:source.memberId,sourceVersion:source.sourceVersion,updatedAt:source.updatedAt,
+    duplicateCandidates,duplicateSearch:duplicateSearchInfo(reportId,duplicateCandidates.length)};
 }
 
 export function getReportPageFile(

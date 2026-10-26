@@ -445,6 +445,7 @@ export type ReportDuplicateDecisionRecord = {
 };
 
 export type ReportDetail = ReportSummary & {
+  sourceVersion: number;
   pageAppend?: {originalRevision:number;recognizedRevision:number|null;state:string;reviewWarnings?:string[]};
   createdAt: string;
   updatedAt: string;
@@ -484,6 +485,7 @@ export type ReportDetail = ReportSummary & {
   billingItems: BillingItem[];
   structuredSections: ReportStructuredSection[];
   duplicateCandidates: DuplicateReportCandidate[];
+  duplicateCandidatesPending?: boolean;
   duplicateSearch?: {status:string;candidateCount:number;ordinaryWindowLimited:boolean;truncated:boolean};
   duplicateVerification?: {status:string} | null;
   duplicatePause?: { valid:boolean; state:string; targetId:string; reason:string; ruleId:string; ruleVersion:string } | null;
