@@ -13,6 +13,14 @@ function json<T>(s: string | null, fallback: T): T {
         return fallback;
     }
 }
+function rowGeometry(box: unknown) {
+    if (!Array.isArray(box)) return null;
+    const points=box.flat();
+    if (![4,8].includes(points.length)||!points.every(Number.isFinite)) return null;
+    const ys=points.length===4?[points[1],points[3]]:points.filter((_,i)=>i%2===1);
+    const top=Math.min(...ys),bottom=Math.max(...ys);
+    return bottom>top?{center:(top+bottom)/2,height:bottom-top}:null;
+}
 export function completeSourceSignature(reportId: string): string | null {
     const pages = getDatabase().prepare('SELECT sha256,mime_type,source_page_number,source_page_count FROM report_pages WHERE report_id=?').all(reportId) as Array<{
         sha256: string;
@@ -79,7 +87,7 @@ export function buildDuplicateSnapshot(reportId: string): DuplicateEvidenceSnaps
         id?: string;
         text?: string;
         confidence?: number;
-    }>>(p.linesJson, []).map(l => ({ ...l, page: p.pageNumber })));
+    }>>(p.linesJson, []).map(l => ({ ...l, page: p.pageNumber, pageId:p.pageId })));
     const reliableText = raw.filter(l => typeof l.confidence === 'number' && l.confidence >= duplicateEvidencePolicy.ocrReliable).map(l => l.text || '').join('\n');
     const text = raw.map(l => l.text || '').join('\n');
     if (pages.some(p => !raw.some(l => l.page === p.pageNumber && l.text?.trim())))
@@ -112,8 +120,33 @@ export function buildDuplicateSnapshot(reportId: string): DuplicateEvidenceSnaps
     const currentResult = !!extraction && runtime?.result_signature === signature && runtime?.extraction_id === extraction.id;
     const items: DuplicateFact[] = [];
     let unknown = 0;
+    let photoItems:DuplicateFact[]|undefined;
+    let photoUnknown:number|undefined;
+    const photoRows:DuplicateFact[]=[];
+    let photoRowUnknown=0;
     const rebuilt = budget || !pages.some(p => p.linesJson) ? [] : rebuildOcrPages(pages.filter(p => p.linesJson).map(p => ({ ...p, linesJson: p.linesJson! })));
     const unitPattern = measurementUnitPattern();
+    const exactUnitPattern=new RegExp(`^(?:${unitPattern.source})$`,unitPattern.flags.replace(/g/g,''));
+    // Advisory-only literal table rows: preserve every numeric column in source order.
+    // This can compare two photographs even when AI extracted different subsets of rows.
+    for(const page of rebuilt)for(const line of page.lines){
+        let cells=line.sourceCells||[];
+        if(cells.length<3)continue;
+        if(/^\d{1,3}$/.test(cells[0].text.trim())&&/[\p{L}]/u.test(cells[1].text))cells=cells.slice(1);
+        const numeric=cells.filter(c=>/^[<>≤≥]?[+-]?\d+(?:\.\d+)?(?:\s*[-~～]\s*[+-]?\d+(?:\.\d+)?)?(?:\s*[↑↓hl])?$/i.test(c.text.trim()));
+        const units=cells.filter(c=>/^[a-zµμ][a-zµμ\d%‰/^²³·.*×+\-]*$/i.test(norm(c.text))&&(/[/%‰]/.test(c.text)||exactUnitPattern.test(c.text.trim())));
+        const names=cells.filter(c=>!numeric.includes(c)&&!units.includes(c)&&/[\p{L}]{2}/u.test(norm(c.text)));
+        if(!numeric.length||!names.length)continue;
+        if(units.length!==1){photoRowUnknown++;continue;}
+        if(!exactUnitPattern.test(units[0].text.trim())){photoRowUnknown++;continue;}
+        const result=numeric[0];const box=rowGeometry(result.box);
+        if(!box||cells.some(c=>{const cell=rowGeometry(c.box);return !cell||Math.abs(cell.center-box.center)>Math.max(cell.height,box.height)*.75;})){photoRowUnknown++;continue;}
+        const source=raw.filter(l=>l.page===page.pageNumber&&l.id&&cells.some(c=>c.sourceLineIds.includes(l.id!)));
+        const reliable=source.length>0&&cells.every(c=>c.sourceLineIds.length>0&&c.sourceLineIds.every(id=>source.some(l=>l.id===id)))&&source.every(l=>typeof l.confidence==='number'&&l.confidence>=duplicateEvidencePolicy.ocrReliable);
+        photoRows.push({key:[names.map(c=>norm(c.text)).join('/'),norm(line.sectionName),'literal_row'].join('|'),
+            value:`${numeric.map(c=>canonicalResult(c.text)).join(';')}|${norm(units[0].text)}||`,
+            anchor:true,anchorValue:canonicalResult(result.text),reliable,page:page.pageNumber,lines:source.flatMap(l=>l.id?[l.id]:[])});
+    }
     for (const page of rebuilt)
         for (const line of page.lines) {
             const facts = localObservationsForLine(line);
@@ -140,28 +173,99 @@ export function buildDuplicateSnapshot(reportId: string): DuplicateEvidenceSnaps
     if (currentResult) {
         const observations = db.prepare('SELECT * FROM observations WHERE report_id=? ORDER BY id').all(reportId) as Array<Record<string, any>>;
         const structured: DuplicateFact[] = [];
+        const photo:DuplicateFact[]=[];
+        const replaced = new Set<DuplicateFact>();
         for (const o of observations) {
             const refs = json<any>(o.evidence_json, []);
             const entries = Array.isArray(refs) ? refs : [refs];
-            const matched = raw.filter(l => entries.some((x: any) => x.pageNumber === l.page && ((x.lineIds || x.sourceLineIds || []).includes(l.id) || typeof x.quote === 'string' && norm(x.quote) === norm(l.text))));
-            const sourceReliable = matched.length > 0 && matched.every(l => typeof l.confidence === 'number' && l.confidence >= duplicateEvidencePolicy.ocrReliable);
-            structured.push({ key: [norm(o.normalized_name || o.item_name), norm(o.section_name), norm(o.method)].join('|'), value: numericFactValue(o.result_text, o.unit, o.reference_text, o.abnormal_flag), reliable: sourceReliable, anchor: o.numeric_value !== null, raw: o.result_text, lines: matched.flatMap(l => l.id ? [l.id] : []) });
+            const matched = raw.filter(l => entries.some((x: any) => {
+                if(!x||typeof x!=='object')return false;
+                if(x.pageId ? x.pageId!==l.pageId : x.pageNumber!==l.page)return false;
+                if(x.pageNumber!==undefined&&x.pageNumber!==l.page)return false;
+                const ids=x.lineIds||x.sourceLineIds||x.table?.rowSourceLineIds||[];
+                if(Array.isArray(ids)&&l.id&&ids.includes(l.id))return true;
+                const quote:string=typeof x.quote==='string'?x.quote:typeof x.sourceText==='string'?x.sourceText:'';
+                // Persisted quotes may combine reconstructed table cells with '|'.
+                // Only exact original-line fragments count as evidence, not substring similarity.
+                return !!norm(l.text)&&quote.split(/[|｜\n]/).some(fragment=>norm(fragment)===norm(l.text)
+                    ||fragment.trim().split(/\s+/).some(token=>norm(token)===norm(l.text)));
+            }));
+            const value=numericFactValue(o.result_text,o.unit,o.reference_text,o.abnormal_flag);
+            const sourceFacts=items.filter(f=>!replaced.has(f)&&matched.some(l=>l.page===f.page&&l.id&&f.lines?.includes(l.id)));
+            const sameValue=(f:DuplicateFact)=>f.value.split('|').slice(0,2).join('|')===value.split('|').slice(0,2).join('|');
+            const named=sourceFacts.filter(f=>f.key.split('|')[0]===norm(o.normalized_name||o.item_name));
+            const valued=sourceFacts.filter(sameValue);
+            const sourceFact=named.length===1?named[0]:valued.length===1?valued[0]:sourceFacts.length===1?sourceFacts[0]:undefined;
+            if(sourceFact)replaced.add(sourceFact);
+            const sourceText=norm(matched.map(l=>l.text).join(' '));
+            const sourceNumbers=matched.flatMap(l=>(String(l.text||'').match(/[<>≤≥]?[+-]?\d+(?:\.\d+)?/g)||[])).map(canonicalResult);
+            const literalResult=sourceNumbers.includes(canonicalResult(o.result_text));
+            const literalSupport=!!norm(o.item_name)&&sourceText.includes(norm(o.item_name))&&literalResult
+                &&!!norm(o.unit)&&sourceText.includes(norm(o.unit));
+            const sourceReliable = matched.length > 0 && matched.every(l => typeof l.confidence === 'number' && l.confidence >= duplicateEvidencePolicy.ocrReliable)
+                &&(sourceFact?sameValue(sourceFact)&&(sourceFact.reliable||literalSupport):literalSupport);
+            const section=norm(o.section_name);
+            // AI display grouping is not report identity. Keep source context and explicit
+            // specimen/laterality/timing distinctions instead of arbitrary generated headings.
+            const protectedSection=/(尿|粪|便|痰|血清|血浆|全血|脑脊液|胸水|腹水|左|右|空腹|餐后|随机|负荷|运动|urine|stool|serum|plasma|wholeblood|left|right|fasting|postprandial)/.test(section);
+            const key=sourceFact
+                ?[sourceFact.key.split('|')[0],protectedSection?section:sourceFact.key.split('|')[1],norm(o.method)].join('|')
+                :[norm(o.normalized_name||o.item_name),section,norm(o.method)].join('|');
+            const fact={key:[norm(o.normalized_name||o.item_name),section,norm(o.method)].join('|'),value,
+                reliable:sourceReliable,anchor:o.numeric_value!==null,raw:o.result_text,
+                page:matched[0]?.page,lines:matched.flatMap(l=>l.id?[l.id]:[])};
+            structured.push(fact);
+            // Only the advisory tier ignores generated display headings. Clinical context remains.
+            const aiSources=matched.filter(l=>typeof l.confidence==='number'&&l.confidence>=duplicateEvidencePolicy.ocrReliable);
+            const aiSourceText=norm(aiSources.map(l=>l.text).join(' '));
+            const aiSourceNumbers=aiSources.flatMap(l=>(String(l.text||'').match(/[<>≤≥]?[+-]?\d+(?:\.\d+)?/g)||[])).map(canonicalResult);
+            const aiNames=String(o.item_name||'').trim().split(/\s+/);
+            const aiValues=String(o.result_text||'').trim().split(/\s+/);
+            // Some completed extractions retain an entire name/result column in one row.
+            // Only expand equally sized, ordered columns supported by their saved quotation.
+            const grouped=aiNames.length>=3&&aiNames.length===aiValues.length
+                &&aiNames.every(name=>/[\p{L}]{2}/u.test(name))
+                &&aiValues.every(v=>/^[<>≤≥]?[+-]?\d+(?:\.\d+)?$/.test(v));
+            if(grouped){
+                for(const [i,name] of aiNames.entries()){
+                    const result=aiValues[i];
+                    const supported=aiSourceText.includes(norm(name))
+                        &&aiSourceNumbers.includes(canonicalResult(result));
+                    photo.push({...fact,key:[norm(name),protectedSection?section:'',norm(o.method)].join('|'),
+                        value:`${canonicalResult(result)}|||`,anchorValue:canonicalResult(result),anchor:true,reliable:supported});
+                }
+            }else{
+                photo.push({...fact,key:sourceFact?key:[norm(o.normalized_name||o.item_name),protectedSection?section:'',norm(o.method)].join('|'),
+                    reliable:sourceReliable||(!!norm(o.item_name)&&aiSourceText.includes(norm(o.item_name))&&aiSourceNumbers.includes(canonicalResult(o.result_text))),
+                    anchorValue:canonicalResult(o.result_text)});
+            }
         }
-        // Structured results replace OCR facts, retaining weak/unsubstantiated rows as uncertain.
+        // Strict coverage keeps its conservative parser denominator. Advisory coverage uses
+        // grounded measurements, not speculative counts from unsafe reconstructed table cells.
         if (structured.length) {
-            const candidateTotal = items.length + unknown;
-            items.splice(0, items.length, ...structured);
-            unknown = Math.max(0, candidateTotal - structured.length);
+            const remaining=items.filter(f=>!replaced.has(f));
+            photoItems=[...remaining,...photo];
+            const candidateTotal=items.length+unknown;
+            items.splice(0,items.length,...structured);
+            unknown=Math.max(0,candidateTotal-structured.length);
         }
         const unresolved = db.prepare("SELECT COUNT(*) AS n FROM ai_extraction_candidates WHERE job_id=? AND status='unresolved'").get(extraction.job_id) as {
             n: number;
         };
         unknown = Math.max(unknown, unresolved.n);
+        const unresolvedRows=db.prepare("SELECT page_number AS page,source_line_ids_json AS lines,dictionary_keys_json AS keys FROM ai_extraction_candidates WHERE job_id=? AND status='unresolved' AND kind='scalar'").all(extraction.job_id) as Array<{page:number;lines:string;keys:string}>;
+        photoUnknown=unresolvedRows.filter(row=>json<string[]>(row.keys,[]).length>0
+            &&!photoItems?.some(f=>f.page===row.page&&f.lines?.some(id=>json<string[]>(row.lines,[]).includes(id)))).length;
     }
     if (items.length > duplicateEvidencePolicy.maxItems) {
         items.length = duplicateEvidencePolicy.maxItems;
         risks.push('item_budget_exceeded');
     }
+    if(photoItems&&photoItems.length>duplicateEvidencePolicy.maxItems){
+        photoItems.length=duplicateEvidencePolicy.maxItems;
+        if(!risks.includes('item_budget_exceeded'))risks.push('item_budget_exceeded');
+    }
+    if(photoRows.length>duplicateEvidencePolicy.maxItems){photoRows.length=duplicateEvidencePolicy.maxItems;if(!risks.includes('item_budget_exceeded'))risks.push('item_budget_exceeded');}
     const sections = db.prepare('SELECT section_key,content_text,content_json,evidence_json FROM report_structured_sections WHERE report_id=? AND is_deleted=0 ORDER BY section_key,id').all(reportId) as Array<{
         section_key: string;
         content_text: string;
@@ -178,8 +282,8 @@ export function buildDuplicateSnapshot(reportId: string): DuplicateEvidenceSnaps
     const overrides = db.prepare('SELECT field_key,value_json FROM report_field_overrides WHERE report_id=? ORDER BY field_key').all(reportId);
     const observationOverrides = db.prepare('SELECT source_key,fields_json FROM observation_field_overrides WHERE report_id=? ORDER BY source_key').all(reportId);
     const dictionaryVersion = db.prepare("SELECT layer,revision,content_sha256 FROM indicator_dictionary_state ORDER BY layer").all();
-    const version = duplicateDigest([dictionaryVersion, sections, currentReportDuplicateRuleVersion, r.source_version, signature, pages.map(p => [p.ocrId, p.linesJson]), extraction, items, overrides, observationOverrides, r.identifiers_json, r.sampled_at, r.examined_at, r.report_issued_at, r.findings, r.impression, r.title, r.hospital_name_raw]);
-    return { reportId, memberId: r.member_id, version, sourceVersion: r.source_version, sourceSignature: signature, sourceComplete: !!signature, issuer, scope, identifiers, times, items, unknown, risks, narrative, narrativeReliable, extractionId: currentResult ? extraction!.id : null, usable: currentResult && !active && !risks.length && (hasStoredResults && items.length > 0 && items.filter(item => item.reliable).length / (items.length + unknown) >= duplicateEvidencePolicy.usableCoverage || narrativeReliable) };
+    const version = duplicateDigest([dictionaryVersion, sections, currentReportDuplicateRuleVersion, r.source_version, signature, pages.map(p => [p.ocrId, p.linesJson]), extraction, items, photoItems, photoUnknown, photoRows, photoRowUnknown, overrides, observationOverrides, r.identifiers_json, r.sampled_at, r.examined_at, r.report_issued_at, r.findings, r.impression, r.title, r.hospital_name_raw]);
+    return { reportId, memberId: r.member_id, version, sourceVersion: r.source_version, sourceSignature: signature, sourceComplete: !!signature, issuer, scope, identifiers, times, items, unknown, photoItems, photoUnknown, photoRows, photoRowUnknown, risks, narrative, narrativeReliable, extractionId: currentResult ? extraction!.id : null, usable: currentResult && !active && !risks.length && (hasStoredResults && items.length > 0 && items.filter(item => item.reliable).length / (items.length + unknown) >= duplicateEvidencePolicy.usableCoverage || narrativeReliable) };
 }
 export function markDuplicateResultCurrent(reportId: string) {
     const db = getDatabase(), signature = completeSourceSignature(reportId);

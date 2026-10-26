@@ -5,7 +5,7 @@ const mocks=vi.hoisted(()=>({request:vi.fn(),push:vi.fn(),replace:vi.fn()}));
 const app={selectedMemberId:ref('member'),selectedMember:ref({id:'member',permission:'manager'}),notifyDataChanged:vi.fn()};
 const route=reactive({path:'/events/detail/report/r1',params:{kind:'report',id:'r1'},query:{} as Record<string,string>});const touch=ref(false);
 vi.mock('../src/utils/api',()=>({request:mocks.request}));vi.mock('../src/composables/useAppContext',()=>({useAppContext:()=>app}));vi.mock('../src/composables/useTouchRecordDetail',()=>({useTouchRecordDetail:()=>touch}));vi.mock('vue-router',()=>({useRoute:()=>route,useRouter:()=>({push:mocks.push,replace:mocks.replace})}));
-vi.mock('../src/components/ReportDetail.vue',()=>({default:{name:'ReportDetail',props:['reportId','expectedMemberId','variant','hideTitle'],emits:['close','updated','openCandidate','heading'],template:'<div class="report">{{reportId}}</div>'}}));
+vi.mock('../src/components/ReportDetail.vue',()=>({default:{name:'ReportDetail',props:['reportId','expectedMemberId','variant','hideTitle','initialDetail'],emits:['close','updated','openCandidate','heading'],template:'<div class="report">{{reportId}}</div>'}}));
 vi.mock('../src/components/VaccinationDocument.vue',()=>({default:{name:'VaccinationDocument',props:['reportId','hideTitle'],emits:['updated','heading'],template:'<div class="vaccination-document"/>'}}));
 vi.mock('../src/components/MedicationRecords.vue',()=>({default:{name:'MedicationRecords',props:['courseId','intakeId','reportId'],emits:['updated','heading'],template:'<div class="medication"/>'}}));
 vi.mock('../src/components/HealthSymptomDetail.vue',()=>({default:{name:'HealthSymptomDetail',props:['recordId','openRelatedInPlace'],emits:['updated','heading','openRecord'],template:'<div class="symptom"/>'}}));
@@ -78,7 +78,7 @@ it.each([['symptom',HealthSymptomDetail,'symptom'],['vaccination',VaccinationDet
 it('opens a medication document directly in the report detail without an intermediate medication summary',async()=>{
  mocks.request.mockResolvedValue({memberId:'member',category:'medication',documents:[{id:'prescription',title:'合成用药单'}]});
  const wrapper=render(Content,{kind:'medication_document',recordId:'prescription'});await flushPromises();
- expect(mocks.request).toHaveBeenCalledWith('health-records/documents/prescription');
+ expect(mocks.request).toHaveBeenCalledWith('health-records/documents/prescription?includeDetail=true');
  expect(wrapper.getComponent(ReportDetail).props()).toMatchObject({reportId:'prescription',expectedMemberId:'member',variant:'panel',hideTitle:true});
  expect(wrapper.findComponent(MedicationRecords).exists()).toBe(false);
  expect(wrapper.emitted('heading')?.at(-1)).toEqual([{title:'合成用药单',category:'medication'}]);
@@ -106,4 +106,23 @@ it('keeps the originating filter when a newly saved vaccination opens its touch 
 it('uses the record overlay after saving from a reminder and retains its return destination',async()=>{
  touch.value=true;route.path='/events/detail/vaccination/new';route.params={kind:'vaccination',id:'new'};route.query={returnTo:'/reminders'};render(Page);await flushPromises();
  expect(mocks.replace).toHaveBeenCalledWith({path:'/events',query:{returnTo:'/reminders',recordKind:'vaccination',recordId:'new'}});
+});
+
+it('passes the expanded opening detail once and discards it when switching documents',async()=>{
+ const detail={id:'r1',memberId:'member',title:'合成首份资料'};
+ mocks.request.mockResolvedValue({memberId:'member',category:'report',documents:[{id:'r1',title:'合成一'},{id:'r2',title:'合成二'}],detail});
+ const wrapper=render(Bundle,{recordId:'r1'});await flushPromises();
+ expect(mocks.request).toHaveBeenCalledTimes(1);
+ expect(mocks.request).toHaveBeenCalledWith('health-records/documents/r1?includeDetail=true');
+ expect(wrapper.getComponent(ReportDetail).props('initialDetail')).toEqual(detail);
+ await wrapper.findAll('[aria-label="同次资料"] button')[1].trigger('click');
+ expect(wrapper.getComponent(ReportDetail).props('initialDetail')).toBeNull();
+ await wrapper.findAll('[aria-label="同次资料"] button')[0].trigger('click');
+ expect(wrapper.getComponent(ReportDetail).props('initialDetail')).toBeNull();
+});
+
+it('rejects a mismatched expanded report before mounting its originals',async()=>{
+ mocks.request.mockResolvedValue({memberId:'member',category:'report',documents:[{id:'r1',title:'合成一'}],detail:{id:'r1',memberId:'other'}});
+ const wrapper=render(Bundle,{recordId:'r1'});await flushPromises();
+ expect(wrapper.findComponent(ReportDetail).exists()).toBe(false);expect(wrapper.get('[role="alert"]').text()).toContain('不属于当前成员');
 });

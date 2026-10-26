@@ -23,6 +23,26 @@ async function pullRefresh(wrapper:any){
 }
 
 it('shows five category counts, exact navigation filters, true reminder total and recent records',async()=>{const wrapper=render();await flushPromises();const categories=wrapper.findAll('.overview-types .overview-type');expect(categories.map(link=>link.text())).toEqual(['报告1','症状1','用药1','接种1','影像—']);expect(categories.at(-1)!.attributes('disabled')).toBeDefined();expect(categories.at(-1)!.element.tagName).toBe('BUTTON');for(const link of wrapper.findAllComponents(Link).filter(link=>link.element.closest('.overview-types')))expect(link.props('to')).toMatchObject({path:'/events',query:{category:link.attributes('data-category')}});expect(wrapper.text()).toContain('近期提醒 7');expect(wrapper.get('.overview-focus-counts').text()).toContain('正在使用的药物 1 项');expect(wrapper.get('.overview-processing').text()).toContain('待确认2 份');const cards=wrapper.findAll('.overview-panel').at(-1)!.findAll('.health-timeline-card');expect(cards).toHaveLength(5);expect(wrapper.text()).not.toContain('报告总数');expect(wrapper.text()).not.toContain('待识别报告');});
+it('keeps server upload order and labels report dates in both document previews only',async()=>{
+ const value=sample();
+ const recent={...feedEntry('report','report','new-upload'),title:'合成新上传',date:'2020-01-02',uploadedAt:'2026-01-03T08:00:00Z',status:'processing',duplicateHint:'possible' as const};
+ const older={...feedEntry('report','report','old-upload'),title:'合成旧上传',date:'2026-01-02',status:'failed'};
+ value.recentRecords=[recent,older];value.pending.documents=[recent,{...older,date:null}];
+ mocks.request.mockResolvedValue(value);
+ const wrapper=render();await flushPromises();
+ expect(wrapper.get('.overview-recent-uploads h3').text()).toBe('最近上传');
+ for(const selector of ['.overview-recent-uploads','.overview-pending-list']){
+  const cards=wrapper.get(selector).findAll('.health-timeline-card');
+  expect(cards.map(card=>card.get('strong').text())).toEqual([recent.title,older.title]);
+  expect(cards[0].get('.health-timeline-date-main').text()).toBe('01-02');
+  expect(cards[0].get('.health-timeline-upload-time').text()).toContain('上传时间：');
+  expect(cards[0].get('.health-timeline-upload-time').attributes('datetime')).toBe(recent.uploadedAt);
+  expect(cards[0].get('.health-timeline-duplicate').text()).toBe('疑似重复');
+  expect(cards[0].attributes('href')).toContain('/events/detail/report/new-upload');
+ }
+ expect(wrapper.get('.overview-pending-list').findAll('.health-timeline-date-main')[1].text()).toBe('待确认');
+ expect(wrapper.get('.overview-attention').text()).not.toContain('报告日期');
+});
 it('shows a noninteractive layout skeleton on first load and member switch, preserving cards during refresh',async()=>{
  let finish!:(value:HealthOverview)=>void;mocks.request.mockReturnValueOnce(new Promise(resolve=>finish=resolve));const wrapper=render();await flushPromises();
  const skeleton=wrapper.get('.overview-skeleton');expect(skeleton.attributes('role')).toBe('status');expect(skeleton.attributes('aria-label')).toBe('正在加载概览');expect(skeleton.attributes('aria-busy')).toBe('true');
@@ -35,7 +55,7 @@ it('replaces the initial skeleton with an error and restores it only while retry
  mocks.request.mockRejectedValueOnce(Error('合成读取失败'));const wrapper=render();await flushPromises();expect(wrapper.find('.overview-skeleton').exists()).toBe(false);expect(wrapper.get('[role=alert]').text()).toContain('合成读取失败');
  let finish!:(value:HealthOverview)=>void;mocks.request.mockReturnValueOnce(new Promise(resolve=>finish=resolve));await wrapper.get('.error-retry').trigger('click');expect(wrapper.find('.overview-skeleton').exists()).toBe(true);finish(sample());await flushPromises();expect(wrapper.find('.overview-skeleton').exists()).toBe(false);
 });
-it('manual-only content is shown without requiring any uploaded report',async()=>{const value=sample();value.recordCount=3;value.categoryCounts.report=0;value.categoryCounts.imaging=0;value.recentRecords=value.recentRecords.filter(entry=>!['report','imaging'].includes(entry.category));mocks.request.mockResolvedValue(value);const wrapper=render();await flushPromises();expect(wrapper.find('.empty-state').exists()).toBe(false);expect(wrapper.text()).toContain('合成symptom');expect(wrapper.text()).toContain('合成vaccination');});
+it('manual-only content is shown without requiring any uploaded report',async()=>{const value=sample();value.recordCount=3;value.categoryCounts.report=0;value.categoryCounts.imaging=0;value.recentRecords=[];mocks.request.mockResolvedValue(value);const wrapper=render();await flushPromises();expect(wrapper.find('.empty-state').exists()).toBe(false);expect(wrapper.text()).toContain('合成symptom');expect(wrapper.find('.overview-recent-uploads').exists()).toBe(false);expect(wrapper.get('.overview-type[data-category=vaccination]').text()).toContain('接种1');});
 it('shows the process entry with its actual date range and hides the module when no linked process remains',async()=>{
  const value=sample();value.processes=[{id:'process',memberId:'member',title:'合成过程预览',summary:'合成过程摘要',startedAt:'2026-01-01',latestAt:'2026-01-03',recordCount:2,aiState:'unconfigured',manuallyEdited:false}];
  mocks.request.mockResolvedValue(value);const wrapper=render();await flushPromises();
@@ -53,12 +73,12 @@ it('touch cards open on the overview, close by owned browser history, and clear 
 it('cached overview ignores changes while away and refreshes on return',async()=>{const visible=ref(true);const wrapper=mount(defineComponent({components:{Page,KeepAlive},setup:()=>({visible}),template:'<KeepAlive><Page v-if="visible"/></KeepAlive>'}),{global:{stubs:{RouterLink:Link}}});wrappers.push(wrapper);await flushPromises();expect(app.topbarSubtitles.value.overview).toBe('共 5 条记录');visible.value=false;route.path='/events';await flushPromises();expect(app.topbarSubtitles.value.overview).toBeUndefined();const before=mocks.request.mock.calls.length;app.dataVersion.value++;await flushPromises();expect(mocks.request).toHaveBeenCalledTimes(before);route.path='/overview';visible.value=true;await flushPromises();expect(mocks.request.mock.calls.length).toBe(before+1);expect(app.topbarSubtitles.value.overview).toBe('共 5 条记录');});
 
 it('hides zero-count task panels while keeping records and current focus visible',async()=>{
- const value=sample();value.pending={reminderCount:0,reminders:[],reviewCount:0,processingCount:0,failedCount:0,documents:[]};mocks.request.mockResolvedValue(value);const wrapper=render();await flushPromises();expect(wrapper.find('.overview-columns').exists()).toBe(false);expect(wrapper.text()).toContain('当前关注');expect(wrapper.text()).toContain('最近记录');
+ const value=sample();value.pending={reminderCount:0,reminders:[],reviewCount:0,processingCount:0,failedCount:0,documents:[]};mocks.request.mockResolvedValue(value);const wrapper=render();await flushPromises();expect(wrapper.find('.overview-columns').exists()).toBe(false);expect(wrapper.text()).toContain('当前关注');expect(wrapper.text()).toContain('最近上传');
 });
 
 it('hides the entire attention and processing sections when only historical records remain',async()=>{
  const value=sample();value.pending={reminderCount:0,reminders:[],reviewCount:0,processingCount:0,failedCount:0,documents:[]};value.attention={symptomCount:0,medicationCount:0,symptoms:[],medications:[]};mocks.request.mockResolvedValue(value);
- const wrapper=render();await flushPromises();expect(wrapper.text()).not.toContain('当前关注');expect(wrapper.text()).not.toContain('资料处理');expect(wrapper.find('.overview-columns').exists()).toBe(false);expect(wrapper.text()).toContain('最近记录');expect(wrapper.findAll('.overview-types a')).toHaveLength(4);
+ const wrapper=render();await flushPromises();expect(wrapper.text()).not.toContain('当前关注');expect(wrapper.text()).not.toContain('资料处理');expect(wrapper.find('.overview-columns').exists()).toBe(false);expect(wrapper.text()).toContain('最近上传');expect(wrapper.findAll('.overview-types a')).toHaveLength(4);
 });
 
 it.each(['symptom','medication'] as const)('shows only the nonempty %s attention filter and expands its sole card',async category=>{
@@ -69,7 +89,7 @@ it.each(['symptom','medication'] as const)('shows only the nonempty %s attention
 it('removes cleared modules on refresh without hiding reminders or recent history',async()=>{
  const wrapper=render();await flushPromises();expect(wrapper.find('.overview-attention').exists()).toBe(true);expect(wrapper.find('.overview-processing').exists()).toBe(true);
  const value=sample();Object.assign(value.pending,{reviewCount:0,processingCount:0,failedCount:0,documents:[]});value.attention={symptomCount:0,medicationCount:0,symptoms:[],medications:[]};mocks.request.mockResolvedValueOnce(value);
- await pullRefresh(wrapper);expect(wrapper.find('.overview-attention').exists()).toBe(false);expect(wrapper.find('.overview-processing').exists()).toBe(false);expect(wrapper.findAll('.overview-columns > .overview-panel')).toHaveLength(1);expect(wrapper.get('.overview-columns h3').text()).toBe('近期提醒 7');expect(wrapper.text()).toContain('近期提醒 7');expect(wrapper.text()).toContain('最近记录');
+ await pullRefresh(wrapper);expect(wrapper.find('.overview-attention').exists()).toBe(false);expect(wrapper.find('.overview-processing').exists()).toBe(false);expect(wrapper.findAll('.overview-columns > .overview-panel')).toHaveLength(1);expect(wrapper.get('.overview-columns h3').text()).toBe('近期提醒 7');expect(wrapper.text()).toContain('近期提醒 7');expect(wrapper.text()).toContain('最近上传');
 });
 
 it('pull refresh preserves visible overview cards and does not occupy a blank grid row while idle',async()=>{

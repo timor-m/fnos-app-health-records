@@ -188,7 +188,7 @@ test('overview supports manual-only health records and uses the same five counts
  assert.equal(overview.recordCount,3);assert.deepEqual(overview.categoryCounts,{report:0,imaging:0,symptom:1,medication:1,vaccination:1});
  assert.equal(overview.attention.symptoms[0].resourceId,symptom.id);assert.equal(overview.attention.medications[0].resourceId,medication.id);
  assert.equal(overview.pending.processingCount,0);assert.equal(overview.pending.reviewCount,0);assert.equal(overview.pending.failedCount,0);
- assert.deepEqual(overview.recentRecords,listHealthRecordFeed(manager,{memberId:'member'}).items);
+ assert.deepEqual(overview.recentRecords,[]);
  assert.deepEqual(getOverview(viewer,'member'),overview);status(()=>getOverview(other,'member'),403);
  createProcessSymptomUpdate(manager,symptom.episodeId,symptom.id,{recordedAt:'2026-01-04',change:'resolved'});
  changeMedicationCourse(manager,medication.id,{revision:medication.revision,action:'pause',occurredAt:'2026-01-04'});
@@ -201,13 +201,49 @@ test('overview counts grouped cards once, source-processing per document, and co
  const fact=createClinicalFact(manager,'rx','medication',{medicationName:'合成处方药'});
  createMedicationCourse(manager,{memberId:'member',sourceMedicationId:fact.id,medicationName:'合成处方药',startedAt:'2026-01-01',confirmed:true});
  createVaccination(manager,{...vaccine,sourceReportId:'vax-proof'});
- getDatabase().prepare("UPDATE reports SET status=CASE id WHEN 'checkup' THEN 'needs_review' WHEN 'lab' THEN 'failed' WHEN 'image' THEN 'uploading' WHEN 'vax-proof' THEN 'processing' ELSE status END").run();
+ getDatabase().prepare("UPDATE reports SET created_at='2026-01-01 00:00:00',status=CASE id WHEN 'checkup' THEN 'needs_review' WHEN 'lab' THEN 'failed' WHEN 'image' THEN 'uploading' WHEN 'vax-proof' THEN 'processing' ELSE status END").run();
  const overview=getOverview(manager,'member');assert.equal(overview.recordCount,4);assert.deepEqual(overview.categoryCounts,{report:1,imaging:1,symptom:0,medication:1,vaccination:1});
  assert.equal(overview.attention.medicationCount,1);assert.equal(overview.attention.medications[0].kind,'medication');
  assert.equal(overview.pending.failedCount,1);assert.equal(overview.pending.reviewCount,1);assert.equal(overview.pending.processingCount,2);
- assert.equal(overview.pending.documents.length,2);assert.equal(overview.pending.documents[0].resourceId,'lab');assert.ok(overview.recentRecords.every(item=>item.memberId==='member'));
+ assert.equal(overview.pending.documents.length,2);assert.equal(overview.pending.documents[0].resourceId,'vax-proof');assert.ok(overview.recentRecords.every(item=>item.memberId==='member'));
  assert.equal(listHealthRecordFeed(manager,{memberId:'member',status:'needs_review'}).items.length,1);
  assert.equal(listHealthRecordFeed(manager,{memberId:'member',status:'processing'}).items.length,2);
+}));
+
+test('overview upload previews order sources by upload time regardless of report dates, status or grouping',()=>fixture(()=>{
+ const db=getDatabase();
+ for(const [id,uploadedAt,reportDate,state] of [
+  ['old-upload','2026-01-01 08:00:00','2026-10-01','failed'],
+  ['new-old-report','2026-10-26 08:00:00','2020-01-01','processing'],
+  ['unknown-date','2026-10-26 09:00:00',null,'queued'],
+  ['tie-a','2026-10-25 08:00:00','2025-01-01','ready'],
+  ['tie-z','2026-10-25 08:00:00','2024-01-01','ready'],
+  ['middle','2026-10-24 08:00:00','2023-01-01','needs_review'],
+  ['trashed','2026-10-27 08:00:00','2026-01-01','trashed'],
+  ['deleted','2026-10-27 09:00:00','2026-01-01','processing']
+ ] as const){
+  report(id,'laboratory');
+  db.prepare('UPDATE reports SET created_at=?,report_issued_at=?,status=? WHERE id=?').run(uploadedAt,reportDate,state,id);
+ }
+ db.prepare("UPDATE reports SET deleted_at='2026-10-27 10:00:00' WHERE id='deleted'").run();
+ report('foreign-latest','laboratory','合成其他成员资料','second');
+ createHealthEvent(manager,{memberId:'member',eventType:'physical_exam',title:'合成同次资料',reportIds:['new-old-report','old-upload']});
+ createPublicSymptom(manager,{memberId:'member',name:'合成手动记录',startedAt:'2026-10-26'});
+ const ids=(overview:ReturnType<typeof getOverview>)=>overview.recentRecords.map(item=>item.resourceId);
+ const before=getOverview(manager,'member');
+ assert.deepEqual(ids(before),['unknown-date','new-old-report','tie-z','tie-a','middle']);
+ assert.deepEqual(before.pending.documents.map(item=>item.resourceId),['unknown-date','new-old-report']);
+ assert.equal(before.recentRecords[0].date,null);
+ assert.equal(before.recentRecords[1].date,'2020-01-01');
+ assert.equal(before.recentRecords[0].uploadedAt,'2026-10-26T09:00:00.000Z');
+ assert.equal(before.recentRecords[1].uploadedAt,'2026-10-26T08:00:00.000Z');
+ assert.equal(before.pending.documents[0].uploadedAt,before.recentRecords[0].uploadedAt);
+ assert.ok(before.recentRecords.every(item=>item.documents.length===1));
+ assert.equal(before.pending.failedCount,1);assert.equal(before.pending.processingCount,2);assert.equal(before.pending.reviewCount,1);
+ db.prepare("UPDATE reports SET report_issued_at='2026-10-26',status='ready',updated_at='2026-10-28 00:00:00' WHERE id='old-upload'").run();
+ assert.deepEqual(ids(getOverview(manager,'member')),ids(before));
+ // Report/event time still determines the record timeline, independently of upload previews.
+ assert.notDeepEqual(listHealthRecordFeed(manager,{memberId:'member'}).items.slice(0,5).map(item=>item.resourceId),ids(before));
 }));
 
 test('overview totals are not capped by record pagination or reminder previews, and exclude retracted or trashed content',()=>fixture(()=>{

@@ -57,10 +57,10 @@ export function syncBuiltinTrendGroups(db: DatabaseSync) {
   }
 }
 
-// Call only after listTrendSeries has enforced member access; available contains
+// Call only after member access has been enforced; available contains
 // admitted indicators only, not raw observations or another member's counts.
-export function buildTrendGroupTree(available: AvailableIndicator[], userId: string, db = getDatabase()): TrendGroupNode[] {
-  syncBuiltinTrendGroups(db);
+export function buildTrendGroupTree(available: AvailableIndicator[], userId: string, db = getDatabase(), synchronize = true): TrendGroupNode[] {
+  if (synchronize) syncBuiltinTrendGroups(db);
   const groups = db.prepare(`SELECT id, group_key AS key, display_name AS name, parent_id AS parent
     FROM indicator_groups WHERE enabled = 1 AND (created_by IS NULL AND source = 'builtin' OR created_by = ?)
     ORDER BY sort_order, display_name, group_key`).all(userId) as GroupRow[];

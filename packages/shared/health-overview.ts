@@ -19,6 +19,7 @@ export type HealthOverview = {
     symptomCount: number; medicationCount: number;
     symptoms: HealthFeedEntry[]; medications: HealthFeedEntry[];
   };
+  /** Latest uploaded source documents, ordered by upload time rather than clinical date. */
   recentRecords: HealthFeedEntry[];
   processes: HealthProcessSummary[];
 };

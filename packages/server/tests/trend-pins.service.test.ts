@@ -1,3 +1,4 @@
+import { runTrendSnapshotTasksOnce } from '../services/trend-snapshot-runner.service';
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,7 +25,7 @@ const userC: RequestUser = {
   isGatewayAdmin: false
 };
 
-test("keeps trend pins isolated by user and member", () => {
+test("keeps trend pins isolated by user and member", async () => {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-trend-pins-"));
   process.env.STORAGE_DIR = storageDir;
   try {
@@ -81,6 +82,7 @@ test("keeps trend pins isolated by user and member", () => {
 
     const cholesterol = initialA.find((series) => series.name === "总胆固醇");
     assert.ok(cholesterol);
+    await runTrendSnapshotTasksOnce();
     updateTrendPin(userA, {
       memberId: "trend-pin-member",
       indicatorKey: cholesterol.indicatorKey,

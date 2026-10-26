@@ -30,7 +30,9 @@ describe('拍照新增菜单', () => {
     expect(wrapper.findAllComponents({name:'RouterLink'})[2].props('to')).toEqual({path:'/events',query:{add:'medication'}});
     expect(wrapper.findAllComponents({name:'RouterLink'}).at(-1)!.props('to')).toEqual({path:'/add/vaccination',query:{returnTo:'/events'}});
     expect(wrapper.text()).toContain('接种');
-    const imaging=wrapper.get('.quick-add-entry.is-disabled');expect(imaging.text()).toContain('影像');expect(imaging.attributes('disabled')).toBeDefined();expect(wrapper.findAll('.quick-add-entry').at(-1)!.element).toBe(imaging.element);
+    expect(wrapper.find('.quick-add-entry.is-disabled').exists()).toBe(false);
+    expect(wrapper.findAll('.quick-add-entry')[0].text()).toContain('快速拍照');
+    expect(wrapper.get('input[capture="environment"]').attributes('multiple')).toBeUndefined();
     document.body.querySelector<HTMLElement>('.quick-add-backdrop')?.click();
     await nextTick();
     expect(trigger.attributes('aria-expanded')).toBe('false');
@@ -48,6 +50,8 @@ describe('拍照新增菜单', () => {
     });
     const trigger = wrapper.get('.quick-add-trigger');
     await trigger.trigger('click');
+    expect(wrapper.find('.quick-photo-entry').exists()).toBe(false);
+    expect(wrapper.find('input[capture]').exists()).toBe(false);
     await wrapper.setProps({ routeKey: '/trends' });
     expect(wrapper.find('.quick-add-panel').exists()).toBe(false);
     await trigger.trigger('click');

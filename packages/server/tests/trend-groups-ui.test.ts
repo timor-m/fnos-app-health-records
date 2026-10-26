@@ -47,9 +47,10 @@ test('single-select UI reuses shared drawer and removes multi-select tags and st
   const source = readFileSync('packages/ui/src/components/TrendGroupFilter.vue','utf8');
   const page = readFileSync('packages/ui/src/pages/TrendsPage.vue', 'utf8');
   const select = readFileSync('packages/ui/src/components/FormSelect.vue','utf8');
-  assert.match(page, /params.append\('groupKeys\[\]', groupFilter.value\)/);
-  assert.match(page, /sequence === groupRequest/); assert.match(page, /sequence === loadRequest/);
-  assert.match(page, /groupFilter.value = ''/);
+  assert.match(page, /useTrendSnapshots/);
+  assert.match(page, /group: groupFilter.value/);
+  assert.doesNotMatch(page, /resolveTrendGroupKeys|groupRequest|groupPending/);
+  assert.match(page, /groupFilter.value\s*=\s*''/);
   assert.doesNotMatch(page, /trend-group-chips|selectedGroups/);
   assert.doesNotMatch(source, /indeterminate|trend-group-popover|modelValue: string\[\]/);
   assert.match(source, /<FormSelect/); assert.match(source, /pick\(option\(node\)\)/);

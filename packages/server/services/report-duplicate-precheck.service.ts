@@ -2,6 +2,8 @@ import { getDatabase, rollbackAfterError } from '../database/client';
 import { evaluateDuplicatePair, type DuplicateEvaluation, type DuplicateEvidenceSnapshot } from './report-duplicate-evidence';
 import { buildDuplicateSnapshot, completeSourceSignature, markDuplicateResultCurrent } from './report-duplicate-snapshot.service';
 import { getReportDuplicateDecision } from './report-duplicate-governance.service';
+import { currentReportDuplicateRuleVersion } from './report-duplicate-rules.service';
+import type { HealthFeedEntry } from '../../shared/health-categories';
 export type LocalDuplicateEvidence = {
     reportId: string;
     confidence: 'high' | 'medium';
@@ -104,7 +106,8 @@ export function pauseDuplicateIfEligible(reportId: string, explicitContinue = fa
         const candidates = findLocalDuplicateEvidence(reportId).filter(x => x.pauseEligible);
         if (candidates.length) {
             const c = candidates[0];
-            const pause = { batchId: batchId || a.version, sourceVersion: a.sourceVersion, reasonCode: c.evaluation.ruleId === 'R0' ? 'duplicate_original' : 'duplicate_evidence', targetId: c.reportId, leftVersion: c.evaluation.leftVersion, rightVersion: c.evaluation.rightVersion, sourceSignature: a.sourceSignature, ruleVersion: c.evaluation.ruleVersion, ruleId: c.evaluation.ruleId, reason: c.evaluation.ruleId === 'R0' ? '与已有报告的完整原件一致，已暂缓 AI 整理。' : '检测到高度重复候选，已暂缓 AI 整理。', support: c.evaluation.support };
+            const target = buildDuplicateSnapshot(c.reportId)!;
+            const pause = { batchId: batchId || a.version, sourceVersion: a.sourceVersion, reasonCode: c.evaluation.ruleId === 'R0' ? 'duplicate_original' : 'duplicate_evidence', targetId: c.reportId, targetSourceVersion:target.sourceVersion, targetSourceSignature:target.sourceSignature, targetExtractionId:target.extractionId, leftVersion: c.evaluation.leftVersion, rightVersion: c.evaluation.rightVersion, sourceSignature: a.sourceSignature, ruleVersion: c.evaluation.ruleVersion, ruleId: c.evaluation.ruleId, reason: c.evaluation.ruleId === 'R0' ? '与已有报告的完整原件一致，已暂缓 AI 整理。' : '检测到高度重复候选，已暂缓 AI 整理。', support: c.evaluation.support };
             db.prepare(`INSERT INTO report_duplicate_runtime(report_id,source_signature,pause_json) VALUES(?,?,?) ON CONFLICT(report_id) DO UPDATE SET source_signature=excluded.source_signature,pause_json=excluded.pause_json,updated_at=CURRENT_TIMESTAMP`).run(reportId, a.sourceSignature, JSON.stringify(pause));
         }
         else
@@ -129,8 +132,15 @@ export function runDuplicatePostcheck(reportId: string, publishedNow = true) {
         const snapshot = buildDuplicateSnapshot(reportId);
         if (!snapshot?.extractionId)
             return;
-        const results = findLocalDuplicateEvidence(reportId).map(x => ({ reportId: x.reportId, evaluation: x.evaluation }));
-        db.prepare("UPDATE report_duplicate_runtime SET post_status='complete',post_json=?,updated_at=CURRENT_TIMESTAMP WHERE report_id=?").run(JSON.stringify({ version: snapshot.version, results }), reportId);
+        const cache = new Map<string, DuplicateEvidenceSnapshot|null>([[reportId,snapshot]]);
+        const results = findLocalDuplicateEvidence(reportId,80,cache).map(x => {
+            const target=cache.get(x.reportId)!;
+            return { reportId:x.reportId, evaluation:x.evaluation, sourceVersion:target.sourceVersion,
+                sourceSignature:target.sourceSignature, extractionId:target.extractionId };
+        });
+        db.prepare("UPDATE report_duplicate_runtime SET post_status='complete',post_json=?,updated_at=CURRENT_TIMESTAMP WHERE report_id=?").run(JSON.stringify({ version:snapshot.version,
+            ruleVersion:currentReportDuplicateRuleVersion, sourceVersion:snapshot.sourceVersion,
+            sourceSignature:snapshot.sourceSignature, extractionId:snapshot.extractionId, results }), reportId);
     }
     catch {
         // Postcheck is optional bookkeeping; never fail or roll back an already published extraction.
@@ -139,6 +149,43 @@ export function runDuplicatePostcheck(reportId: string, publishedNow = true) {
         }
         catch { /* database outage: the successful extraction remains authoritative */ }
     }
+}
+/** Preview badges read persisted results only, never rebuild OCR evidence or call AI. */
+export function getSavedDuplicateHint(reportId:string,memberId:string):HealthFeedEntry['duplicateHint'] {
+    const db=getDatabase();
+    const read=(id:string)=>db.prepare(`SELECT r.source_version AS sourceVersion,
+        (SELECT e.id FROM report_extractions e WHERE e.report_id=r.id ORDER BY e.created_at DESC,e.id DESC LIMIT 1) AS extractionId,
+        EXISTS(SELECT 1 FROM processing_jobs j WHERE j.report_id=r.id AND j.status IN ('queued','processing')) AS active
+        FROM reports r WHERE r.id=? AND r.member_id=? AND r.deleted_at IS NULL AND r.status<>'trashed'`).get(id,memberId) as {
+            sourceVersion:number;extractionId:string|null;active:number
+        }|undefined;
+    const current=read(reportId);
+    if(!current||current.active)return undefined;
+    const row=db.prepare('SELECT post_status AS status,post_json AS post,pause_json AS pause FROM report_duplicate_runtime WHERE report_id=?').get(reportId) as {
+        status:string|null;post:string|null;pause:string|null
+    }|undefined;
+    if(!row)return undefined;
+    const signature=completeSourceSignature(reportId);
+    const validTarget=(id:string,version:number,source:string|null,extractionId:string|null)=>{
+        if(id===reportId||!source||getReportDuplicateDecision(reportId,id)?.decision==='distinct')return false;
+        const target=read(id);
+        return !!target&&!target.active&&target.sourceVersion===version&&target.extractionId===extractionId&&completeSourceSignature(id)===source;
+    };
+    try {
+        const pause=row.pause?JSON.parse(row.pause):null;
+        if(pause?.ruleVersion===currentReportDuplicateRuleVersion&&pause.sourceVersion===current.sourceVersion
+            &&signature&&pause.sourceSignature===signature
+            &&validTarget(pause.targetId,pause.targetSourceVersion,pause.targetSourceSignature,pause.targetExtractionId))return 'high';
+        const post=row.status==='complete'&&row.post?JSON.parse(row.post):null;
+        if(!post||post.ruleVersion!==currentReportDuplicateRuleVersion||post.sourceVersion!==current.sourceVersion
+            ||!signature||post.sourceSignature!==signature||post.extractionId!==current.extractionId||!Array.isArray(post.results))return undefined;
+        const matches=post.results.filter((result:{reportId:string;sourceVersion:number;sourceSignature:string|null;extractionId:string|null;evaluation:DuplicateEvaluation})=>
+            result.evaluation?.ruleVersion===currentReportDuplicateRuleVersion
+            &&['exact_duplicate','strong_duplicate','possible_duplicate'].includes(result.evaluation.classification)
+            &&validTarget(result.reportId,result.sourceVersion,result.sourceSignature,result.extractionId));
+        if(!matches.length)return undefined;
+        return matches.some((result:{evaluation:DuplicateEvaluation})=>result.evaluation.classification!=='possible_duplicate')?'high':'possible';
+    }catch{return undefined;}
 }
 export function getDuplicateVerification(reportId: string) {
     const row = getDatabase().prepare('SELECT post_status AS status,post_json AS detail FROM report_duplicate_runtime WHERE report_id=?').get(reportId) as {

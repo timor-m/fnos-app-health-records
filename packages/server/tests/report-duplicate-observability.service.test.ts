@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
 import type { RequestUser } from "../domain/request-user.ts";
+import { currentReportDuplicateRuleVersion } from '../services/report-duplicate-rules.service';
 import {
   getReportDuplicateMetrics,
   listDuplicateReportOperations
@@ -88,7 +89,7 @@ test("P2 duplicate scan operations stay aggregate-only and bound retained histor
     const latestScan = operations.find((operation) => operation.purpose === "metrics");
     assert.ok(latestScan);
     assert.equal(latestScan.status, "completed");
-    assert.equal(latestScan.ruleVersion, "family-v2");
+    assert.equal(latestScan.ruleVersion, currentReportDuplicateRuleVersion);
     assert.equal(typeof latestScan.stats.scanDurationMs, "number");
     const serialized = JSON.stringify(latestScan);
     for (const forbidden of [

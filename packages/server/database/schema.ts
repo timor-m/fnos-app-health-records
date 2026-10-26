@@ -1,3 +1,4 @@
+import {trendSnapshotSchemaSql} from './trend-snapshot-draft';
 import { healthRecordProcessSchemaSql } from './health-record-process-draft';
 import { healthCategorySchemaSql } from './health-category-draft';
 import { memberMergeSchemaSql } from "./member-merge-draft";
@@ -609,4 +610,5 @@ ${healthUploadSchemaSql}
 ${medicationDraftSchemaSql}
 ${healthCategorySchemaSql}
 ${healthRecordProcessSchemaSql}
+${trendSnapshotSchemaSql}
 `;

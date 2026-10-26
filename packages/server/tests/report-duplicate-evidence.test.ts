@@ -59,3 +59,61 @@ test('post results lower threshold but require identity and real content', () =>
 test('narrative post compares entire findings, not generic conclusion or prefix', () => { const a = syntheticSnapshot('a', 0), b = syntheticSnapshot('b', 0); a.narrative = b.narrative = '合成影像所见：左侧特定区域存在明确范围的局部改变，测量范围与位置均有记录；右侧区域连续且形态均匀，检查涵盖完整范围，结论与所见一致。'; a.narrativeReliable = b.narrativeReliable = true; assert.equal(evaluate(a, b, 'ai_post').ruleId, 'R3.narrative'); b.narrative += '新增病灶。'; assert.equal(evaluate(a, b, 'ai_post').classification, 'related_variant'); a.narrative = b.narrative = '未见异常'; assert.equal(evaluate(a, b, 'ai_post').classification, 'insufficient'); });
 test('symmetric conclusions and counts under exchange', () => { const [a, b] = pair(); b.items[0].reliable = false; a.items.reverse(); const x = evaluate(a, b), y = evaluate(b, a); assert.equal(x.classification, y.classification); assert.equal(x.sameCount, y.sameCount); assert.equal(x.uncertainCount, y.uncertainCount); assert.deepEqual(x.coverage, y.coverage.reverse()); });
 test('replacing known with unknown cannot strengthen evidence', () => { const [a, b] = pair(); const before = evaluate(a, b); b.items[0].reliable = false; const after = evaluate(a, b); assert.ok(after.sameCount < before.sameCount); assert.ok(after.coverage[0] < before.coverage[0]); });
+
+function photoPair() {
+ const a=syntheticSnapshot('photo-a',5),b=syntheticSnapshot('photo-b',5);
+ for(const snapshot of [a,b]){
+  snapshot.issuer='';snapshot.identifiers=[];
+  snapshot.items.forEach(item=>{item.value += '|mmol/l||';});
+ }
+ a.scope='synthetic-report';b.scope='synthetic-report-different-title';
+ return [a,b] as const;
+}
+test('advisory coverage uses grounded results without promoting parser fragment estimates into pause evidence',()=>{
+ const [a,b]=photoPair();
+ a.photoItems=a.items.map(item=>({...item}));b.photoItems=b.items.map(item=>({...item}));
+ a.photoUnknown=b.photoUnknown=0;
+ a.unknown=b.unknown=9;
+ b.items.forEach(item=>{item.key+='|generated-heading';});
+ const result=evaluate(a,b,'ai_post');
+ assert.equal(result.ruleId,'R3.photo');assert.equal(result.preGateEligible,false);
+ assert.equal(evaluate(a,b).preGateEligible,false);
+ b.photoUnknown=3;assert.notEqual(evaluate(a,b,'ai_post').ruleId,'R3.photo');
+ b.photoUnknown=0;b.photoItems![0].value='99|mmol/l||';
+ assert.notEqual(evaluate(a,b,'ai_post').ruleId,'R3.photo');
+});
+test('rephotographed short reports without issuer/number receive only an advisory after extraction',()=>{
+ const [a,b]=photoPair();b.items[0].reliable=false;
+ assert.equal(evaluate(a,b).classification,'insufficient');
+ const result=evaluate(a,b,'ai_post');
+ assert.equal(result.ruleId,'R3.photo');assert.equal(result.classification,'possible_duplicate');assert.equal(result.preGateEligible,false);
+ assert.equal(evaluate(b,a,'ai_post').classification,result.classification);
+});
+test('photo advisories accept a matching report date without pretending a precise examination time exists',()=>{
+ const [a,b]=photoPair();a.times=b.times={issued:'2026-01-01'};
+ assert.equal(evaluate(a,b,'ai_post').ruleId,'R3.photo');
+ a.times={};assert.equal(evaluate(a,b,'ai_post').classification,'insufficient');
+});
+for(const [name,change] of [
+ ['report number',(s:Snapshot)=>{s.identifiers=[{type:'report',value:'other'}];}],
+ ['issuer',(s:Snapshot)=>{s.issuer='other';}],
+ ['examination time',(s:Snapshot)=>{s.times.sampled='2026-01-02 09:00';}],
+ ['report time',(s:Snapshot)=>{s.times.issued='2026-01-02';}],
+ ['result',(s:Snapshot)=>{s.items[0].value='99|mmol/l||';}],
+ ['unit',(s:Snapshot)=>{s.items[0].value='1.10|mg/l||';}],
+ ['specimen',(s:Snapshot)=>{s.items[0].key+='|urine';}],
+ ['integrity',(s:Snapshot)=>{s.risks=['ocr_page_missing'];}],
+ ['member',(s:Snapshot)=>{s.memberId='other';}],
+] as const)test(`photo advisory rejects a known ${name} conflict`,()=>{
+ const [a,b]=photoPair();a.identifiers=b.identifiers=[{type:'report',value:'same'}];a.issuer=b.issuer='same';a.times.issued=b.times.issued='2026-01-01';
+ change(b);assert.notEqual(evaluate(a,b,'ai_post').ruleId,'R3.photo');
+});
+test('a photo advisory needs distinct reliable numeric anchors with known units',()=>{
+ for(const change of [
+  (s:Snapshot)=>{s.items.forEach(item=>{item.value='1|mmol/l||';});},
+  (s:Snapshot)=>{s.items.forEach(item=>{item.value=item.value.split('|')[0];});},
+  (s:Snapshot)=>{s.items.forEach(item=>{item.anchor=false;});},
+  (s:Snapshot)=>{s.items.forEach(item=>{item.key='same-item';});},
+  (s:Snapshot)=>{s.items[0].reliable=false;s.items[1].reliable=false;}
+ ]){const [a,b]=photoPair();change(a);change(b);assert.notEqual(evaluate(a,b,'ai_post').ruleId,'R3.photo');}
+});

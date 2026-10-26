@@ -29,6 +29,8 @@ export type HealthDocument = {
 export type HealthFeedEntry = {
   id: string; category: HealthCategory; kind: 'report' | 'symptom' | 'medication_document' | 'medication' | 'intake' | 'vaccination';
   resourceId: string; memberId: string; title: string; date: string | null; subtype: string;
+  uploadedAt?: string | null;
+  duplicateHint?: 'high' | 'possible';
   description: string | null; status: string | null; institution: string | null;
   documents: HealthDocument[]; processIds: string[]; groupId?: string;
   medicationCount?: number; activeCount?: number; confirmedCount?: number; intakeCount?: number;

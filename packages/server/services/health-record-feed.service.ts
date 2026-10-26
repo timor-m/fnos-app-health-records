@@ -30,8 +30,8 @@ export function healthRecordSnapshot(user:RequestUser,input:Input) {
  // Documents linked to a visit remain visible. A visit is grouping context, not a second card.
  const documents=db.prepare(`SELECT id,member_id AS memberId,title,report_type AS reportType,status,
   COALESCE(NULLIF(report_issued_at,''),NULLIF(reviewed_at,''),NULLIF(received_at,''),NULLIF(examined_at,''),NULLIF(sampled_at,''),NULLIF(ordered_at,'')) AS reportIssuedAt,
-  hospital_name_raw AS hospitalName,COALESCE(visit_department,performing_department,reporting_department) AS department
-  FROM reports WHERE member_id=? AND status<>'trashed' AND deleted_at IS NULL ORDER BY id`).all(memberId) as HealthDocument[];
+  hospital_name_raw AS hospitalName,COALESCE(visit_department,performing_department,reporting_department) AS department,strftime('%Y-%m-%dT%H:%M:%fZ',created_at) AS uploadedAt
+  FROM reports WHERE member_id=? AND status<>'trashed' AND deleted_at IS NULL ORDER BY id`).all(memberId) as Array<HealthDocument & {uploadedAt:string|null}>;
  const links=db.prepare(`SELECT x.resource_id AS reportId,e.id AS eventId,e.title,e.started_at AS date
   FROM health_event_resources x JOIN health_events e ON e.id=x.event_id AND e.deleted_at IS NULL
   WHERE x.resource_type='report' AND e.member_id=? ORDER BY x.created_at,x.id`).all(memberId) as Array<{reportId:string;eventId:string;title:string|null;date:string|null}>;
@@ -82,7 +82,7 @@ export function healthRecordSnapshot(user:RequestUser,input:Input) {
   .filter(item=>(!input.category||item.category===input.category)&&(!input.subtype||(item.category==='vaccination'&&['vaccination','administered'].includes(input.subtype))||(input.category==='medication'&&input.subtype==='record' ? item.kind==='medication'||item.kind==='intake' : item.subtype===input.subtype||item.documents.some(doc=>doc.reportType===input.subtype))))
   .filter(item=>!input.status||statusMatches(item.status,input.status)||item.documents.some(doc=>statusMatches(doc.status,input.status!)))
   .filter(item=>!query||[item.title,item.date,localDate(item.date),item.description,item.institution,...item.documents.flatMap(doc=>[doc.title,doc.reportIssuedAt,localDate(doc.reportIssuedAt),doc.hospitalName,doc.department])].filter(Boolean).join(' ').toLocaleLowerCase().includes(query)).sort(sort);
- return {entries:sorted,medicationCourses:medicationCourses.sort(sort)};
+ return {entries:sorted,documents,medicationCourses:medicationCourses.sort(sort)};
 }
 export function healthRecordEntries(user:RequestUser,input:Input):HealthFeedEntry[]{return healthRecordSnapshot(user,input).entries;}
 export function listHealthRecordFeed(user:RequestUser,input:Input):HealthFeedPage {

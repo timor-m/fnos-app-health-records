@@ -1207,6 +1207,7 @@ export type ReportDetail = ReportSummary & {
   billingItems: BillingItem[];
   structuredSections: ReportStructuredSection[];
   duplicateCandidates: DuplicateReportCandidate[];
+  duplicateCandidatesPending?: boolean;
   duplicateSearch?: {status:string;candidateCount:number;ordinaryWindowLimited:boolean;truncated:boolean};
   duplicateVerification?: {status:string} | null;
   duplicatePause?: { valid:boolean; state:string; targetId:string; reason:string; ruleId:string; ruleVersion:string } | null;

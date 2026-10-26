@@ -1,3 +1,5 @@
+import {ensureTrendSnapshotDraft, needsTrendSnapshotDraft} from './trend-snapshot-draft';
+import { isMainThread } from 'node:worker_threads';
 import {ensureDoctorContextDraft,needsDoctorContextDraft} from './doctor-context-draft';
 import { needsHealthRecordProcessDraft } from './health-record-process-draft';
 import { healthCategoryNeedsRepair, ensureHealthCategoryColumns } from './health-category-draft';
@@ -36,6 +38,22 @@ import { writeDatabaseSnapshot } from './snapshot';
 
 let database: DatabaseSync | null = null;
 let openedDatabasePath: string | null = null;
+const databaseCloseListeners = new Set<() => void>();
+export function onDatabaseClosing(listener: () => void) {
+  databaseCloseListeners.add(listener);
+  return () => { databaseCloseListeners.delete(listener); };
+}
+
+/** A computation worker must not run startup migrations or materialization writes. */
+export function attachTrendComputationDatabase(path: string) {
+  if (isMainThread || database) throw new Error('Read-only trend connection is worker-only');
+  if (resolve(path) !== resolve(getDatabasePath())) throw new Error('Trend storage context mismatch');
+  const connection = new DatabaseSync(path, {readOnly: true});
+  connection.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA query_only=ON;');
+  database = connection;
+  openedDatabasePath = resolve(path);
+  return connection;
+}
 
 const countedTables = [
   "users",
@@ -279,6 +297,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
       ensureHealthProcessDraft(db);
       ensureHealthWorkflowDraft(db);
       ensureDoctorContextDraft(db);
+      ensureTrendSnapshotDraft(db);
       ensureHealthUploadSchema(db);
       ensureMedicationDraftSchema(db);
       ensureObservationFieldOverrideSchema(db);
@@ -319,7 +338,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
   const needsStructureRepair = !tableExists(db, "member_merges") || !tableExists(db, "feedback_sync_state") || !tableExists(db, "feedback_notifications") || !tableExists(db, "feedback_notification_reads") || !tableExists(db, "examination_duplicate_decisions") || !tableExists(db, "report_examinations") || !tableExists(db, "observation_examinations") || !tableExists(db, "morphology_finding_examinations") || !tableExists(db, "report_examination_state") || !tableExists(db, "report_duplicate_runtime") || !tableColumnNames(db,"report_duplicate_runtime").has("continue_job_id") || !tableExists(db, "report_page_appends") || !tableColumnNames(db,"report_page_appends").has("confirmation_hash") || !tableColumnNames(db,"report_page_appends").has("input_hash") || !tableColumnNames(db,"report_page_append_files").has("error_message") || !tableExists(db, "file_gc_members") || !tableColumnNames(db, "member_permissions").has("can_manage_sharing") || !tableColumnNames(db, "report_pages").has("ocr_rotation") || pendingMigrations.length > 0 || !tableExists(db, "indicator_groups") || !tableExists(db, "indicator_group_members") || !tableExists(db, "report_notes") || !tableExists(db, "report_note_assets") || !tableExists(db, "upload_receipts")
     || !tableExists(db, "institution_trend_auto_rules") || !tableExists(db, "institution_trend_auto_decisions")
     || !tableExists(db, "health_events") || !tableExists(db, "health_event_resources")
-    || !tableExists(db, "health_episodes") || needsHealthProcessRepair(db) || needsHealthWorkflowDraft(db) || needsHealthUploadRepair(db) || medicationDraftNeedsRepair(db) || healthCategoryNeedsRepair(db) || needsHealthRecordProcessDraft(db) || needsDoctorContextDraft(db);
+    || !tableExists(db, "health_episodes") || needsHealthProcessRepair(db) || needsHealthWorkflowDraft(db) || needsHealthUploadRepair(db) || medicationDraftNeedsRepair(db) || healthCategoryNeedsRepair(db) || needsHealthRecordProcessDraft(db) || needsDoctorContextDraft(db) || needsTrendSnapshotDraft(db);
   if (needsStructureRepair) {
     backupDatabaseBeforeMigration(db, storageDir, databasePath, currentVersion, schemaVersion);
   }
@@ -362,6 +381,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
       ensureHealthProcessDraft(db);
       ensureHealthWorkflowDraft(db);
       ensureDoctorContextDraft(db);
+      ensureTrendSnapshotDraft(db);
       ensureHealthUploadSchema(db);
       ensureMedicationDraftSchema(db);
       ensureObservationFieldOverrideSchema(db);
@@ -508,6 +528,7 @@ export function getDatabaseStatus() {
 }
 
 export function closeDatabase() {
+  for (const listener of databaseCloseListeners) listener();
   const closing = database;
   database = null;
   openedDatabasePath = null;
@@ -528,6 +549,11 @@ export function prepareRestoredDatabase(databasePath: string) {
     migrate(staged, getAppConfig().storageDir, databasePath);
     if (unreleasedSchemaVersion !== previousMaintenance) throw new Error('备份包含待确认的历史 schema 草案，请先在独立副本中完成适配');
     if ((staged.prepare('PRAGMA integrity_check').get() as {integrity_check:string}).integrity_check !== 'ok' || staged.prepare('PRAGMA foreign_key_check').all().length) throw new Error('备份数据库完整性校验失败');
+    // Restored snapshots are derived data. Rebuild against the restored sources
+    // and current rules rather than publishing leases/results from the backup.
+    staged.prepare(`UPDATE trend_snapshot_members SET
+      desired_revision=MAX(desired_revision,active_revision)+1,invalidated=1,full_rebuild=1,
+      lease_token=NULL,attempts=0,retry_at=0,error_code=NULL`).run();
     return staged;
   } catch(error) { staged.close(); throw error; }
   finally { unreleasedSchemaVersion=previousMaintenance; }

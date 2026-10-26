@@ -1,3 +1,4 @@
+import { runTrendSnapshotTasksOnce } from '../services/trend-snapshot-runner.service';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -65,7 +66,7 @@ test('shared admission requires verified raw numbers and never bypasses exclusio
   assert.equal(assessTrendAdmission({ ...raw, canonicalKey: 'qa', canonicalName: '合成标准项', normalizationQuality: 'high', normalizationMatchedBy: 'exact', evidenceJson: '[]', hasAiExtraction: 0 }).kind, 'standard');
 });
 
-test('raw trend channel shares detail admission, isolates contexts, and responds to edits and exclusions', () => {
+test('raw trend channel shares detail admission, isolates contexts, and responds to edits and exclusions', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'health-admission-'));
   process.env.STORAGE_DIR = dir;
   try {
@@ -93,6 +94,7 @@ test('raw trend channel shares detail admission, isolates contexts, and responds
     assert.equal(getReportDetail(user, 'a').observations.find(o => o.id === 'a')?.displayTier, 'primary');
     assert.equal((db.prepare('SELECT canonical_key FROM observation_normalizations WHERE observation_id = ?').get('a') as {canonical_key: string | null}).canonical_key, null);
     const initial = series()[0];
+    await runTrendSnapshotTasksOnce();
     updateTrendPin(user, { memberId: 'qa-member', indicatorKey: initial.indicatorKey, unit: initial.unit }, true);
     assert.throws(() => updateTrendPin(user, { memberId: 'qa-member', indicatorKey: 'institution:forged', unit: 'U/L' }, true));
     insert('hospital', '其他合成机构');

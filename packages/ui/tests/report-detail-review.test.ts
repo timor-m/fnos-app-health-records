@@ -72,7 +72,7 @@ function jsonResponse(data: unknown, status = 200) {
 let fetchMock: ReturnType<typeof vi.fn>;
 
 function callsTo(urlPart: string) {
-  return fetchMock.mock.calls.filter(([input]) => String(input).includes(urlPart));
+  return fetchMock.mock.calls.filter(([input]) => String(input).replace('?includeDuplicateCandidates=false', '').includes(urlPart));
 }
 
 async function mountReview(reviewObservationId: string) {
@@ -88,7 +88,7 @@ async function mountReview(reviewObservationId: string) {
 
 beforeEach(() => {
   fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-    const url = String(input);
+    const url = String(input).replace('?includeDuplicateCandidates=false', '');
     if (url.includes("/api/reports/r1/original/status")) return jsonResponse({ status: "ready" });
     if (url.includes("/api/reports/r1/indicator-catalog")) return jsonResponse([]);
     if (url.includes("/api/reports/r1/pages/")) return jsonResponse({ pageId: "p1", lines: [] });
@@ -105,13 +105,37 @@ afterEach(() => {
 });
 
 describe("ReportDetail 核对指标模式", () => {
+  it.each(['stale','failed'])('keeps the %s duplicate recheck inside the notice content without rerunning extraction',async status=>{
+    let checked=false;
+    fetchMock.mockImplementation(async(input:RequestInfo|URL)=>{
+      const url=String(input).replace('?includeDuplicateCandidates=false','');
+      if(url.endsWith('/api/reports/r1/duplicate-recheck')){checked=true;return jsonResponse({checked:true});}
+      if(url.endsWith('/api/reports/r1'))return jsonResponse({...detailPayload,duplicateVerification:{status:checked?'complete':status}});
+      if(url.includes('/original/status'))return jsonResponse({status:'ready'});
+      if(url.includes('jobs'))return jsonResponse([]);
+      if(url.includes('/notes'))return jsonResponse({notes:[],canManage:false});
+      return jsonResponse({});
+    });
+    const wrapper=await mountReview('');
+    try{
+      const notice=wrapper.findAll('.duplicate-warning').find(item=>item.text().includes('重新核验'))!;
+      expect(notice.find(':scope > svg').exists()).toBe(true);
+      expect(notice.find(':scope > p, :scope > button').exists()).toBe(false);
+      expect(notice.get(':scope > div > p').text()).toContain(status==='stale'?'判重规则已更新':'重复核验暂未完成');
+      const button=notice.get(':scope > div > .duplicate-actions > button');
+      await button.trigger('click');await flushPromises();
+      expect(callsTo('/duplicate-recheck')).toHaveLength(1);
+      expect(checked).toBe(true);expect(wrapper.text()).not.toContain('判重规则已更新');
+      expect(callsTo('/reprocess')).toHaveLength(0);
+    }finally{wrapper.unmount();}
+  });
   it('shows a compact direction warning only for stale pages without opening the original viewer', async () => {
     const pages = [1, 2].map(pageNumber => ({
       id: `p${pageNumber}`, reportId: 'r1', pageNumber, mimeType: 'image/png',
       hasThumbnail: true, rotation: pageNumber === 2 ? 90 : 0, ocrStale: pageNumber === 2
     }));
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = String(input).replace('?includeDuplicateCandidates=false', '');
       if (url.endsWith('/api/reports/r1')) return jsonResponse({ ...detailPayload, pages });
       if (url.includes('/original/status')) return jsonResponse({ status: 'ready' });
       if (url.includes('jobs')) return jsonResponse([]);
@@ -156,7 +180,7 @@ describe("ReportDetail 核对指标模式", () => {
       vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(300)
     ];
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = String(input).replace('?includeDuplicateCandidates=false', '');
       if (url.endsWith('/api/reports/r1')) return jsonResponse({ ...detailPayload, pages: [page] });
       if (url.endsWith('/pages/p1/ocr')) return jsonResponse({
         pageId: 'p1', pageNumber: 1, orientationChanged: false,
@@ -199,7 +223,7 @@ describe("ReportDetail 核对指标模式", () => {
     let resolveOcr!: (response: Response) => void;
     const page = () => ({ id: 'p1', reportId: 'r1', pageNumber: 1, mimeType: 'image/png', hasThumbnail: true, rotation, ocrStale: false });
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
+      const url = String(input).replace('?includeDuplicateCandidates=false', '');
       if (url.endsWith('/pages/p1/ocr')) return new Promise<Response>(resolve => { resolveOcr = resolve; });
       if (url.endsWith('/pages/p1/rotation') && init?.method === 'PUT') {
         rotation = 90;
@@ -231,7 +255,7 @@ describe("ReportDetail 核对指标模式", () => {
   it('报告字段保存携带打开编辑器时的版本，冲突时保留输入', async () => {
     let version = 7;
     fetchMock.mockImplementation(async (input:RequestInfo|URL,init?:RequestInit) => {
-      const url = String(input);
+      const url = String(input).replace('?includeDuplicateCandidates=false', '');
       if (url.endsWith('/api/reports/r1') && init?.method === 'PUT') {
         return new Response(JSON.stringify({error:true,message:'报告已更新，请刷新后重新校对，当前输入尚未保存'}),{status:409,headers:{'content-type':'application/json'}});
       }
@@ -248,7 +272,7 @@ describe("ReportDetail 核对指标模式", () => {
       version = 8;
       await wrapper.get('[data-refresh]').trigger('click'); await flushPromises(); await flushPromises();
       await wrapper.get('.report-edit-form').trigger('submit'); await flushPromises();
-      const call = fetchMock.mock.calls.find(([input,init]) => String(input).endsWith('/api/reports/r1') && init?.method === 'PUT')!;
+      const call = fetchMock.mock.calls.find(([input,init]) => String(input).replace('?includeDuplicateCandidates=false', '').endsWith('/api/reports/r1') && init?.method === 'PUT')!;
       expect(JSON.parse(call[1].body)).toMatchObject({title:'合成新标题',expectedSourceVersion:7});
       expect(wrapper.get('.report-edit-form').text()).toContain('报告已更新');
       expect((wrapper.get('.report-edit-form input').element as HTMLInputElement).value).toBe('合成新标题');
@@ -258,7 +282,7 @@ describe("ReportDetail 核对指标模式", () => {
   it('只展示当前待核对指标，不把历史整理诊断当作报告现状', async () => {
     let reviewed = false;
     fetchMock.mockImplementation(async (input:RequestInfo|URL,init?:RequestInit) => {
-      const url = String(input);
+      const url = String(input).replace('?includeDuplicateCandidates=false', '');
       if (url.endsWith('/observations/obs-1') && init?.method === 'PUT') reviewed = true;
       if (url.endsWith('/api/reports/r1') || url.endsWith('/observations/obs-1')) return jsonResponse({...detailPayload,observations:[{...observation,requiresVisualReview:!reviewed,manualReviewed:reviewed}]});
       if (url.includes('jobs')) return jsonResponse([{id:'ai',reportId:'r1',jobType:'ai_extract',status:'completed',createdAt:'2026-01-01',batchId:'batch',batchKind:'manual_ai',batchStartedAt:'2026-01-01',batchSequence:1,unmatchedCandidates:11,layoutWarnings:[{pageNumber:1,pendingVisualResults:1,uncertainRows:1,ocrUnresolved:2,ocrUnretried:1}]}]);
@@ -282,7 +306,7 @@ describe("ReportDetail 核对指标模式", () => {
 
   it("在全部指标显示同名多时间结果，选择时定位来源而不打开编辑",async()=>{
     fetchMock.mockImplementation(async(input:RequestInfo|URL)=>{
-      const url=String(input);
+      const url=String(input).replace('?includeDuplicateCandidates=false', '');
       if(url.endsWith('/api/reports/r1'))return jsonResponse({...detailPayload,observations:[
         {...observation,id:'obs-1',examinationId:'e1',examinationTime:'2026-09-01'},
         {...observation,id:'obs-2',examinationId:'e2',examinationTime:'2026-09-08'}
@@ -308,7 +332,7 @@ describe("ReportDetail 核对指标模式", () => {
 
   it("在名称右侧紧凑显示来源页与检查日期", async () => {
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-      const url = String(input);
+      const url = String(input).replace('?includeDuplicateCandidates=false', '');
       if (url.endsWith("/api/reports/r1")) return jsonResponse({
         ...detailPayload,
         pages: [{ id: "p1", pageNumber: 1, mimeType: "image/jpeg", hasThumbnail: false }],
@@ -332,7 +356,7 @@ describe("ReportDetail 核对指标模式", () => {
     expect(wrapper.find(".observation-edit-panel.is-open").exists()).toBe(true);
     expect(wrapper.text()).toContain("编辑指标");
     expect(callsTo("jobs").length).toBe(0);
-    expect(callsTo("/api/reports/r1").filter(([input]) => String(input).endsWith("/api/reports/r1")).length).toBe(1);
+    expect(callsTo("/api/reports/r1").filter(([input]) => String(input).replace('?includeDuplicateCandidates=false', '').endsWith("/api/reports/r1")).length).toBe(1);
     wrapper.unmount();
   });
 
@@ -357,12 +381,12 @@ it("refreshes jobs and report details when the append component announces a proc
   try {
     await flushPromises();await flushPromises();
     const jobsBefore=callsTo('jobs?reportId=r1').length;
-    const detailsBefore=fetchMock.mock.calls.filter(([input])=>String(input).endsWith('/api/reports/r1')).length;
+    const detailsBefore=fetchMock.mock.calls.filter(([input])=>String(input).replace('?includeDuplicateCandidates=false', '').endsWith('/api/reports/r1')).length;
     await wrapper.get('[data-append-state]').trigger('click');await flushPromises();await flushPromises();
     expect(wrapper.find('.report-append-notice').exists()).toBe(false);
     expect(wrapper.get('#report-processing-section').text()).not.toContain('正在识别补充页面（OCR）');
     expect(callsTo('jobs?reportId=r1').length).toBeGreaterThan(jobsBefore);
-    expect(fetchMock.mock.calls.filter(([input])=>String(input).endsWith('/api/reports/r1')).length).toBeGreaterThan(detailsBefore);
+    expect(fetchMock.mock.calls.filter(([input])=>String(input).replace('?includeDuplicateCandidates=false', '').endsWith('/api/reports/r1')).length).toBeGreaterThan(detailsBefore);
   } finally { wrapper.unmount(); }
 });
 
@@ -370,7 +394,7 @@ describe('重复报告当前暂停状态',()=>{
  async function mountDuplicate(valid=true,memberId='m1') {
   let continued=false;
   fetchMock.mockImplementation(async (input:RequestInfo|URL)=>{
-   const url=String(input);
+   const url=String(input).replace('?includeDuplicateCandidates=false', '');
    if(url.endsWith('/duplicate-continue')) {continued=true;return jsonResponse({id:'synthetic-job',status:'queued'});}
    if(url.endsWith('/api/reports/r1')) return jsonResponse({...detailPayload,memberId,status:'needs_review',observations:[],duplicatePause:continued?null:{valid,state:valid?'paused':'expired',targetId:'r2',reason:'与已有报告的完整原件一致，已暂缓 AI 整理。',ruleId:'R0',ruleVersion:'family-v2'}});
    if(url.includes('/original/status'))return jsonResponse({status:'ready'});
@@ -402,7 +426,7 @@ describe('重复报告当前暂停状态',()=>{
 it('does not show withdrawn extraction values or ask users to compare them',async()=>{
   const previous={itemName:'合成旧项',itemCode:null,sectionName:null,resultText:'12',unit:'U/L',pageNumber:null,sourceLineIds:[],sourceText:'合成旧项 12 U/L',reason:'本次未能核实'};
   fetchMock.mockImplementation(async(input:RequestInfo|URL,init?:RequestInit)=>{
-    const url=String(input);
+    const url=String(input).replace('?includeDuplicateCandidates=false', '');
     if(url.endsWith('/api/reports/r1'))return jsonResponse({...detailPayload,observations:[],unverifiedPreviousObservations:[previous]});
     if(url.includes('jobs')||url.includes('indicator-catalog'))return jsonResponse([]);
     return jsonResponse({});
@@ -426,7 +450,7 @@ it('shows all tiers by original page and submits a page-bound supplement through
     {...observation,id:'early',itemName:'合成上行',evidence:{pageId:'p1',lineIds:['early'],sourceText:''}}
   ]};
   fetchMock.mockImplementation(async (input:RequestInfo|URL, init?:RequestInit)=>{
-    const url=String(input);
+    const url=String(input).replace('?includeDuplicateCandidates=false', '');
     if(url.endsWith('/api/reports/r1') || init?.method==='POST')return jsonResponse(payload);
     if(url.endsWith('/p1/ocr'))return jsonResponse({pageId:'p1',lines:[{id:'early',box:[10,10,200,20]},{id:'late',box:[10,50,200,60]}]});
     if(url.endsWith('/p2/ocr'))return jsonResponse({pageId:'p2',lines:[]});
@@ -478,7 +502,7 @@ it('shows all tiers by original page and submits a page-bound supplement through
 it('teleports only supplementation into a separate dialog and returns editing to the existing column', async()=>{
  vi.stubGlobal('ResizeObserver',class{observe(){}disconnect(){}});
  const payload={...detailPayload,pages:[{id:'p1',pageNumber:1,mimeType:'image/png',hasThumbnail:false,rotation:0}],observations:[{...observation,evidence:{pageId:'p1',lineIds:[],region:[.1,.2,.3,.4],sourceText:''}}]};
- fetchMock.mockImplementation(async(input:RequestInfo|URL)=>String(input).endsWith('/api/reports/r1')?jsonResponse(payload):jsonResponse([]));
+ fetchMock.mockImplementation(async(input:RequestInfo|URL)=>String(input).replace('?includeDuplicateCandidates=false', '').endsWith('/api/reports/r1')?jsonResponse(payload):jsonResponse([]));
  const wrapper=mount(ReportDetail,{attachTo:document.body,props:{reportId:'r1',reviewObservationId:'obs-1',variant:'panel'},global:{stubs:{RouterLink:true}}});
  try {
   await flushPromises();await flushPromises();
@@ -506,8 +530,8 @@ it('teleports only supplementation into a separate dialog and returns editing to
 it('corrects an other document through a type-only dialog while preserving unrelated metadata',async()=>{
  let current={...detailPayload,reportType:'other',observations:[],summary:'合成原有结论'};
  fetchMock.mockImplementation(async(input:RequestInfo|URL,options?:RequestInit)=>{
-  if(String(input).endsWith('/api/reports/r1')){if(options?.method==='PUT')current={...current,...JSON.parse(String(options.body)),sourceVersion:8};return jsonResponse(current);}
-  if(String(input).includes('jobs'))return jsonResponse([]);return jsonResponse({});
+  if(String(input).replace('?includeDuplicateCandidates=false', '').endsWith('/api/reports/r1')){if(options?.method==='PUT')current={...current,...JSON.parse(String(options.body)),sourceVersion:8};return jsonResponse(current);}
+  if(String(input).replace('?includeDuplicateCandidates=false', '').includes('jobs'))return jsonResponse([]);return jsonResponse({});
  });
  const wrapper=mount(ReportDetail,{attachTo:document.body,props:{reportId:'r1',variant:'panel'},global:{stubs:{RouterLink:true,ReportNotesPanel:true,ReportPageAppend:true}}});
  try{await flushPromises();await flushPromises();expect(wrapper.text()).toContain('暂归为其他资料');
@@ -522,7 +546,7 @@ it('corrects an other document through a type-only dialog while preserving unrel
 it('offers confirmation on outpatient and inpatient clinical facts and links an already recorded vaccination',async()=>{
  for(const reportType of ['outpatient','inpatient']){
  const vaccinations=[{id:'v',vaccineName:'合成疫苗',doseNumber:'1',evidence:[],manualFields:[],confirmedVaccinationId:'confirmed'}];
- fetchMock.mockImplementation(async(input:RequestInfo|URL)=>String(input).endsWith('/api/reports/r1')?jsonResponse({...detailPayload,reportType,observations:[],medications:[{id:'m',medicationName:'合成药品',evidence:[],manualFields:[]}],vaccinations}):String(input).includes('jobs')?jsonResponse([]):jsonResponse({}));
+ fetchMock.mockImplementation(async(input:RequestInfo|URL)=>String(input).replace('?includeDuplicateCandidates=false', '').endsWith('/api/reports/r1')?jsonResponse({...detailPayload,reportType,observations:[],medications:[{id:'m',medicationName:'合成药品',evidence:[],manualFields:[]}],vaccinations}):String(input).replace('?includeDuplicateCandidates=false', '').includes('jobs')?jsonResponse([]):jsonResponse({}));
  const wrapper=mount(ReportDetail,{attachTo:document.body,props:{reportId:'r1',variant:'panel'},global:{stubs:{RouterLink:{props:['to'],template:'<a><slot/></a>'},ReportNotesPanel:true,ReportPageAppend:true}}});
  try{await flushPromises();await flushPromises();expect(wrapper.text()).toContain('报告所列用药');expect(wrapper.text()).toContain('确认实际使用');expect(wrapper.text()).toContain('查看已记录接种');expect(wrapper.text()).not.toContain('核对并记录');}finally{wrapper.unmount();}
  }

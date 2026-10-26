@@ -1,4 +1,4 @@
-export const familyReportDuplicateRuleVersion = "family-v2";
+export const familyReportDuplicateRuleVersion = "family-v3.2";
 
 export type ReportDuplicateRuleVersion = string;
 

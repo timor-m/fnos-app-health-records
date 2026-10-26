@@ -114,7 +114,7 @@ activateSearch();useRefreshOnActivate(load);
    <div v-if="subtypeOptions.length||status" class="timeline-filters secondary-filters" role="group" aria-label="细分类型"><span v-if="status" class="active-status-filter">{{statusLabels[status]}}</span><template v-if="subtypeOptions.length"><button type="button" :aria-pressed="!subtype" @click="setSubtype('')">全部类型</button><button v-for="[value,label] in subtypeOptions" :key="value" type="button" :aria-pressed="subtype===value" @click="setSubtype(value)">{{label}}</button></template></div>
   </div>
   <PullIndicator :distance="pullDistance" :refreshing="refreshing"/>
-  <div v-if="loading&&!loaded" class="loading-list" role="status" aria-label="正在加载健康记录"><span v-for="index in 3" :key="index"/></div>
+  <div v-if="loading&&!loaded" class="loading-list" role="status" aria-label="正在加载健康记录"><span v-for="index in 8" :key="index"/></div>
   <p v-if="error" class="inline-panel-error" role="alert">{{error}} <button type="button" class="error-retry" @click="load">重试</button></p>
   <div v-if="entries.length" class="events-list" :aria-busy="loading"><section v-for="group in groups" :key="group.key" class="health-timeline-group" :aria-label="group.label"><h3 class="health-timeline-month">{{group.label}}</h3><div class="health-timeline-entries"><HealthTimelineCard v-for="entry in group.entries" :key="entry.id" :entry="entry" :return-to="route.fullPath" :selected="recordOpen&&dialog?.kind===entry.kind&&dialog?.recordId===entry.resourceId" @activate="activateRecord"/></div></section></div>
   <EmptyState v-else-if="!loading&&!error" :title="search.trim()?'没有找到相关记录':category?'暂无这类记录':'暂无健康记录'" :description="search.trim()?'试试其他关键词，或清空搜索查看全部记录。':'上传资料，或从新增菜单填写症状、用药和接种。'"/>

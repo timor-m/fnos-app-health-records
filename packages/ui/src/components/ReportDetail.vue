@@ -68,6 +68,7 @@ const props = defineProps<{
   returnTo?: string;
   reviewObservationId?: string;
   summary?: ReportSummary | null;
+  initialDetail?: ReportDetail | null;
   variant: "panel" | "floating";
 }>();
 const emit = defineEmits<{
@@ -87,6 +88,7 @@ const detail = ref<ReportDetail | null>(null);
 const canManageReport=computed(()=>app.allMembers.value.some(member=>member.id===detail.value?.memberId && member.permission==='manager'));
 const detailLoading = ref(false);
 const detailError = ref("");
+const duplicateCandidatesError = ref("");
 const memberMismatch = ref(false);
 const selectedJobs = ref<ProcessingJob[]>([]);
 const jobsLoading = ref(false);
@@ -208,6 +210,7 @@ let detailSeq = 0;
 let reportContextSeq = 0;
 let detailActive = true;
 let jobsSeq = 0;
+let jobsSnapshotLoaded = false;
 let jobsLoadingSeq = 0;
 let ocrSeq = 0;
 let jobsPollFailures = 0;
@@ -408,6 +411,7 @@ const duplicateCandidates = computed(() =>
     ? currentDetail.value?.duplicateCandidates || []
     : []
 );
+const duplicateCandidatesPending = computed(() => currentDetail.value?.duplicateCandidatesPending === true);
 const duplicatePause = computed(() => currentDetail.value?.duplicatePause);
 async function retryDuplicateVerification() {
   if (!canManageReport.value || triggeringAi.value) return;
@@ -1498,6 +1502,7 @@ async function openDiagnosticReview(item: ProcessingDiagnosticReviewItem) {
 }
 
 async function confirmReady() {
+  if (duplicateCandidatesPending.value) return;
   confirming.value = true;
   jobsError.value = "";
   try {
@@ -1848,8 +1853,11 @@ async function refreshJobs(silent = false) {
       !silent && app.session.value?.isAdmin ? request<{ available: boolean }>("ocr/status") : Promise.resolve(null)
     ]);
     if (seq !== jobsSeq || props.reportId !== reportId) return;
-    const jobStatusChanged = nextJobs.length !== previousStatuses.size
-      || nextJobs.some((job) => previousStatuses.get(job.id) !== job.status);
+    const hadJobsSnapshot = jobsSnapshotLoaded;
+    jobsSnapshotLoaded = true;
+    // The opening history is a baseline, not a newly completed processing run.
+    const jobStatusChanged = hadJobsSnapshot && (nextJobs.length !== previousStatuses.size
+      || nextJobs.some((job) => previousStatuses.get(job.id) !== job.status));
     selectedJobs.value = nextJobs;
     jobsPollingStopped.value = false;
     if (eventJob.value) {
@@ -1870,7 +1878,8 @@ async function refreshJobs(silent = false) {
     const syncIntervalElapsed = Date.now() - lastDetailSyncAt > 10000;
     const finalDetailMayBeStale = settled && ["queued", "processing"].includes(source.value?.status || "");
     const shouldSync = (jobStatusChanged && (settled || newlyFailed || syncIntervalElapsed))
-      || (finalDetailMayBeStale && syncIntervalElapsed);
+      || (finalDetailMayBeStale && syncIntervalElapsed)
+      || (finalDetailMayBeStale && !hadJobsSnapshot && !detailLoading.value);
     if (shouldSync && props.reportId === reportId) {
       lastDetailSyncAt = Date.now();
       await loadDetail(reportId, true);
@@ -1896,7 +1905,9 @@ async function refreshJobs(silent = false) {
 }
 
 function clearReportViews() {
+  duplicateCandidatesError.value = "";
   detail.value = null;
+  jobsSnapshotLoaded = false;
   ++jobsSeq;
   ++ocrSeq;
   ++ocrDetailSeq;
@@ -1919,6 +1930,21 @@ function clearReportViews() {
   stopJobsPolling();
 }
 
+
+async function loadDuplicateCandidates() {
+  const target = detail.value;
+  if (!target?.duplicateCandidatesPending) return;
+  try {
+    const next = await request<Pick<ReportDetail, 'id'|'memberId'|'sourceVersion'|'updatedAt'|'duplicateCandidates'|'duplicateSearch'>>(`reports/${encodeURIComponent(target.id)}/duplicate-candidates`);
+    if (!detailActive || detail.value !== target) return;
+    if (next.id !== target.id || next.memberId !== target.memberId) throw new Error('重复核对结果与当前报告不一致，请重试');
+    if (next.sourceVersion !== target.sourceVersion || next.updatedAt !== target.updatedAt) throw new Error('报告内容已更新，请重试读取最新结果');
+    detail.value = {...target, duplicateCandidates: next.duplicateCandidates, duplicateSearch: next.duplicateSearch, duplicateCandidatesPending: false};
+  } catch (cause) {
+    if (detailActive && detail.value === target) duplicateCandidatesError.value = cause instanceof Error ? cause.message : '重复报告核对失败，请重试';
+  }
+}
+
 function acceptDetail(next: ReportDetail) {
   if (next.id !== props.reportId) return false;
   if (props.expectedMemberId !== undefined && next.memberId !== props.expectedMemberId) {
@@ -1932,6 +1958,8 @@ function acceptDetail(next: ReportDetail) {
   }
   memberMismatch.value = false;
   detail.value = next;
+  duplicateCandidatesError.value = "";
+  if (next.duplicateCandidatesPending) void loadDuplicateCandidates();
   emit("loaded", next);
   return true;
 }
@@ -1948,6 +1976,7 @@ async function updateDetail(path: string, options: RequestInit) {
   }
 }
 
+let initialDetailConsumed = false;
 async function loadDetail(reportId: string, preserveCurrent = false) {
   if (!detailActive) return;
   const seq = ++detailSeq;
@@ -1955,7 +1984,9 @@ async function loadDetail(reportId: string, preserveCurrent = false) {
   detailError.value = "";
   if (!preserveCurrent) detail.value = null;
   try {
-    const next = await request<ReportDetail>(`reports/${encodeURIComponent(reportId)}`);
+    const initial = initialDetailConsumed ? null : props.initialDetail;
+    initialDetailConsumed = true;
+    const next = initial?.id === reportId ? initial : await request<ReportDetail>(`reports/${encodeURIComponent(reportId)}?includeDuplicateCandidates=false`);
     if (seq === detailSeq && props.reportId === reportId && next.id === reportId) {
       if (!acceptDetail(next)) return;
       if (props.reviewObservationId && !preserveCurrent) {
@@ -1963,20 +1994,23 @@ async function loadDetail(reportId: string, preserveCurrent = false) {
         if (target) openObservationEditor(target);
         else detailError.value = "该指标已不存在，请关闭后刷新列表";
       }
-      try {
-        const status = await request<{ status: "ready" | "generating" | "available" }>(`reports/${encodeURIComponent(reportId)}/original/status`);
+      void request<{ status: "ready" | "generating" | "available" }>(`reports/${encodeURIComponent(reportId)}/original/status`).then(status => {
         if (seq === detailSeq && props.reportId === reportId) {
           originalExportStatus.value = status.status;
           if (status.status === "generating") startOriginalExportStatusPolling(reportId);
         }
-      } catch { /* 原件状态不影响档案详情显示。 */ }
+      }).catch(() => { /* 原件状态不影响档案详情显示。 */ });
     }
   } catch (cause) {
     if (seq === detailSeq && props.reportId === reportId) {
       detailError.value = cause instanceof Error ? cause.message : "档案详情读取失败";
     }
   } finally {
-    if (seq === detailSeq && props.reportId === reportId) detailLoading.value = false;
+    if (seq === detailSeq && props.reportId === reportId) {
+      detailLoading.value = false;
+      // Jobs may have returned before the report; resume polling if it is still processing.
+      maybeStartJobsPolling();
+    }
   }
 }
 
@@ -2152,9 +2186,9 @@ onActivated(() => {
         <div><dt>状态</dt><dd>{{ statusMeta[source.status]?.label || source.status }}</dd></div>
         <div v-if="currentDetail?.createdAt"><dt>上传时间</dt><dd>{{ formatDatabaseTimeWithYear(currentDetail.createdAt) }}</dd></div>
       </dl>
-      <div v-if="detailLoading" class="mini-loading"><LoaderCircle class="spin-icon" :size="16" />正在读取档案详情</div>
+      <div v-if="detailLoading" class="mini-loading"><LoaderCircle class="spin-icon" :size="16" />{{ currentDetail ? "正在更新报告内容" : "正在读取档案详情" }}</div>
       <div class="report-action-row">
-        <button v-if="canManageReport && (source.status === 'needs_review')" class="primary-button compact-primary" type="button" :disabled="confirming" @click="confirmReady">
+        <button v-if="canManageReport && (source.status === 'needs_review')" class="primary-button compact-primary" type="button" :disabled="confirming || duplicateCandidatesPending" @click="confirmReady">
           <LoaderCircle v-if="confirming" class="spin-icon" :size="17" />
           <CheckCircle2 v-else :size="17" />
           {{ confirming ? "确认中" : "确认归档" }}
@@ -2184,9 +2218,18 @@ onActivated(() => {
           {{ reprocessingReport || triggeringAi ? "提交中" : reprocessNotice.actionLabel }}
         </button>
       </section>
-      <section v-if="currentDetail?.duplicateVerification?.status === 'failed'" class="duplicate-warning">
-        <p>报告整理已完成，重复核验暂未完成，已有结果不受影响。</p>
-        <button v-if="canManageReport" class="soft-action-button" type="button" :disabled="triggeringAi" @click="retryDuplicateVerification">重新核验</button>
+      <div v-if="duplicateCandidatesPending" class="preview-hint duplicate-check-state" :role="duplicateCandidatesError ? 'alert' : 'status'">
+        <template v-if="duplicateCandidatesError">{{ duplicateCandidatesError }} <button class="soft-action-button" type="button" @click="loadDetail(reportId,true)">重试核对</button></template>
+        <template v-else>正在核对是否有重复报告，报告内容已可查看。</template>
+      </div>
+      <section v-if="['failed','stale'].includes(currentDetail?.duplicateVerification?.status || '')" class="duplicate-warning">
+        <CircleAlert :size="18" />
+        <div>
+          <p>{{currentDetail?.duplicateVerification?.status==='stale'?'报告内容或判重规则已更新，请重新核验是否重复。':'报告整理已完成，重复核验暂未完成，已有结果不受影响。'}}</p>
+          <div v-if="canManageReport" class="duplicate-actions">
+            <button class="soft-action-button" type="button" :disabled="triggeringAi" @click="retryDuplicateVerification">重新核验</button>
+          </div>
+        </div>
       </section>
       <section v-if="duplicateCandidates.length || duplicatePause" class="duplicate-warning">
         <CircleAlert :size="18" />

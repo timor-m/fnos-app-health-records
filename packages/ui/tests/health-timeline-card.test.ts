@@ -1,10 +1,18 @@
 import { mount } from '@vue/test-utils';
-import { expect,it } from 'vitest';
+import { expect,it,vi } from 'vitest';
 import HealthTimelineCard from '../src/components/HealthTimelineCard.vue';
 import { healthCategoryImages } from '../src/utils/health-record-presentation';
 import { healthCategoryLabels } from '../../shared/health-categories';
 import { feedEntries,feedEntry } from './fixtures/health-feed';
 const render=(entry:any)=>mount(HealthTimelineCard,{props:{entry},global:{stubs:{RouterLink:{props:['to'],template:'<a :href="to"><slot/></a>'}}}});
+it.each([['high','高度重复'],['possible','疑似重复']] as const)('shows the saved %s duplicate tier without replacing processing status',async(level,label)=>{
+ const wrapper=render({...feedEntry('report','report'),status:'needs_review',duplicateHint:level});
+ expect(wrapper.get('.health-timeline-duplicate').text()).toBe(label);
+ expect(wrapper.get('.health-timeline-status').text()).toBe('待确认');
+ expect(wrapper.get('a').attributes('href')).toContain('/events/detail/report/');
+ await wrapper.setProps({entry:feedEntry('report','report')});
+ expect(wrapper.find('.health-timeline-duplicate').exists()).toBe(false);wrapper.unmount();
+});
 it('keeps the original filter in a vaccination detail link for desktop navigation',()=>{
  const wrapper=mount(HealthTimelineCard,{props:{entry:feedEntry('vaccination','vaccination'),returnTo:'/events?category=vaccination&subtype=administered'},global:{stubs:{RouterLink:{props:['to'],template:'<a :href="JSON.stringify(to)"><slot/></a>'}}}});
  expect(JSON.parse(wrapper.get('a').attributes('href')).query.returnTo).toBe('/events?category=vaccination&subtype=administered');wrapper.unmount();
@@ -19,6 +27,57 @@ it('shows MM-DD and HH:mm on the card while retaining the full date for accessib
  expect(wrapper.get('.health-timeline-date-main').text()).toBe('09-20');
  expect(wrapper.get('.health-timeline-date-detail').text()).toBe('20:09');
  expect(wrapper.get('.health-timeline-date').attributes('aria-label')).toBe('2026-09-20 20:09');
+ wrapper.unmount();
+});
+it('uses the record card date format in upload previews and retains the full accessible date',async()=>{
+ const wrapper=render({...feedEntry('report','report'),date:'2020-01-02'});
+ await wrapper.setProps({dateLabel:'报告日期'});
+ expect(wrapper.get('.health-timeline-date-main').text()).toBe('01-02');
+ expect(wrapper.get('.health-timeline-date').attributes('aria-label')).toBe('报告日期：2020-01-02');
+ expect(wrapper.get('.health-timeline-heading .health-timeline-date').exists()).toBe(true);
+ await wrapper.setProps({entry:{...feedEntry('report','report'),date:'2020-01-02T08:20'}});
+ expect(wrapper.get('.health-timeline-date-main').text()).toBe('01-02');
+ expect(wrapper.get('.health-timeline-date-detail').text()).toBe('08:20');
+ expect(wrapper.get('.health-timeline-date').attributes('aria-label')).toBe('报告日期：2020-01-02 08:20');
+ await wrapper.setProps({entry:{...feedEntry('report','report'),date:null}});
+ expect(wrapper.get('.health-timeline-date-main').text()).toBe('待确认');
+ wrapper.unmount();
+});
+it.each([
+ ['today',new Date(2026,9,26,14,32),'今天 14:32'],
+ ['yesterday',new Date(2026,9,25,9,15),'昨天 09:15'],
+ ['older',new Date(2025,11,31,8,5),'2025-12-31 08:05']
+] as const)('shows %s upload time separately from the historical report date',async(_name,uploaded,expected)=>{
+ vi.useFakeTimers();vi.setSystemTime(new Date(2026,9,26,16));
+ const wrapper=render({...feedEntry('report','report'),date:'2020-01-02',uploadedAt:uploaded.toISOString()});
+ try{
+  await wrapper.setProps({dateLabel:'报告日期'});
+  const time=wrapper.get('.health-timeline-upload-time');
+  expect(time.text()).toBe(`上传时间：${expected}`);
+  expect(time.attributes('datetime')).toBe(uploaded.toISOString());
+  expect(time.attributes('title')).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  expect(wrapper.get('.health-timeline-date-main').text()).toBe('01-02');
+  expect(wrapper.get('.health-timeline-date').attributes('aria-label')).toBe('报告日期：2020-01-02');
+  expect(wrapper.find('.health-timeline-heading .health-timeline-upload-time').exists()).toBe(false);
+  expect(wrapper.get('.health-timeline-copy > .health-timeline-upload-time').element).toBe(time.element);
+  expect(wrapper.get('.health-timeline-copy').element.lastElementChild).toBe(time.element);
+ }finally{wrapper.unmount();vi.useRealTimers();}
+});
+it('recognizes yesterday across a year boundary using the viewer calendar',async()=>{
+ vi.useFakeTimers();vi.setSystemTime(new Date(2026,0,1,0,10));
+ const wrapper=render({...feedEntry('report','report'),uploadedAt:new Date(2025,11,31,23,55).toISOString()});
+ try{
+  await wrapper.setProps({dateLabel:'报告日期'});
+  expect(wrapper.get('.health-timeline-upload-time').text()).toBe('上传时间：昨天 23:55');
+ }finally{wrapper.unmount();vi.useRealTimers();}
+});
+it('omits missing or invalid upload times and leaves timeline cards unchanged',async()=>{
+ const wrapper=render({...feedEntry('report','report'),uploadedAt:'2026-01-02T08:00:00Z'});
+ expect(wrapper.find('.health-timeline-upload-time').exists()).toBe(false);
+ await wrapper.setProps({dateLabel:'报告日期',entry:{...feedEntry('report','report'),uploadedAt:'invalid'}});
+ expect(wrapper.find('.health-timeline-upload-time').exists()).toBe(false);
+ await wrapper.setProps({entry:feedEntry('report','report')});
+ expect(wrapper.find('.health-timeline-upload-time').exists()).toBe(false);
  wrapper.unmount();
 });
 it('selected state is independent of category and status',()=>{const wrapper=render({...feedEntry('medication','medication'),status:'paused'});wrapper.setProps({selected:true});expect(wrapper.get('.health-timeline-type').text()).toBe('用药');expect(wrapper.text()).toContain('已暂停');wrapper.unmount();});

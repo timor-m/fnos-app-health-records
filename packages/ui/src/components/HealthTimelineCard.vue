@@ -6,7 +6,7 @@ import { healthCategoryLabels, type HealthFeedEntry } from '../../../shared/heal
 import { healthRecordPath } from '../utils/health-record-navigation';
 import { timelineDateParts } from '../utils/health-timeline';
 import { formatMedicationDate } from '../utils/medication-date';
-const props=defineProps<{entry:HealthFeedEntry;selected?:boolean;origin?:'overview';returnTo?:string}>();
+const props=defineProps<{entry:HealthFeedEntry;selected?:boolean;origin?:'overview';returnTo?:string;dateLabel?:string}>();
 const emit=defineEmits<{activate:[entry:HealthFeedEntry,event:MouseEvent]}>();
 const labels:Record<string,string>={checkup:'体检',laboratory:'检验',imaging:'影像检查',functional:'功能检查',pathology:'病理',outpatient:'门诊病历',inpatient:'住院资料',billing:'费用凭证',prescription:'用药单',vaccination:'接种',course:'用药记录',intake:'用药记录',symptom:'症状跟踪',other:'其他资料'};
 const states:Record<string,string>={active:'进行中',resolved:'已缓解',unknown:'状态未知',paused:'已暂停',stopped:'已停用',queued:'排队中',uploading:'上传中',processing:'处理中',needs_review:'待确认',failed:'识别失败',ready:'已归档'};
@@ -26,7 +26,16 @@ const card=computed(()=>{
  institution:entry.institution,meta,dose:isVaccination?doseLabel:null,summaryNote:isVaccination?entry.note:null,description:isVaccination?null:entry.description,details,
  status:state?{label:state,chip:tone}:null};
 });
-const date=computed(()=>{const value=timelineDateParts(props.entry.date);return {main:value?.day||'日期待确认',details:value?.time?[value.time]:[],label:formatMedicationDate(props.entry.date)||'日期待确认'};});
+const date=computed(()=>{const value=timelineDateParts(props.entry.date);return {main:value?.day||(props.dateLabel?'待确认':'日期待确认'),details:value?.time?[value.time]:[],label:formatMedicationDate(props.entry.date)||(props.dateLabel?'待确认':'日期待确认')};});
+const uploadTime=computed(()=>{
+ const value=props.entry.uploadedAt;
+ if(!props.dateLabel||!value||!Number.isFinite(Date.parse(value)))return null;
+ const full=formatMedicationDate(value);
+ const today=new Date();const yesterday=new Date(today);yesterday.setDate(today.getDate()-1);
+ const day=full.slice(0,10);
+ const relative=day===formatMedicationDate(today.toISOString()).slice(0,10)?'今天':day===formatMedicationDate(yesterday.toISOString()).slice(0,10)?'昨天':null;
+ return {full,label:relative?`${relative} ${full.slice(11)}`:full};
+});
 </script>
 
 <template>
@@ -40,12 +49,13 @@ const date=computed(()=>{const value=timelineDateParts(props.entry.date);return 
           <span v-if="card.dose" class="chip chip--plain health-timeline-dose">{{card.dose}}</span>
           <span v-if="card.status" class="chip health-timeline-status" :class="card.status.chip">{{ card.status.label }}</span>
         </span>
-        <span class="health-timeline-date" :aria-label="date.label">
+        <span class="health-timeline-date" :aria-label="dateLabel ? `${dateLabel}：${date.label}` : date.label">
           <span class="health-timeline-date-main">{{ date.main }}</span>
           <small v-for="detail in date.details" :key="detail" class="health-timeline-date-detail">{{ detail }}</small>
         </span>
       </span>
       <strong class="health-timeline-title" :class="{'health-timeline-title--vaccination':entry.kind==='vaccination'}"><span class="health-timeline-title-text">{{ card.title }}</span></strong>
+      <span v-if="entry.duplicateHint" class="health-timeline-duplicate"><span class="chip chip--amber" title="打开报告查看已有报告及匹配依据">{{entry.duplicateHint==='high'?'高度重复':'疑似重复'}}</span></span>
       <span v-if="card.institution || card.summaryNote" class="health-timeline-summary">
         <span v-if="card.institution" class="health-timeline-institution">{{ card.institution }}</span>
         <span v-if="card.summaryNote" class="health-timeline-note">{{card.summaryNote}}</span>
@@ -54,6 +64,7 @@ const date=computed(()=>{const value=timelineDateParts(props.entry.date);return 
       <span v-if="card.details.length" class="health-timeline-footer">
         <span class="health-timeline-details">{{ card.details.join(' · ') }}</span>
       </span>
+      <time v-if="uploadTime" class="health-timeline-upload-time" :datetime="entry.uploadedAt || undefined" :title="uploadTime.full">上传时间：{{ uploadTime.label }}</time>
     </span>
   </RouterLink>
 </template>
@@ -95,6 +106,7 @@ const date=computed(()=>{const value=timelineDateParts(props.entry.date);return 
 .health-timeline-date { margin-left: auto; margin-right: calc(0px - var(--timeline-gap)); display: flex; flex-shrink: 0; flex-wrap: nowrap; justify-content: flex-end; gap: 4px; min-width: 0; max-width: 100%; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .health-timeline-date-main { color: var(--muted); font-size: 12px; line-height: 18px; }
 .health-timeline-date-detail { color: var(--muted); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+.health-timeline-upload-time { color:var(--ink-2);font-size:12px;line-height:18px; }
 .health-timeline-icon { position: relative; display: grid; place-items: center; width: 40px; height: 40px; pointer-events: none; user-select: none; }
 .health-timeline-icon :deep(.health-category-icon) { width: 100%; height: 100%; }
 .health-timeline-copy { display: grid; gap: 4px; min-width: 0; font-weight: 400; letter-spacing: 0; }
