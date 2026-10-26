@@ -13,10 +13,10 @@
 | 项 | 当前值 | 来源 |
 | --- | --- | --- |
 | 应用 ID | `fnos-app-health-records` | `template.config.json` |
-| 应用版本 | `0.2.15` | `package.json` |
-| fnOS manifest 版本 | `0.2.15` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
-| fnOS sub_version | `0.2.15.0` | `scripts/prepare-package.mjs` 生成 |
-| Docker 镜像版本 | 本轮目标 `0.2.15`，发布后稳定版另提供 `latest` | GitHub Tag 工作流从 `package.json` 生成 |
+| 应用版本 | `0.2.16` | `package.json` |
+| fnOS manifest 版本 | `0.2.16` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
+| fnOS sub_version | `0.2.16.0` | `scripts/prepare-package.mjs` 生成 |
+| Docker 镜像版本 | 本轮目标 `0.2.16`，发布后稳定版另提供 `latest` | GitHub Tag 工作流从 `package.json` 生成 |
 | Docker 镜像仓库 | `docker.io/timorm/fnos-app-health-records` | Docker Hub，可通过 `DOCKERHUB_IMAGE` 覆盖 |
 | 数据库 schema | `v19` | `packages/server/database/migrations.ts` 最后一个迁移版本 |
 | 数据库记录表 | `schema_migrations`、`app_upgrade_history` | 服务端首次启动时初始化或迁移 |
@@ -24,6 +24,8 @@
 发布前必须确认：当前应用版本支持的目标 schema 版本明确、可初始化新库、可从上一发布版本迁移。
 
 0.2.12 已冻结发布内容，目标数据库 schema 保持 v19，不新增编号迁移；成员合并记录通过备份后的幂等结构补齐提供。0.2.13 已封板，变更记录冻结在 `0.2.13`，包含飞牛与 Docker 双向备份恢复接管、PDF 补页修复和取消 Docker 镜像签名。相对 0.2.12 数据库结构未变，schema 保持 v19，无新增结构或迁移；实际发布状态以 GitHub Release 为准。`v0.2.14` tag 已存在，本轮版本为 `0.2.15`，变更记录已封板，schema 保持 v19；实际发布状态以 `v0.2.15` tag 和 GitHub Release 为准。发布后的新开发先记入无编号 `Unreleased`，不自动递增下一版本。
+
+本轮迭代版本为 `0.2.16`，变更记录暂保留 `Unreleased` 状态，包含报告详情加载优化、趋势后台快照与按需读取。目标 schema 保持 v19，趋势派生表通过启动前备份与幂等补齐建立，不新增编号迁移；版本号更新不代表已创建 tag 或完成发布。
 
 0.2.11 的目标数据库 schema 为 v19。保留原 v18 OCR 页面方向迁移，新增 v19 反馈状态、通知和管理员阅读记录；支持 0.2.10 的 v17、原 0.2.11 的 v18，以及已补齐反馈结构但仍记录 v18 的测试库，升级前自动备份，幂等保留数据。历史同号但不同内容的 v18 草案仍拒绝自动升级，保留数据并单独评审。0.2.11 撤回重发时保持同一应用版本，不改已发布迁移或清理旧安装数据；原镜像的已下载副本不会自动更新，需要主动拉取并重建容器。
 
