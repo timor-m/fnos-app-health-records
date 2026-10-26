@@ -56,7 +56,7 @@ function onKeydown(event: KeyboardEvent) {
       && getComputedStyle(item).display !== 'none' && getComputedStyle(item).visibility !== 'hidden');
   const first = items[0]; const last = items.at(-1);
   if (!first) { event.preventDefault(); panel.value.focus(); return; }
-  if (event.shiftKey && (document.activeElement === first || !panel.value.contains(document.activeElement))) {
+  if (event.shiftKey && (document.activeElement === panel.value || document.activeElement === first || !panel.value.contains(document.activeElement))) {
     event.preventDefault(); last?.focus();
   } else if (!event.shiftKey && (document.activeElement === last || !panel.value.contains(document.activeElement))) {
     event.preventDefault(); first.focus();
@@ -67,7 +67,7 @@ watch(visible, async open => {
   if (open) {
     returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     await nextTick();
-    if (visible.value) panel.value?.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+    if (visible.value) panel.value?.focus({ preventScroll: true });
   } else restoreFocus();
 }, { immediate: true });
 watch(scope, async () => { await nextTick(); if (visible.value) panel.value?.querySelector('.health-record-detail-body')?.scrollTo?.(0, 0); });
@@ -96,7 +96,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown); restor
 
 <style scoped>
 /* Reuse the existing report dialog shell, including its mobile height and radius. */
-.health-record-detail-modal { overflow: hidden; }
+.health-record-detail-modal { overflow: hidden; outline: none; }
 .health-record-detail-modal.record-sheet > header { flex-shrink: 0; gap: 4px; padding-inline: 8px; }
 .health-record-detail-modal .record-sheet-title { gap: 2px; }
 .record-detail-close { position: relative; flex: 0 0 28px; width: 28px; height: 28px; padding: 0; border-radius: 8px; }

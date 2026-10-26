@@ -48,6 +48,7 @@ it.each(['symptom', 'vaccination', 'report', 'medication_document', 'medication'
   const wrapper = show({ kind }); await flushPromises();
   const panel = document.querySelector('[role="dialog"]')!;
   expect(panel.getAttribute('aria-modal')).toBe('true');
+  expect(document.activeElement).toBe(panel);
   expect(panel.textContent).toContain(`${kind}:one`);
   expect(wrapper.findComponent({name:'HealthRecordDetailContent'}).props('hideReportTitle')).toBe(true);
   expect(document.body.style.overflow).toBe('hidden');
@@ -61,7 +62,7 @@ it('traps focus, restores the trigger without scrolling, and leaves nested overl
   const restore = vi.spyOn(trigger, 'focus');
   const wrapper = show(); await flushPromises();
   const buttons = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')];
-  expect(document.activeElement).toBe(buttons[0]);
+  expect(document.activeElement).toBe(document.querySelector('[role="dialog"]'));
   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, cancelable: true }));
   expect(document.activeElement).toBe(buttons.at(-1));
   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', cancelable: true }));
