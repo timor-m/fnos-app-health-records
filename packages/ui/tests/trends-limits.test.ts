@@ -1,17 +1,18 @@
-import {beforeEach, expect, it, vi} from 'vitest';
+import {snapshotOverview,snapshotParts,autoChartViewport} from './helpers/trend-snapshot';
+import {afterEach,beforeEach, expect, it, vi} from 'vitest';
 import {flushPromises, shallowMount} from '@vue/test-utils';
 import {ref} from 'vue';
 import TrendsPage from '../src/pages/TrendsPage.vue';
 import {splitMeasurementBound} from '../../shared/measurement-result';
 
 const {request, context} = vi.hoisted(() => ({request: vi.fn(), context: {app: null as any}}));
-vi.mock('../src/utils/api', () => ({request, apiUrl: (path: string) => path}));
+vi.mock('../src/utils/api', async original => ({...await original<typeof import('../src/utils/api')>(),request, apiUrl: (path: string) => path}));
 vi.mock('../src/composables/useAppContext', () => ({useAppContext: () => context.app}));
 vi.mock('../src/composables/useRefreshOnActivate', () => ({useRefreshOnActivate: () => {}}));
 vi.mock('vue-router', () => ({useRoute: () => ({path: '/trends', query: {}})}));
 
 beforeEach(() => {
-  localStorage.clear();
+  localStorage.clear();autoChartViewport();
   context.app = {selectedMemberId: ref('synthetic-member'), session: ref({isAdmin: false}),
     setTopbarSubtitle: vi.fn(), clearTopbarSubtitle: vi.fn(), setTopbarSearch: vi.fn(), clearTopbarSearch: vi.fn()};
   request.mockReset();
@@ -37,12 +38,26 @@ function series(texts: string[]) {
     firstDate: points[0].reportIssuedAt, lastDate: points.at(-1)!.reportIssuedAt};
 }
 
-it('renders qualified limit values and breaks lines on both sides of limit records', async () => {
-  const item = series(['2', '3', '<99.0', '4', '5', '≥100']);
-  request.mockImplementation(async (path: string) => path.startsWith('trends?') ? [item] : []);
+it('shows only the calendar date on chart nodes while retaining precise source times', async () => {
+  const item = series(['2', '3']);
+  Object.assign(item.points[0], {reportIssuedAt: '2026-01-01T08:30:45', examinationId: 'exam-a', timePrecision: 'second'});
+  Object.assign(item.points[1], {reportIssuedAt: '2026-01-01 16:20:10', examinationId: 'exam-b', timePrecision: 'second'});
+  request.mockImplementation(async (path: string,init?:RequestInit) => path==='trends/snapshot/charts' ? snapshotParts([item],init) : path.startsWith('trends/snapshot?') ? snapshotOverview([item]) : []);
   const wrapper = shallowMount(TrendsPage, {global: {stubs: {RouterLink: true}}});
   try {
-    await flushPromises();
+    await flushPromises();await new Promise(resolve=>setTimeout(resolve,45));await flushPromises();
+    expect(wrapper.findAll('.trend-chart-node time').map(node => node.text())).toEqual(['2026-01-01', '2026-01-01']);
+    expect(wrapper.findAll('.trend-chart-node')[0].attributes('aria-label')).toContain('08:30:45');
+    expect(item.points[0].reportIssuedAt).toBe('2026-01-01T08:30:45');
+  } finally { wrapper.unmount(); }
+});
+
+it('renders qualified limit values and breaks lines on both sides of limit records', async () => {
+  const item = series(['2', '3', '<99.0', '4', '5', '≥100']);
+  request.mockImplementation(async (path: string,init?:RequestInit) => path==='trends/snapshot/charts' ? snapshotParts([item],init) : path.startsWith('trends/snapshot?') ? snapshotOverview([item]) : []);
+  const wrapper = shallowMount(TrendsPage, {global: {stubs: {RouterLink: true}}});
+  try {
+    await flushPromises();await new Promise(resolve=>setTimeout(resolve,45));await flushPromises();
     expect(wrapper.findAll('.trend-chart-node')).toHaveLength(6);
     expect(wrapper.findAll('.trend-chart-node.limited')).toHaveLength(2);
     expect(wrapper.findAll('.trend-sparkline polyline')).toHaveLength(2);
@@ -58,12 +73,30 @@ it('renders qualified limit values and breaks lines on both sides of limit recor
 it.each(['<0.3', '<=0.3', '>0.3', '>=0.3'])('preserves %s even in a legacy payload without comparator metadata', async text => {
   const item = series([text]);
   delete (item.points[0] as Partial<typeof item.points[0]>).resultComparator;
-  request.mockImplementation(async (path: string) => path.startsWith('trends?') ? [item] : []);
+  request.mockImplementation(async (path: string,init?:RequestInit) => path==='trends/snapshot/charts' ? snapshotParts([item],init) : path.startsWith('trends/snapshot?') ? snapshotOverview([item]) : []);
   const wrapper = shallowMount(TrendsPage, {global: {stubs: {RouterLink: true}}});
   try {
-    await flushPromises();
+    await flushPromises();await new Promise(resolve=>setTimeout(resolve,45));await flushPromises();
     expect(wrapper.get('.trend-chart-value').text()).toBe(`${splitMeasurementBound(text).comparator}0.3`);
     expect(wrapper.findAll('.trend-sparkline polyline')).toHaveLength(0);
     expect(wrapper.get('.trend-chart-node').classes()).toContain('limited');
   } finally {wrapper.unmount();}
+});
+
+afterEach(()=>{vi.unstubAllGlobals();});
+
+
+it('keeps the first history point within the initial chart view for dense histories', async () => {
+  const item=series(Array.from({length:100},(_,i)=>String(2+i%5)));
+  request.mockImplementation(async(path:string,init?:RequestInit)=>path==='trends/snapshot/charts'
+    ? snapshotParts([item],init):path.startsWith('trends/snapshot?')?snapshotOverview([item]):[]);
+  const wrapper=shallowMount(TrendsPage,{global:{stubs:{RouterLink:true}}});
+  try{
+    await flushPromises();await new Promise(resolve=>setTimeout(resolve,45));await flushPromises();
+    const nodes=wrapper.findAll('.trend-chart-node');expect(nodes).toHaveLength(100);
+    const canvas=wrapper.get('.trend-chart-canvas').element as HTMLElement;
+    const left=Number.parseFloat((nodes[0].element as HTMLElement).style.left)/100*Number.parseFloat(canvas.style.minWidth);
+    expect(left).toBeGreaterThanOrEqual(38);
+    expect(left).toBeLessThan(80,'the chart must show a data point before any horizontal swipe');
+  }finally{wrapper.unmount();}
 });

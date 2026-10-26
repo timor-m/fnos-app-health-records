@@ -188,8 +188,9 @@ test("trend UI exposes abnormal continuity without turning numeric direction int
   assert.match(collapsed, /abnormalContinuityStatus === "conflict"/);
   assert.doesNotMatch(collapsed, /latest_abnormal|persistent_abnormal|near_boundary|recovered/);
   assert.match(source, /接近参考边界/);
-  assert.match(source, /item\.attentionPriority === "normal"/);
-  assert.match(source, /item\.attentionPriority !== "normal"/);
+  const query = readFileSync(join(process.cwd(), "packages/server/services/trend-snapshot-query.service.ts"), "utf8");
+  assert.match(query, /s\.attention_priority='normal'/);
+  assert.match(query, /s\.attention_priority<>'normal'/);
   assert.match(source, /item\.abnormalContinuityReason/);
   assert.doesNotMatch(source, /abnormalContinuityLabel[\s\S]{0,800}(?:改善|恶化|变好|变差)/);
 });

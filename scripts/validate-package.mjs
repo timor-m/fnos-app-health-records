@@ -60,6 +60,7 @@ for (const relativePath of [
   "wizard",
   "app/ui/config",
   "app/server/serve.mjs",
+  "app/server/server/trend-snapshot-worker.mjs",
   "app/ocr-worker/worker.py",
   "app/tools/write-runtime-config.mjs",
   "wizard/install",

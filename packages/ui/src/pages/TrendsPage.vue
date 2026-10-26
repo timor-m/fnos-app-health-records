@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch, type Directive } from "vue";
 import { useRoute } from "vue-router";
 import {
   Activity,
@@ -8,6 +8,7 @@ import {
   ChevronRight,
   CircleAlert,
   FileText,
+  LoaderCircle,
   Pin,
   Search,
   X
@@ -16,7 +17,7 @@ import BackToTop from "../components/BackToTop.vue";
 import EmptyState from "../components/EmptyState.vue";
 import FormSelect from "../components/FormSelect.vue";
 import TrendGroupFilter from '../components/TrendGroupFilter.vue';
-import { flattenTrendGroups, type TrendGroupNode } from '../../../shared/trend-groups';
+import { flattenTrendGroups } from '../../../shared/trend-groups';
 import IndicatorHint from "../components/IndicatorHint.vue";
 import ImageViewer, { type ImageViewerPage } from "../components/ImageViewer.vue";
 import PullIndicator from "../components/PullIndicator.vue";
@@ -34,27 +35,33 @@ import {
 } from "../utils/value-scale";
 import { useAppContext } from "../composables/useAppContext";
 import { usePullRefresh } from "../composables/usePullRefresh";
-import { useRefreshOnActivate } from "../composables/useRefreshOnActivate";
+import { useTrendSnapshots } from "../composables/useTrendSnapshots";
+import type { TrendSnapshotItem } from "../types/trend-snapshot";
 import { useToast } from "../composables/useToast";
 import type { IndicatorNormalizationMetrics, OcrPageDetail, TrendExcludedPoint, TrendPoint, TrendSeries, TrendValueScale } from "../types/api";
 
 const app = useAppContext();
 const route = useRoute();
-const loading = ref(true);
-const loadError = ref("");
-const series = ref<TrendSeries[]>([]);
-const pendingReports = ref<Array<{reportId:string;reportTitle:string;examinationCount:number;observationCount:number}>>([]);
 const query = ref("");
 const groupFilter = ref('');
-const groupTree = ref<TrendGroupNode[]>([]);
-const groupResultKeys = ref<Set<string> | null>(null);
-const groupResultOrder = computed(() => new Map([...(groupResultKeys.value || [])].map((key, index) => [key, index])));
-const groupPending = ref(false);
-const groupError = ref('');
-let groupRequest = 0;
-let loadRequest = 0;
 const attentionFilter = ref<"all" | "attention" | "abnormal" | "near_boundary" | "unflagged">("all");
-const collapsedGroups = ref(new Set<string>());
+const snapshots = useTrendSnapshots(() => app.selectedMemberId.value, () => ({
+  query: query.value, group: groupFilter.value, attention: attentionFilter.value
+}));
+const {series, groups: groupTree, loading, error: loadError, filtering} = snapshots;
+let filterTimer: ReturnType<typeof setTimeout> | null = null;
+let filterSequence=0;
+const filterMaskVisible=ref(false);
+const filterMaskTop=ref(0);
+function updateFilterMaskBounds() {
+  const header=document.querySelector('.mobile-topbar')?.getBoundingClientRect();
+  filterMaskTop.value=header && header.height>0 ? Math.max(0,header.bottom) : 0;
+}
+function clearFilterFeedback() {
+  filterSequence++;
+  if(filterTimer)clearTimeout(filterTimer);filterTimer=null;
+  filterMaskVisible.value=false;
+}
 // 登记了表示法的序列（如视力的小数/五分记录法）可按类型切换显示，选择跨会话保留。
 const SCALE_NOTATION_STORAGE_KEY = "health-records:trend-scale-notation";
 const LEGACY_VISION_SCALE_STORAGE_KEY = "health-records:trend-vision-scale";
@@ -124,31 +131,6 @@ const sourceViewerPages = computed<ImageViewerPage[]>(() => {
 });
 
 const selectedGroup = computed(() => flattenTrendGroups(groupTree.value).find(g => groupFilter.value === g.key));
-const searchedGroupKeys = computed(() => {
-  const text = query.value.trim().toLocaleLowerCase();
-  return new Set(text ? flattenTrendGroups(groupTree.value).filter(g => g.name.toLocaleLowerCase().includes(text)).flatMap(g => g.indicatorKeys) : []);
-});
-
-async function filterGroups() {
-  const memberId = app.selectedMemberId.value;
-  const sequence = ++groupRequest;
-  groupError.value = '';
-  if (!memberId || !groupFilter.value.length) {
-    groupResultKeys.value = null;
-    groupPending.value = false;
-    return;
-  }
-  groupPending.value = true;
-  groupResultKeys.value = new Set();
-  const params = new URLSearchParams({ memberId });
-  params.append('groupKeys[]', groupFilter.value);
-  try {
-    const result = await request<TrendSeries[]>(`trends?${params}`);
-    if (sequence === groupRequest && memberId === app.selectedMemberId.value) groupResultKeys.value = new Set(result.map(item => item.indicatorKey));
-  } catch (error) {
-    if (sequence === groupRequest) groupError.value = error instanceof Error ? error.message : '分组筛选失败';
-  } finally { if (sequence === groupRequest) groupPending.value = false; }
-}
 const attentionOptions = [
   { value: "all", label: "全部状态" },
   { value: "attention", label: "需要关注" },
@@ -167,98 +149,35 @@ function matchingAlias(item: TrendSeries) {
   return matchTrendSearch(item, query.value).alias;
 }
 
-const filteredSeries = computed(() => {
-  return series.value.filter((item) => {
-    if (groupResultKeys.value && !groupResultKeys.value.has(item.indicatorKey)) return false;
-    if (attentionFilter.value === "attention" && item.attentionPriority === "normal") return false;
-    if (attentionFilter.value === "unflagged" && item.attentionPriority !== "normal") return false;
-    if (
-      attentionFilter.value !== "all"
-      && attentionFilter.value !== "attention"
-      && attentionFilter.value !== "unflagged"
-      && item.attentionLevel !== attentionFilter.value
-    ) return false;
-    return searchedGroupKeys.value.has(item.indicatorKey) || matchTrendSearch(item, query.value).matches;
-  });
-});
-
 type TrendSection = {
   key: string;
   name: string;
   order: number;
   pinned: boolean;
+  count: number;
   items: TrendSeries[];
   abnormalCount: number;
-  subgroups: Array<{ key: string; name: string; order: number; items: TrendSeries[] }>;
+  subgroups: Array<{ key: string; name: string; order: number; items: TrendSeries[]; count?: number }>;
 };
 
-const trendSections = computed<TrendSection[]>(() => {
-  const result: TrendSection[] = [];
-  const pinned = filteredSeries.value.filter((item) => item.pinned).sort(compareTrendSeries);
-  if (pinned.length) {
-    result.push({
-      key: "pinned",
-      name: "我的关注",
-      order: 0,
-      pinned: true,
-      items: pinned,
-      abnormalCount: pinned.filter((item) => item.attentionLevel === "abnormal").length,
-      subgroups: []
-    });
-  }
-  const standardItems = filteredSeries.value.filter((item) => !item.pinned);
-  const grouped = new Map<string, TrendSection>();
-  for (const item of standardItems) {
-    if (!grouped.has(item.groupKey)) {
-      grouped.set(item.groupKey, {
-        key: item.groupKey,
-        name: item.groupName,
-        order: item.groupOrder,
-        pinned: false,
-        items: [],
-        abnormalCount: 0,
-        subgroups: []
-      });
-    }
-    const section = grouped.get(item.groupKey)!;
-    section.items.push(item);
-    if (item.attentionLevel === "abnormal") section.abnormalCount += 1;
-  }
-  for (const section of grouped.values()) {
-    section.items.sort(compareTrendSeries);
-    if (section.key === "laboratory") {
-      const subgroups = new Map<string, { key: string; name: string; order: number; items: TrendSeries[] }>();
-      for (const item of section.items) {
-        const key = item.subgroupKey || "laboratory_other";
-        if (!subgroups.has(key)) {
-          subgroups.set(key, {
-            key,
-            name: item.subgroupName || "其他检验",
-            order: item.subgroupOrder,
-            items: []
-          });
-        }
-        subgroups.get(key)!.items.push(item);
-      }
-      section.subgroups = [...subgroups.values()].sort((left, right) => left.order - right.order);
-    }
-    result.push(section);
-  }
-  return result.sort((left, right) => left.order - right.order);
-});
+const trendSections = computed<TrendSection[]>(() => snapshots.sections.value.map(section => {
+  const items = snapshots.sectionItems(section.key);
+  const subgroups = section.key === 'laboratory' ? section.subgroups.map(group => ({
+    key: group.key, name: group.name, order: group.sortOrder,
+    items: items.filter(item => (item.subgroupKey || 'laboratory_other') === group.key), count: group.count
+  })) : [];
+  return {key: section.key, name: section.name, order: section.sortOrder, pinned: section.key==='pinned',
+    count: section.count, items, abnormalCount: section.abnormalCount, subgroups};
+}));
 
 const hasActiveFilters = computed(() =>
   Boolean(query.value.trim()) || groupFilter.value.length > 0 || attentionFilter.value !== "all"
 );
 
-const trendCountSubtitle = computed(() => {
-  if (!series.value.length) return "";
-  const pointCount = series.value.reduce((sum, item) => sum + item.pointCount, 0);
-  return `共 ${series.value.length} 项指标${pointCount ? ` · ${pointCount} 个数据点` : ""}`;
-});
+const trendCountSubtitle = computed(() => snapshots.version.value
+  ? `共 ${snapshots.total.value} 项指标${snapshots.pointCount.value ? ` · ${snapshots.pointCount.value} 个数据点` : ''}` : '');
 
 const filterSummary = computed(() => {
-  if (!series.value.length) return "";
   const group = selectedGroup.value ? ` · ${selectedGroup.value.name}` : '';
   const keyword = query.value.trim() ? ` · “${query.value.trim()}”` : "";
   const attention = attentionFilter.value === "abnormal"
@@ -268,44 +187,12 @@ const filterSummary = computed(() => {
       : attentionFilter.value === "attention"
         ? " · 需要关注"
         : attentionFilter.value === "unflagged" ? " · 未列入关注" : "";
-  return `显示 ${filteredSeries.value.length} / ${series.value.length} 项${group}${attention}${keyword}`;
+  return `共 ${snapshots.total.value} 项${group}${attention}${keyword}`;
 });
 
 async function load(memberId: string, silent = false) {
-  const sequence = ++loadRequest;
-  if (!silent) loading.value = true;
-  loadError.value = "";
   closeDetails();
-  try {
-    const params = `memberId=${encodeURIComponent(memberId)}`;
-    const [result, tree, pending] = await Promise.all([
-      request<TrendSeries[]>(`trends?${params}`), request<TrendGroupNode[]>(`trends/groups?${params}`),
-      request<typeof pendingReports.value>(`trends/pending?${params}`)
-    ]);
-    if (app.selectedMemberId.value === memberId && sequence === loadRequest) {
-      series.value = result;
-      pendingReports.value = pending;
-      groupTree.value = tree;
-      const availableKeys = new Set(flattenTrendGroups(tree).filter(g => g.indicatorCount > 0).map(g => g.key));
-      if (groupFilter.value && !availableKeys.has(groupFilter.value)) groupFilter.value = '';
-      else await filterGroups();
-    }
-  }
-  catch (cause) {
-    if (!silent && app.selectedMemberId.value === memberId && sequence === loadRequest) loadError.value = cause instanceof Error ? cause.message : "指标趋势加载失败";
-    throw cause;
-  }
-  finally { if (!silent && app.selectedMemberId.value === memberId && sequence === loadRequest) loading.value = false; }
-}
-
-function compareTrendSeries(left: TrendSeries, right: TrendSeries) {
-  return Number(right.pinned) - Number(left.pinned)
-    || ((groupResultOrder.value.get(left.indicatorKey) ?? 9999) - (groupResultOrder.value.get(right.indicatorKey) ?? 9999))
-    || left.groupOrder - right.groupOrder
-    || left.subgroupOrder - right.subgroupOrder
-    || left.itemOrder - right.itemOrder
-    || left.name.localeCompare(right.name, "zh-CN")
-    || String(left.unit || "").localeCompare(String(right.unit || ""), "zh-CN");
+  await snapshots.load(memberId, silent);
 }
 
 function trendPinRequestKey(memberId: string, item: TrendSeries) {
@@ -340,11 +227,7 @@ async function toggleTrendPin(item: TrendSeries) {
       })
     });
     if (app.selectedMemberId.value !== memberId) return;
-    const current = series.value.find((candidate) =>
-      candidate.indicatorKey === item.indicatorKey && (candidate.unit || "") === (item.unit || "")
-    );
-    if (current) current.pinned = result.pinned;
-    series.value = [...series.value].sort(compareTrendSeries);
+    await load(memberId, true);
     toast.show(result.pinned ? `已置顶“${item.name}”` : `已取消置顶“${item.name}”`);
   } catch (cause) {
     toast.show(cause instanceof Error ? cause.message : "指标置顶操作失败");
@@ -362,7 +245,6 @@ function reloadTrends() {
   const memberId = app.selectedMemberId.value;
   if (!memberId) return;
   load(memberId, true).catch((cause) => console.warn("[health-records] 指标趋势后台刷新失败", cause));
-  loadAdminIssueCount();
 }
 
 // 问题池接口仅管理员可访问，非管理员直接跳过，避免无谓的 403
@@ -373,7 +255,7 @@ function loadAdminIssueCount() {
     .catch(() => {});
 }
 
-useRefreshOnActivate(reloadTrends);
+watch(() => app.dataVersion?.value, () => reloadTrends());
 
 function formatNumber(value: number | null) {
   if (value === null) return "—";
@@ -562,22 +444,12 @@ function cardDomId(item: TrendSeries) {
 
 function sectionClusters(section: TrendSection) {
   return section.subgroups.length
-    ? section.subgroups
-    : [{ key: `${section.key}-all`, name: "", order: 0, items: section.items }];
+    ? section.subgroups.filter(group=>group.items.length)
+    : section.items.length ? [{ key: `${section.key}-all`, name: "", order: 0, items: section.items, count: section.count }] : [];
 }
 
-function groupExpanded(section: TrendSection) {
-  return Boolean(query.value.trim() || attentionFilter.value !== "all")
-    || !collapsedGroups.value.has(section.key);
-}
-
-function toggleGroup(section: TrendSection) {
-  const next = new Set(collapsedGroups.value);
-  if (next.has(section.key)) next.delete(section.key);
-  else next.add(section.key);
-  collapsedGroups.value = next;
-}
-
+function groupExpanded(section: TrendSection) { return snapshots.opened.value.has(section.key); }
+function toggleGroup(section: TrendSection) { void snapshots.toggleSection(section.key); }
 function deltaText(item: TrendSeries) {
   if (item.pointCount <= 1 || item.latestChangeStatus === "baseline") return "基线";
   if (!item.changeAssessmentAllowed && item.pointCount > 1) return "暂不比较";
@@ -697,11 +569,13 @@ function trendChartPoints(item: TrendSeries) {
   const min = Math.min(item.typicalMinValue ?? Math.min(...values), ...boundaries);
   const max = Math.max(item.typicalMaxValue ?? Math.max(...values), ...boundaries);
   const span = max - min || 1;
+  // Keep edge spacing bounded when complete histories make the canvas wide.
+  const inset = Math.min(12, 4400 / Math.max(320, item.pointCount * 88));
   return item.points.map((point, index) => {
     const ratio = Math.max(0, Math.min(1, (point.numericValue - min) / span));
     return {
       point,
-      x: values.length === 1 ? 50 : 12 + (index / (values.length - 1)) * 76,
+      x: values.length === 1 ? 50 : inset + (index / (values.length - 1)) * (100 - inset * 2),
       y: values.length === 1 ? 46 : 62 - ratio * 34
     };
   });
@@ -717,7 +591,7 @@ function trendChartPolylines(item: TrendSeries) {
 }
 
 function trendChartMinWidth(item: TrendSeries) {
-  return `${Math.max(320, item.points.length * 88)}px`;
+  return `${Math.max(320, item.pointCount * 88)}px`;
 }
 
 function trendNodeLabel(point: TrendPoint, item: TrendSeries) {
@@ -727,7 +601,14 @@ function trendNodeLabel(point: TrendPoint, item: TrendSeries) {
 }
 
 const expandedRecordKeys=ref<string[]>([]);
-function toggleRecords(item:TrendSeries){const key=seriesKey(item);expandedRecordKeys.value=expandedRecordKeys.value.includes(key)?expandedRecordKeys.value.filter(k=>k!==key):[...expandedRecordKeys.value,key];}
+async function toggleRecords(item:TrendSeries) {
+  const key=seriesKey(item);
+  if(expandedRecordKeys.value.includes(key)){expandedRecordKeys.value=expandedRecordKeys.value.filter(value=>value!==key);return;}
+  const memberId=app.selectedMemberId.value, version=snapshots.version.value;
+  await snapshots.ensureChart(item);
+  if(memberId!==app.selectedMemberId.value || version!==snapshots.version.value)return;
+  if(snapshots.itemFor(snapshots.keyOf(item))?.chartLoaded)expandedRecordKeys.value=[...expandedRecordKeys.value,key];
+}
 function recentPoints(item: TrendSeries) {
   const points=[...item.points].reverse();
   return expandedRecordKeys.value.includes(seriesKey(item))?points:points.slice(0,6);
@@ -793,6 +674,7 @@ function toggleDetails(item: TrendSeries, event: MouseEvent) {
   detailPopoverPlacement.value = frame.placement;
   detailPopoverStyle.value = frame.style;
   activeDetailKey.value = key;
+  void snapshots.ensureDetails(item);
 }
 
 
@@ -834,29 +716,46 @@ const { pullDistance, refreshing } = usePullRefresh(root, async () => {
   }
 });
 
-watch(() => app.selectedMemberId.value, (memberId) => {
-  ++loadRequest;
-  ++groupRequest;
-  series.value = [];
-  pendingReports.value = [];
-  groupTree.value = [];
-  groupFilter.value = '';
-  groupResultKeys.value = null;
-  groupError.value = '';
-  groupPending.value = false;
-  if (!memberId) return;
-  load(memberId).catch(() => {});
-}, { immediate: true });
+let resettingMember=false;
+watch(() => app.selectedMemberId.value, memberId => {
+  resettingMember=true;
+  clearFilterFeedback();
+  snapshots.reset();
+  groupFilter.value='';query.value='';attentionFilter.value='all';
+  previewReportId.value=null;closeSourcePage();closeDetails();expandedRecordKeys.value=[];
+  void nextTick(()=>{
+    resettingMember=false;
+    if(memberId && app.selectedMemberId.value===memberId)void load(memberId).catch(()=>{});
+  });
+}, {immediate:true});
 
-// session 可能在页面挂载后才就绪，这里等管理员身份确定后再拉取待治理数
-watch(() => app.session.value?.isAdmin, (isAdmin) => {
-  if (isAdmin) loadAdminIssueCount();
-}, { immediate: true });
-
-watch([query, groupFilter, attentionFilter], () => {
+watch([query,groupFilter,attentionFilter], () => {
+  if(resettingMember)return;
   closeDetails();
+  snapshots.invalidate();
+  const sequence=++filterSequence;
+  filterMaskVisible.value=true;
+  updateFilterMaskBounds();
+  if(filterTimer)clearTimeout(filterTimer);
+  filterTimer=setTimeout(async()=>{
+    filterTimer=null;
+    const memberId=app.selectedMemberId.value;
+    try {
+      if(!memberId)return;
+      await load(memberId,true);
+      if(sequence!==filterSequence || app.selectedMemberId.value!==memberId || loadError.value)return;
+      await nextTick();
+      if(sequence!==filterSequence)return;
+      if(window.scrollY>0)window.scrollTo({top:0,behavior:'instant'});
+    }catch { /* The page retains its existing retry/error feedback. */ }
+    finally {if(sequence===filterSequence)filterMaskVisible.value=false;}
+  },250);
 });
-watch(groupFilter, filterGroups);
+let metricsVersion: number|null = null;
+watch([() => app.session.value?.isAdmin, snapshots.version, loading], ([admin,version,pending]) => {
+  if(!admin){adminIssueCount.value=0;metricsVersion=null;}
+  if(admin && version && !pending && metricsVersion!==version){metricsVersion=version;void nextTick(loadAdminIssueCount);}
+},{flush:'post'});
 
 watch(trendCountSubtitle, (subtitle) => app.setTopbarSubtitle("trends", subtitle), { immediate: true });
 
@@ -873,23 +772,98 @@ function nextRouteUsesTopbarSearch() {
   return route.path === "/records" || route.path === "/trends" || route.path.startsWith("/trends/");
 }
 
+type ViewportValue = {kind:'chart';item:TrendSeries} | {kind:'more'|'next';key:string};
+const viewportNodes = new Map<HTMLElement,{value:ViewportValue;visible:boolean}>();
+let viewportObserver: IntersectionObserver | null = null;
+let viewportActive = true;
+let viewportFrame: number | null = null;
+
+async function preserveAnchor(action:()=>Promise<unknown>) {
+  const elements=Array.from(root.value?.querySelectorAll<HTMLElement>('[data-trend-anchor]') || []);
+  const anchor=elements.find(element=>{const rect=element.getBoundingClientRect();return rect.top>=0 && rect.top<window.innerHeight;});
+  const key=anchor?.dataset.trendAnchor, top=anchor?.getBoundingClientRect().top, scroll=window.scrollY;
+  await action();await nextTick();
+  if(!key || top===undefined || window.scrollY!==scroll)return;
+  const current=Array.from(root.value?.querySelectorAll<HTMLElement>('[data-trend-anchor]') || []).find(element=>element.dataset.trendAnchor===key);
+  const delta=current ? current.getBoundingClientRect().top-top : 0;
+  if(Math.abs(delta)>1)window.scrollBy(0,delta);
+}
+function visitViewport(element:HTMLElement, visible:boolean) {
+  const state=viewportNodes.get(element);if(!state || !viewportActive)return;
+  state.visible=visible;
+  if(state.value.kind==='chart') {
+    snapshots.setChartVisible(state.value.item,visible || element.contains(document.activeElement));
+  }else if(visible) {
+    const value=state.value;
+    void preserveAnchor(()=>value.kind==='more' ? snapshots.loadSection(value.key,true) : snapshots.prefetchNext(value.key)).catch(()=>{});
+  }
+}
+function scanViewport() {
+  viewportFrame=null;if(!viewportActive)return;
+  for(const [element] of viewportNodes) {
+    const rect=element.getBoundingClientRect();
+    visitViewport(element,element.isConnected && rect.bottom>=-400 && rect.top<=window.innerHeight+400);
+  }
+}
+function scheduleViewportScan() {
+  if(filterMaskVisible.value)updateFilterMaskBounds();
+  if(!viewportObserver && viewportFrame===null)viewportFrame=requestAnimationFrame(scanViewport);
+}
+const vTrendViewport: Directive<HTMLElement,ViewportValue> = {
+  mounted(element,binding) {
+    viewportNodes.set(element,{value:binding.value,visible:false});
+    if(typeof IntersectionObserver!=='undefined') {
+      viewportObserver ??= new IntersectionObserver(entries=>{
+        for(const entry of entries)visitViewport(entry.target as HTMLElement,entry.isIntersecting);
+      },{rootMargin:'400px 0px'});
+      if(viewportActive)viewportObserver.observe(element);
+    }else scheduleViewportScan();
+  },
+  updated(element,binding) {
+    const state=viewportNodes.get(element);if(!state)return;
+    state.value=binding.value;
+    if(binding.value.kind==='chart' && state.visible) snapshots.setChartVisible(binding.value.item,true);
+    else if(!viewportObserver)scheduleViewportScan();
+  },
+  unmounted(element) {
+    const state=viewportNodes.get(element);
+    if(state?.value.kind==='chart') snapshots.setChartVisible(state.value.item,false);
+    viewportObserver?.unobserve(element);viewportNodes.delete(element);
+  }
+};
+function refreshChartVisibility(event:FocusEvent) {
+  const element=event.currentTarget as HTMLElement;
+  void nextTick(()=>{const state=viewportNodes.get(element);if(state)visitViewport(element,state.visible);});
+}
+
 onMounted(() => {
   window.addEventListener("resize", closeDetails, { passive: true });
   // 弹层是 fixed 定位，窗口滚动后会与锚点卡片脱离，滚动时直接关闭
   window.addEventListener("scroll", closeDetails, { passive: true });
   activateTopbarSearch();
+  window.addEventListener("scroll",scheduleViewportScan,{passive:true});
+  window.addEventListener("resize",scheduleViewportScan,{passive:true});
 });
 onBeforeUnmount(() => {
   window.removeEventListener("resize", closeDetails);
   window.removeEventListener("scroll", closeDetails);
+  clearFilterFeedback();
+  viewportObserver?.disconnect();viewportNodes.clear();
+  if(viewportFrame!==null)cancelAnimationFrame(viewportFrame);
+  window.removeEventListener("scroll",scheduleViewportScan);window.removeEventListener("resize",scheduleViewportScan);
   app.clearTopbarSubtitle("trends");
   app.clearTopbarSearch("trends");
 });
 onActivated(() => {
+  viewportActive=true;
+  for(const [element] of viewportNodes)viewportObserver?.observe(element);
+  scheduleViewportScan();
   app.setTopbarSubtitle("trends", trendCountSubtitle.value);
   activateTopbarSearch();
 });
 onDeactivated(() => {
+  clearFilterFeedback();
+  viewportActive=false;viewportObserver?.disconnect();
   if (!nextRouteUsesTopbarSearch()) app.clearTopbarSearch("trends");
 });
 </script>
@@ -901,34 +875,15 @@ onDeactivated(() => {
       <RouterLink to="/trends" aria-current="page">指标趋势</RouterLink>
       <RouterLink to="/trends/morphology">形态变化</RouterLink>
     </nav>
-    <section v-if="!loading && !loadError && pendingReports.length" class="trend-pending-panel" aria-label="待确认检查">
-      <div class="trend-pending-heading">
-        <span class="trend-pending-icon"><CircleAlert :size="17" aria-hidden="true" /></span>
-        <div class="trend-pending-copy"><h3>有检查结果待确认</h3><p>结果已保留，确认检查归属和时间后即可进入趋势。</p></div>
-        <span class="trend-pending-count">{{ pendingReports.length }} 份报告</span>
-      </div>
-      <details class="trend-pending-details">
-        <summary><span>查看待确认报告</span><ChevronDown :size="15" aria-hidden="true" /></summary>
-        <div class="trend-pending-content">
-          <p class="trend-pending-guide">打开报告，在“全部指标”的来源报告页中核对时间。</p>
-          <div class="trend-pending-list">
-            <button v-for="report in pendingReports" :key="report.reportId" type="button" class="trend-pending-report" @click="openReport(report.reportId)">
-              <FileText class="trend-pending-file" :size="17" aria-hidden="true" />
-              <span class="trend-pending-report-copy"><span class="trend-pending-report-title">{{ report.reportTitle }}</span><span class="trend-pending-report-meta">{{ report.examinationCount }} 次检查<span aria-hidden="true"> · </span>{{ report.observationCount }} 项结果</span></span>
-              <ChevronRight class="trend-pending-arrow" :size="16" aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-      </details>
-    </section>
     <PullIndicator :distance="pullDistance" :refreshing="refreshing" />
-    <div v-if="loading" class="loading-list"><span v-for="index in 3" :key="index"></span></div>
-    <p v-else-if="loadError" class="inline-panel-error">
+    <div v-if="loading" class="loading-list"><span v-for="index in 8" :key="index"></span></div>
+    <p v-else-if="loadError && !snapshots.version.value" class="inline-panel-error">
       {{ loadError }}<button class="error-retry" type="button" @click="retryLoad">重试</button>
     </p>
-    <EmptyState v-else-if="!series.length" title="暂无可比较指标" description="AI 整理出结构化数值后，这里会展示单次基线值和多次趋势。" />
+    <p v-else-if="!snapshots.version.value" class="mini-loading trend-building" role="status">{{ snapshots.status.value === 'retrying' ? '趋势准备暂未完成，正在重试…' : '正在准备趋势数据…' }}<button class="soft-action-button" type="button" @click="retryLoad">刷新状态</button></p>
+    <EmptyState v-else-if="!snapshots.total.value && !hasActiveFilters" title="暂无可比较指标" description="AI 整理出结构化数值后，这里会展示单次基线值和多次趋势。" />
     <template v-else>
-      <div class="trend-filter-row">
+      <div class="trend-filter-row" :class="{'trend-filter-pending':filterMaskVisible}">
         <label class="search-field trend-search-field page-search-field">
           <Search :size="18" />
           <input v-model="query" placeholder="搜索指标名" />
@@ -936,21 +891,21 @@ onDeactivated(() => {
         <TrendGroupFilter v-model="groupFilter" :groups="groupTree" class="trend-group-select" />
         <FormSelect v-model="attentionFilter" class="trend-status-select records-filter-select" :options="attentionOptions" aria-label="指标状态" />
       </div>
+      <p v-if="loadError" class="inline-panel-error">{{ loadError }}<button class="error-retry" type="button" @click="retryLoad">重试</button></p>
+      <p v-if="!filtering && snapshots.status.value !== 'ready'" class="trend-filter-summary" role="status">{{ snapshots.status.value === 'retrying' ? '趋势更新暂未完成，正在重试，当前结果仍可查看。' : '趋势更新中，当前展示上一次完整结果。' }}</p>
       <p v-if="hasActiveFilters" class="trend-filter-summary">{{ filterSummary }}</p>
-      <p v-if="groupPending" role="status" class="trend-filter-summary">正在筛选…</p>
-      <p v-if="groupError" class="inline-panel-error">{{ groupError }}<button type="button" @click="filterGroups">重试</button></p>
       <RouterLink v-if="adminIssueCount > 0" class="trend-admin-issue-entry" to="/me/maintenance/indicator-issues">
         <CircleAlert :size="16" />
         <span>{{ adminIssueCount }} 组指标可核对或补充标准化</span>
         <ChevronRight :size="16" />
       </RouterLink>
       <EmptyState
-        v-if="!filteredSeries.length && !groupPending && !groupError"
+        v-if="!snapshots.total.value"
         title="没有符合条件的指标"
         description="换个指标名、体检分组或指标状态试试，也可以等待更多报告完成整理。"
       />
       <div v-else class="trend-sections">
-        <section v-for="section in trendSections" :key="section.key" class="trend-section">
+        <section v-for="section in trendSections" :key="section.key" class="trend-section" :data-trend-anchor="section.key">
           <button
             class="trend-section-header"
             type="button"
@@ -960,20 +915,23 @@ onDeactivated(() => {
             <span>
               <Pin v-if="section.pinned" :size="18" fill="currentColor" />
               <strong>{{ section.name }}</strong>
-              <small>{{ section.items.length }} 项</small>
+              <small>{{ section.count }} 项</small>
               <em v-if="section.abnormalCount">{{ section.abnormalCount }} 项异常</em>
             </span>
             <ChevronDown :size="19" :class="{ collapsed: !groupExpanded(section) }" />
           </button>
           <div v-if="groupExpanded(section)" class="trend-section-body">
+            <p v-if="snapshots.pages.value[section.key]?.error" class="inline-panel-error">{{ snapshots.pages.value[section.key].error }}<button class="error-retry" type="button" @click="snapshots.loadSection(section.key,Boolean(snapshots.pages.value[section.key]?.cursor))">重试</button></p>
+            <div v-else-if="!snapshots.pages.value[section.key]?.started" class="trend-group-loading" role="status"><LoaderCircle class="spin-icon" :size="20" aria-hidden="true" /><span>正在读取分组…</span></div>
             <section v-for="cluster in sectionClusters(section)" :key="cluster.key" class="trend-subsection">
-              <h3 v-if="cluster.name">{{ cluster.name }}<small>{{ cluster.items.length }} 项</small></h3>
+              <h3 v-if="cluster.name && cluster.items.length">{{ cluster.name }}<small>{{ cluster.count ?? cluster.items.length }} 项</small></h3>
               <div class="trend-list">
                 <article
                   v-for="item in cluster.items"
                   :id="cardDomId(item)"
                   :key="`${item.indicatorKey}-${item.unit}`"
                   class="trend-card"
+                  :data-trend-anchor="snapshots.keyOf(item)"
                   :class="item.attentionLevel ? ['attention', item.attentionLevel] : item.attentionConflict ? ['attention-conflict'] : []"
                 >
           <header class="trend-card-header">
@@ -1029,7 +987,7 @@ onDeactivated(() => {
                   @click="toggleDetails(item, $event)"
                 >
                   整理详情
-                  <template v-if="item.excludedPoints.length"> · {{ item.excludedPoints.length }}</template>
+                  <template v-if="(item as TrendSnapshotItem).excludedPointCount"> · {{ (item as TrendSnapshotItem).excludedPointCount }}</template>
                 </button>
                 <Teleport to="body">
                   <div v-if="detailsOpen(item)" class="trend-detail-popover-backdrop" @click="closeDetails"></div>
@@ -1048,6 +1006,8 @@ onDeactivated(() => {
                         <X :size="17" />
                       </button>
                     </header>
+                    <p v-if="snapshots.detailPending.value.has(snapshots.keyOf(item))" class="mini-loading" role="status">正在读取整理详情…</p>
+                    <p v-if="snapshots.detailErrors.value[snapshots.keyOf(item)]" class="inline-panel-error">{{ snapshots.detailErrors.value[snapshots.keyOf(item)] }}<button type="button" @click="snapshots.ensureDetails(item)">重试</button></p>
                     <div>
                       <span>指标说明</span>
                       <p>{{ item.explanation || "暂未形成可靠说明，可查看原报告或等待指标字典更新。" }}</p>
@@ -1100,8 +1060,8 @@ onDeactivated(() => {
                 </Teleport>
               </div>
             </div>
-            <div class="trend-chart-scroll">
-              <div class="trend-chart-canvas" :style="{ minWidth: trendChartMinWidth(item) }">
+            <div class="trend-chart-scroll" v-trend-viewport="{kind:'chart',item}" @focusin="snapshots.setChartVisible(item,true)" @focusout="refreshChartVisibility($event)">
+              <div v-if="snapshots.visibleCharts.value.has(snapshots.keyOf(item)) && (item as TrendSnapshotItem).chartLoaded" class="trend-chart-canvas" :style="{ minWidth: trendChartMinWidth(item) }">
                 <svg class="trend-sparkline" viewBox="0 0 100 96" preserveAspectRatio="none" aria-hidden="true">
                   <line x1="4" y1="64" x2="96" y2="64" />
                   <template v-if="item.kind !== 'institution' || item.comparable">
@@ -1120,8 +1080,14 @@ onDeactivated(() => {
                 >
                   <span class="trend-chart-value">{{ pointNumberText(item, chartPoint.point) }}</span>
                   <i :class="pointFlagClass(chartPoint.point)" :data-direction="['<', '≤'].includes(pointComparator(chartPoint.point) || '') ? '↓' : '↑'"></i>
-                  <time>{{ trendMeasurementTime(chartPoint.point) }}</time>
+                  <time>{{ formatDate(chartPoint.point.reportIssuedAt) }}</time>
                 </button>
+              </div>
+              <div v-else class="trend-chart-canvas trend-chart-placeholder" :style="{minWidth:trendChartMinWidth(item)}" :aria-hidden="!snapshots.visibleCharts.value.has(snapshots.keyOf(item))">
+                <template v-if="snapshots.visibleCharts.value.has(snapshots.keyOf(item))">
+                  <span v-if="snapshots.chartErrors.value[snapshots.keyOf(item)]">{{ snapshots.chartErrors.value[snapshots.keyOf(item)] }}<button class="soft-action-button" type="button" @click="snapshots.retryChart(item)">重试</button></span>
+                  <span v-else role="status">正在读取趋势图…</span>
+                </template>
               </div>
             </div>
           </div>
@@ -1131,7 +1097,7 @@ onDeactivated(() => {
               <span v-if="trendDateRange(item)">{{ trendDateRange(item) }}</span>
             </div>
           </div>
-          <button v-if="item.points.length > 6" class="soft-action-button" type="button" :aria-expanded="expandedRecordKeys.includes(seriesKey(item))" @click="toggleRecords(item)">{{ expandedRecordKeys.includes(seriesKey(item)) ? '收起记录' : `查看全部 ${item.points.length} 条记录` }}</button>
+          <button v-if="item.pointCount > 6" class="soft-action-button" type="button" :aria-expanded="expandedRecordKeys.includes(seriesKey(item))" @click="toggleRecords(item)">{{ expandedRecordKeys.includes(seriesKey(item)) ? '收起记录' : `查看全部 ${item.pointCount} 条记录` }}</button>
           <div class="trend-points">
             <article v-for="point in recentPoints(item)" :key="`${item.name}-${point.reportId}-${point.observationId}`">
               <div>
@@ -1155,6 +1121,10 @@ onDeactivated(() => {
                 </article>
               </div>
             </section>
+            <div v-if="snapshots.pages.value[section.key]?.cursor" class="trend-load-more" v-trend-viewport="{kind:'more',key:section.key}">
+              <button class="soft-action-button" type="button" :disabled="snapshots.pages.value[section.key]?.loading" @click="snapshots.loadSection(section.key,true)">{{ snapshots.pages.value[section.key]?.loading ? '正在读取…' : '继续加载本组指标' }}</button>
+            </div>
+            <div v-if="snapshots.pages.value[section.key]?.started && !snapshots.pages.value[section.key]?.error" v-trend-viewport="{kind:'next',key:section.key}" class="trend-next-group-sentinel" aria-hidden="true"></div>
           </div>
         </section>
       </div>
@@ -1173,40 +1143,24 @@ onDeactivated(() => {
         <button type="button" title="打开来源报告详情" @click="openSourceReport"><FileText :size="18" /></button>
       </template>
     </ImageViewer>
+    <Teleport to="body">
+      <div v-if="filterMaskVisible" class="trend-filter-mask" :style="{top:`${filterMaskTop}px`}" @wheel.prevent @touchmove.prevent>
+        <div class="trend-filter-loading" role="status" aria-live="polite"><LoaderCircle class="spin-icon" :size="24" aria-hidden="true" /><span>正在筛选指标…</span></div>
+      </div>
+    </Teleport>
     <BackToTop />
   </section>
 </template>
 
 <style scoped>
-.trend-pending-panel { margin: 14px 0; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
-.trend-pending-heading { display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px 12px; }
-.trend-pending-icon { display: flex; align-items: center; justify-content: center; flex: 0 0 30px; height: 30px; border-radius: 9px; background: color-mix(in srgb, var(--amber, #d97706) 10%, var(--surface)); color: var(--amber, #d97706); }
-.trend-pending-copy { flex: 1; min-width: 0; }
-.trend-pending-copy h3 { margin: 0; color: var(--ink); font-size: 13px; font-weight: 600; line-height: 1.6; }
-.trend-pending-copy p { margin: 3px 0 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
-.trend-pending-count { flex-shrink: 0; margin-top: 2px; padding: 2px 8px; border-radius: 6px; background: var(--fill-4); color: var(--muted); font-size: 11px; line-height: 1.7; font-variant-numeric: tabular-nums; }
-.trend-pending-details summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.6; cursor: pointer; list-style: none; }
-.trend-pending-details summary::-webkit-details-marker { display: none; }
-.trend-pending-details summary:hover { color: var(--brand-strong); background: var(--brand-soft); }
-.trend-pending-details summary svg { flex-shrink: 0; transition: transform .15s; }
-.trend-pending-details[open] summary svg { transform: rotate(180deg); }
-.trend-pending-content { padding: 0 16px 12px; }
-.trend-pending-guide { margin: 3px 0 9px; color: var(--muted); font-size: 11px; line-height: 1.7; }
-.trend-pending-list { border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
-.trend-pending-report { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 56px; margin: 0; padding: 10px 12px; border: 0; border-radius: 0; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
-.trend-pending-report + .trend-pending-report { border-top: 1px solid var(--line); }
-.trend-pending-report:hover { background: var(--brand-soft); }
-.trend-pending-report:focus-visible, .trend-pending-details summary:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
-.trend-pending-file, .trend-pending-arrow { flex-shrink: 0; color: var(--muted); }
-.trend-pending-report-copy { display: grid; gap: 3px; flex: 1; min-width: 0; }
-.trend-pending-report-title { font-size: 12px; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; white-space: normal; }
-.trend-pending-report-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; line-height: 1.5; font-variant-numeric: tabular-nums; }
-@media (max-width: 480px) {
-  .trend-pending-heading { flex-wrap: wrap; padding: 12px; gap: 8px; }
-  .trend-pending-copy { flex-basis: calc(100% - 38px); }
-  .trend-pending-count { margin: 0 0 0 38px; }
-  .trend-pending-details summary { padding-inline: 12px; }
-  .trend-pending-content { padding-inline: 12px; }
-}
-@media (prefers-reduced-motion: reduce) { .trend-pending-details summary svg { transition: none; } }
+.trend-group-loading { min-height: 144px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--muted); font-size: 14px; }
+.trend-filter-pending { position: relative; z-index: 31; }
+.trend-filter-mask { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: color-mix(in srgb, var(--surface) 62%, transparent); }
+.trend-filter-loading { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-radius: var(--radius-l); background: var(--surface); box-shadow: var(--shadow-s); color: var(--ink); font-size: 14px; }
+
+.trend-chart-placeholder { display: flex; align-items: center; color: var(--muted); font-size: 12px; }
+.trend-chart-placeholder > span { position: sticky; left: 12px; }
+.trend-load-more { display: flex; justify-content: center; padding: 12px; }
+.trend-next-group-sentinel { height: 1px; pointer-events: none; }
+.trend-building { display: flex; align-items: center; gap: 12px; }
 </style>

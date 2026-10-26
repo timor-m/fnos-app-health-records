@@ -65,12 +65,12 @@ export function reportDuplicatePairKey(leftReportId: string, rightReportId: stri
 
 export function reportFileSignature(reportId: string) { return completeSourceSignature(reportId); }
 
-export function duplicateDecisionApplies(leftId:string,rightId:string,evidenceJson:string) {
+export function duplicateDecisionApplies(leftId:string,rightId:string,evidenceJson:string,signature = completeSourceSignature) {
   try {
     const evidence=JSON.parse(evidenceJson);
     const sources=evidence.sourceSignatures;
     if (!sources) return false; // Unbound legacy confirmations remain in history, require review before folding.
-    return sources[leftId]===completeSourceSignature(leftId)&&sources[rightId]===completeSourceSignature(rightId);
+    return sources[leftId]===signature(leftId)&&sources[rightId]===signature(rightId);
   } catch { return false; }
 }
 
@@ -87,12 +87,38 @@ export function getReportDuplicateDecision(leftReportId: string, rightReportId: 
   } | undefined;
 }
 
+function collapseReportPair(leftId: string, rightId: string,
+  decision: ReturnType<typeof getReportDuplicateDecision>, signature: typeof reportFileSignature) {
+  if (decision?.decision === 'distinct') return false;
+  if (decision?.decision === 'duplicate' && duplicateDecisionApplies(leftId, rightId, decision.evidenceJson, signature)) return true;
+  const left = signature(leftId);
+  return Boolean(left && left === signature(rightId));
+}
+
 export function shouldCollapseReportPair(leftReportId: string, rightReportId: string) {
-  const decision = getReportDuplicateDecision(leftReportId, rightReportId);
-  if (decision?.decision === "distinct") return false;
-  if (decision?.decision === "duplicate" && duplicateDecisionApplies(leftReportId,rightReportId,decision.evidenceJson)) return true;
-  const leftSignature = reportFileSignature(leftReportId);
-  return Boolean(leftSignature && leftSignature === reportFileSignature(rightReportId));
+  return collapseReportPair(leftReportId, rightReportId,
+    getReportDuplicateDecision(leftReportId, rightReportId), reportFileSignature);
+}
+
+// Reuse only within one synchronous trend read; source changes and decisions are
+// read again on the next request, so editing or restoring reports takes effect immediately.
+export function reportDuplicateCollapseResolver() {
+  const signatures = new Map<string, string | null>();
+  const pairs = new Map<string, boolean>();
+  const decisionQuery = getDatabase().prepare(`SELECT decision, reason, evidence_json AS evidenceJson
+    FROM report_duplicate_decisions WHERE pair_key = ?`);
+  const signature = (id: string) => {
+    if (!signatures.has(id)) signatures.set(id, reportFileSignature(id));
+    return signatures.get(id)!;
+  };
+  return (leftId: string, rightId: string) => {
+    const key = [leftId, rightId].sort().join('\u0000');
+    if (!pairs.has(key)) {
+      const decision = decisionQuery.get(reportDuplicatePairKey(leftId, rightId)) as ReturnType<typeof getReportDuplicateDecision>;
+      pairs.set(key, collapseReportPair(leftId, rightId, decision, signature));
+    }
+    return pairs.get(key)!;
+  };
 }
 
 function decisionRecord(pairKey: string) {

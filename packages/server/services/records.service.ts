@@ -1,3 +1,4 @@
+import {trendSeriesKey} from './trend-snapshot-types';
 import {sourceRegion,rotateRegionBox} from "../../shared/source-region";
 import { listFeedbackNotifications, updateFeedbackNotification } from './feedback-sync.service';
 import { splitMeasurementBound, type MeasurementComparator } from '../../shared/measurement-result';
@@ -119,7 +120,7 @@ import {
   recordReportDuplicateMerge,
   reportDuplicatePairKey,
   reportFileSignature,
-  shouldCollapseReportPair,
+  reportDuplicateCollapseResolver,
 } from "./report-duplicate-governance.service";
 import { reportStructuredSectionLabels } from "./report-structured-section.service";
 import {
@@ -4983,8 +4984,8 @@ function parseTrendSourcePreference(value: string | null | undefined): TrendSour
   }
 }
 
-function activeTrendCatalog() {
-  ensureBuiltinIndicatorCatalog();
+function activeTrendCatalog(readOnly = false) {
+  if (!readOnly) ensureBuiltinIndicatorCatalog();
   const rows = getDatabase()
     .prepare(
       `
@@ -5038,8 +5039,25 @@ function activeTrendCatalog() {
 export function listTrendSeries(user: RequestUser, memberId?: string) {
   if (!user.authenticated) return [];
   if (memberId) assertMemberAccess(user, memberId);
-  const trendCatalog = activeTrendCatalog();
-  const pinnedKeys = memberId
+  return computeTrendSeries({memberId, userId: user.id});
+}
+
+export type TrendComputationOptions = {
+  memberId?: string;
+  userId?: string;
+  readOnly?: boolean;
+  changedReports?: Set<string>;
+  previousKeys?: Set<string>;
+  contribution?: (reportId: string, seriesKey: string) => void;
+};
+
+// Internal calculation entry: workers pass a member, never a fabricated user.
+// Authorization belongs to HTTP/query services; the worker has a read-only connection.
+export function computeTrendSeries(options: TrendComputationOptions) {
+  const {memberId, userId} = options;
+  if (!memberId && !userId) throw new Error('Trend computation requires a member');
+  const trendCatalog = activeTrendCatalog(options.readOnly);
+  const pinnedKeys = memberId && userId
     ? new Set(
         (
           getDatabase()
@@ -5050,7 +5068,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
         WHERE user_id = ? AND member_id = ?
       `,
             )
-            .all(user.id, memberId) as Array<{
+            .all(userId, memberId) as Array<{
             indicatorKey: string;
             unitKey: string;
           }>
@@ -5111,7 +5129,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     LEFT JOIN observation_examinations oe ON oe.observation_id=o.id
     LEFT JOIN report_examinations ex ON ex.id=oe.examination_id
     JOIN health_members hm ON hm.id = r.member_id
-    JOIN member_permissions mp ON mp.member_id = r.member_id AND mp.user_id = ?
+    ${userId ? "JOIN member_permissions mp ON mp.member_id = r.member_id AND mp.user_id = ?" : ""}
     WHERE COALESCE(NULLIF(TRIM(o.normalized_name), ''), NULLIF(TRIM(o.item_name), '')) IS NOT NULL
       AND r.status <> 'trashed'
       AND r.deleted_at IS NULL
@@ -5120,7 +5138,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     ORDER BY COALESCE(${reportDisplayDateSql}, r.created_at), r.id, o.id
   `,
     )
-    .all(user.id, memberId || null, memberId || null) as Array<{
+    .all(...(userId ? [userId] : []), memberId || null, memberId || null) as Array<{
     observationId: string;
     name: string;
     memberId: string;
@@ -5168,7 +5186,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
   const comparisonContexts = comparisonContextsForReports(
     new Set(rows.map((row) => row.reportId)),
   );
-  const enrichedRows = rows.map((row) => {
+  const mappedRows = rows.map((row) => {
     const admission = assessTrendAdmission(row);
     const rawContext = row.examinationId ? {method:row.examinationMethod,specimen:row.examinationSpecimen} : comparisonContexts.get(row.reportId);
     const rawMethod = row.method && !/^(?:ai|ocr|manual)$/i.test(row.method.trim()) ? row.method.trim() : rawContext?.method?.trim() || '';
@@ -5298,8 +5316,21 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
       evidenceTable: observationTableEvidence(row.evidenceJson),
     };
   });
+  const affected = options.changedReports ? new Set(options.previousKeys) : null;
+  for (const row of mappedRows) {
+    const key = trendSeriesKey(row.trendKey, row.trendUnit);
+    const excludedKey = row.canonicalKey ? trendSeriesKey(row.canonicalKey, row.canonicalUnit || normalizeTrendUnit(row.catalogDefaultUnit)) : null;
+    options.contribution?.(row.reportId, key);
+    if (excludedKey) options.contribution?.(row.reportId, excludedKey);
+    if (options.changedReports?.has(row.reportId)) {
+      affected!.add(key);
+      if (excludedKey) affected!.add(excludedKey);
+    }
+  }
+  const enrichedRows = affected ? mappedRows.filter(row => affected.has(trendSeriesKey(row.trendKey, row.trendUnit))
+    || Boolean(row.canonicalKey && affected.has(trendSeriesKey(row.canonicalKey, row.canonicalUnit || normalizeTrendUnit(row.catalogDefaultUnit))))) : mappedRows;
   const evidenceEntries = (value: string): unknown[] => { const parsed = parseJson<unknown>(value, []); return Array.isArray(parsed) ? parsed : []; };
-  const standardAnchors = new Set(enrichedRows.filter(row => row.admission.kind === 'standard').flatMap(row =>
+  const standardAnchors = new Set(mappedRows.filter(row => row.admission.kind === 'standard').flatMap(row =>
     evidenceEntries(row.evidenceJson).map(entry => `${row.reportId}:${duplicateMeasurementAnchorKey(row.numericValue!, entry)}`)));
   const pointsWithEvidence = enrichedRows.filter(row => row.admission.eligible && row.timeStatus !== "pending" && !(row.admission.kind === 'institution'
     && evidenceEntries(row.evidenceJson).some(entry => {
@@ -5387,7 +5418,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     }>
   >();
   for (const row of excludedRows) {
-    const key = `${row.canonicalKey}\u0000${row.canonicalUnit || normalizeTrendUnit(row.catalogDefaultUnit) || ""}`;
+    const key = trendSeriesKey(row.canonicalKey!, row.canonicalUnit || normalizeTrendUnit(row.catalogDefaultUnit));
     const sourcePageNumber =
       row.evidenceTable?.pageNumber || row.evidencePageNumber;
     const sourcePage = sourcePageNumber
@@ -5509,7 +5540,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
     }
   >();
   for (const row of pointsWithEvidence) {
-    const key = `${row.trendKey}\u0000${row.trendUnit || ""}`;
+    const key = trendSeriesKey(row.trendKey, row.trendUnit);
     const builtin = trendCatalog.get(row.trendKey) || null;
     const rowPlacement = trendPlacementFor({
       category: builtin?.category || row.trendCategory,
@@ -5613,18 +5644,7 @@ export function listTrendSeries(user: RequestUser, memberId?: string) {
   }
 
   const sameExamination = examinationDuplicateResolver();
-  const reportCollapseCache = new Map<string, boolean>();
-  const shouldCollapseReports = (
-    leftReportId: string,
-    rightReportId: string,
-  ) => {
-    const key = [leftReportId, rightReportId].sort().join("\u0000");
-    const cached = reportCollapseCache.get(key);
-    if (cached !== undefined) return cached;
-    const collapse = shouldCollapseReportPair(leftReportId, rightReportId);
-    reportCollapseCache.set(key, collapse);
-    return collapse;
-  };
+  const shouldCollapseReports = reportDuplicateCollapseResolver();
 
   return Array.from(groups.values())
     .map((group) => {
@@ -5975,32 +5995,15 @@ export function updateTrendPin(
   }
   assertMemberAccess(user, memberId);
   if (pinned) {
-    // 轻量存在性校验：与 listTrendSeries 的发布口径一致（已归一化 high/medium、
-    // 规范单位匹配、存在可用数值），避免为一次置顶整算全部趋势。
-    const exists = indicatorKey.startsWith('institution:')
-      ? listTrendSeries(user, memberId).some(series => series.indicatorKey === indicatorKey && (series.unit || '') === unitKey)
-      : Boolean(
-      getDatabase()
-        .prepare(
-          `
-      SELECT 1
-      FROM observation_normalizations n
-      JOIN observations o ON o.id = n.observation_id
-      JOIN reports r ON r.id = o.report_id
-      JOIN member_permissions mp ON mp.member_id = r.member_id AND mp.user_id = ?
-      WHERE r.member_id = ? AND r.status <> 'trashed'
-        AND n.canonical_key = ? AND n.canonical_name IS NOT NULL
-        AND n.quality IN ('high', 'medium')
-        AND COALESCE(n.canonical_unit, '') = ?
-        AND (
-          n.canonical_value IS NOT NULL OR o.numeric_value IS NOT NULL
-          OR o.result_text GLOB '*[0-9]*'
-        )
+    // Validate the published identity for both standard and institution series.
+    // Pinning never calculates trends or guesses admission from raw observations.
+    const exists = getDatabase().prepare(`
+      SELECT 1 FROM trend_snapshot_members m
+      JOIN trend_snapshot_entries e ON e.member_id=m.member_id AND e.revision=m.active_revision
+      JOIN trend_snapshot_series s USING(member_id,series_key,content_hash)
+      WHERE m.member_id=? AND m.invalidated=0 AND s.indicator_key=? AND s.unit_key=?
       LIMIT 1
-    `,
-        )
-        .get(user.id, memberId, indicatorKey, unitKey),
-    );
+    `).get(memberId, indicatorKey, unitKey);
     if (!exists)
       throw createError({
         statusCode: 404,

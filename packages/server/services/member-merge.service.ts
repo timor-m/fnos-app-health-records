@@ -1,3 +1,4 @@
+import {discardMemberTrendSnapshots} from './trend-snapshot-runner.service';
 import { createHash, randomBytes } from 'node:crypto';
 import { createError } from 'h3';
 import { getDatabase, runInTransaction } from '../database/client';
@@ -23,7 +24,9 @@ function existingOptionalTables() {
  return optionalTables.filter(name=>Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)));
 }
 const pairTables = ['member_user_preferences','user_trend_pins','file_gc_members'];
-const knownTables = new Set([...simpleTables,...optionalTables,...pairTables,'member_permissions','member_permission_versions']);
+// Derived snapshots are discarded rather than moved or fingerprinted.
+const trendSnapshotTables = ['trend_snapshot_members','trend_snapshot_entries','trend_snapshot_series','trend_snapshot_contributions','trend_snapshot_dirty_reports'];
+const knownTables = new Set([...simpleTables,...optionalTables,...pairTables,...trendSnapshotTables,'member_permissions','member_permission_versions']);
 const plans = new Map<string,{actorId:string;expires:number;input:Input;fingerprint:string}>();
 function fail(status:number,message:string):never {throw createError({statusCode:status,statusMessage:message});}
 const hash = (v:unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
@@ -144,6 +147,7 @@ export function executeMemberMerge(user:RequestUser,token:unknown) {
   for(const mid of [source,target]) db.prepare('INSERT INTO member_permission_versions(member_id,version) VALUES(?,1) ON CONFLICT(member_id) DO UPDATE SET version=version+1').run(mid);
   // Cache/ownership changes invalidate pending UI edits while preserving report IDs and files.
   db.prepare('UPDATE reports SET source_version=source_version+1,updated_at=CURRENT_TIMESTAMP WHERE member_id=?').run(target);
+  discardMemberTrendSnapshots([source,target],db);
   rebuildMorphologyTrackingForMember(target);
   if(Number(db.prepare('SELECT COUNT(*) AS n FROM reports WHERE member_id=?').get(target)!.n)!==before || db.prepare('PRAGMA foreign_key_check').get()) fail(409,'合并校验未通过，已回滚');
   db.prepare('INSERT INTO member_merges(id,actor_id,source_id,target_id,backup_id,report_count) VALUES(?,?,?,?,?,?)').run(id,user.id,source,target,backup.id,sourceCount);

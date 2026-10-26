@@ -32,7 +32,7 @@
     "test:ui": "vitest run --config packages/ui/vitest.config.ts",
     "typecheck": "vue-tsc --noEmit -p tsconfig.json",
     "build:web": "vite build --config packages/ui/vite.config.ts",
-    "build": "npm run build:web && nitro build",
+    "build": "npm run build:web && nitro build && node scripts/build-trend-worker.mjs",
     "generate:icons": "node scripts/generate-icons.mjs",
     "dictionary:validate": "node scripts/dictionary/validate.mjs",
     "dictionary:reset-core": "node scripts/dictionary/reset-core.mjs",
