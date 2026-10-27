@@ -5,6 +5,7 @@ import { isAdministrator } from "../../../domain/request-user";
 import { findAiProfile, parseStoredSettings, resolveActiveProfile, resolveAiBaseUrl } from "../../../services/ai-settings.service";
 import { normalizeAiProvider, aiProviderCatalog } from "../../../services/ai-provider";
 import { fetchWithTimeout } from "../../../utils/outbound-request";
+import { aiRuntimeHeaders } from "../../../services/ai-runtime.service";
 
 export default defineEventHandler(async (event) => {
   if (!isAdministrator(getRequestUser(event))) throw createError({ statusCode: 403, statusMessage: "仅管理员可获取模型列表" });
@@ -38,7 +39,7 @@ export default defineEventHandler(async (event) => {
     const modelsUrl = `${baseUrl}/models`;
     const response = await fetchWithTimeout(modelsUrl, {
       method: "GET",
-      headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {}
+      headers: aiRuntimeHeaders({provider, providerKey: provider, apiKey})
     }, {
       timeoutMs: 10_000,
       timeoutCode: "AI_MODELS_TIMEOUT",

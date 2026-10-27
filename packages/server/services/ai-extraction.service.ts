@@ -1733,6 +1733,7 @@ export const requestAiExtraction: AiExecutor = async (input) => {
   let response: Awaited<ReturnType<typeof executeAiTask>>;
   try {
     response = await executeAiTask("report_extraction", {
+      sessionKey: input.reportId,
       messages,
       temperature,
       responseFormat: "json_object",

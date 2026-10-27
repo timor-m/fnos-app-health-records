@@ -742,7 +742,7 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
     });
   }
   const baseUrl = resolveAiBaseUrl(provider, input.baseUrl, current.baseUrl);
-  const testStructuredOutput = !testVision && (provider === "ollama" || provider === "minimax");
+  const testStructuredOutput = !testVision && (provider === "ollama" || provider === "minimax" || provider === "opencode-go");
   const started = Date.now();
   try {
     const response = await executeAiChatCompletion({
@@ -763,7 +763,7 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
       }],
       temperature: resolveAiTemperature(provider, model),
       responseFormat: testStructuredOutput ? "json_object" : "text",
-      maxOutputTokens: testStructuredOutput ? 128 : 4,
+      maxOutputTokens: provider === "opencode-go" ? 2_048 : testStructuredOutput ? 128 : 4,
       timeoutMs: provider === "ollama" ? 120_000 : 15_000,
       timeoutCode: "AI_CONNECTION_TEST_TIMEOUT",
       timeoutMessage: "连接 AI 服务超时",

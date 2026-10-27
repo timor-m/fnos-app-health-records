@@ -24,7 +24,7 @@ import { useConfirm } from "../../composables/useConfirm";
 import { useToast } from "../../composables/useToast";
 import { request } from "../../utils/api";
 
-type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "minimax" | "ollama" | "custom";
+type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "minimax" | "opencode-go" | "ollama" | "custom";
 type AiProviderOption = {
   key: AiProviderKey;
   label: string;

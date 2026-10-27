@@ -485,6 +485,7 @@ export const runVisionReview: AiVisionReviewExecutor = async (
       const image = await loadImage(input.reportId, group.pageId);
       if (!image) throw new Error("页面图片不可用");
       const request: AiRuntimeRequest = {
+        sessionKey: input.reportId,
         messages: [
           { role: "system", content: visionReviewSystemPrompt(Boolean(group.pageReview)) },
           {

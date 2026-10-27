@@ -134,3 +134,18 @@ it("warns when leaving or reloading unsaved page or editor changes", async () =>
   await wrapper.get('input[type="number"]').setValue("900");
   expect(mocks.guard({ fullPath: "/me" })).toBe(false);
 });
+
+
+it("selects the OpenCode Go preset and saves its endpoint and model as a separate connection",async()=>{
+ stored.providers.push({key:"opencode-go",label:"OpenCode Go",defaultBaseUrl:"https://opencode.ai/inference/go/openai/v1",defaultTextModel:"glm-5.2",defaultVisionModel:""});
+ await start();
+ await button("添加连接配置").trigger("click");
+ const select=wrapper.findAllComponents({name:"FormSelect"}).find(item=>item.props('ariaLabel')==='服务商预设')!;
+ expect(select.props('options')).toContainEqual({value:'opencode-go',label:'OpenCode Go'});
+ select.vm.$emit('update:modelValue','opencode-go');await flushPromises();await select.trigger('change');await flushPromises();
+ await wrapper.get('input[type="password"]').setValue('synthetic-go-key');
+ await editorSave().trigger('click');await flushPromises();
+ const profiles=JSON.parse(puts()[0][1].body).profiles;
+ expect(profiles.find((item:any)=>item.provider==='opencode-go')).toMatchObject({baseUrl:'https://opencode.ai/inference/go/openai/v1',textModel:'glm-5.2',apiKey:'synthetic-go-key'});
+ expect(profiles.find((item:any)=>item.id==='main').provider).toBe('deepseek');
+});

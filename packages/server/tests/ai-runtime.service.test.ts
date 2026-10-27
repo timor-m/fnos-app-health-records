@@ -5,7 +5,9 @@ import { executeAiChatCompletion } from "../services/ai-runtime.service.ts";
 test("executes an OpenAI-compatible task without knowing report-domain fields", async () => {
   const originalFetch = globalThis.fetch;
   let body: Record<string, unknown> = {};
+  let headers = new Headers();
   globalThis.fetch = async (_input, init) => {
+    headers = new Headers(init?.headers);
     body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
     return new Response(JSON.stringify({
       model: "runtime-model-v2",
@@ -26,6 +28,7 @@ test("executes an OpenAI-compatible task without knowing report-domain fields", 
       timeoutMs: 15_000
     });
     assert.equal(body.model, "runtime-model");
+    assert.equal(headers.has("x-opencode-session"), false);
     assert.deepEqual(body.response_format, { type: "json_object" });
     assert.deepEqual(result, {
       provider: "test",
@@ -212,4 +215,38 @@ test("retries without thinking when an older DeepSeek model rejects the paramete
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+
+test("OpenCode Go identifies the client and keeps opaque sessions stable across retries and related calls", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{url:string;headers:Headers;body:Record<string,unknown>}> = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({url:String(url),headers:new Headers(init?.headers),body:JSON.parse(String(init?.body))});
+    if (calls.length === 1) return new Response(JSON.stringify({error:{message:"response_format is unsupported"}}), {status:400});
+    return new Response(JSON.stringify({choices:[{finish_reason:"stop",message:{content:'{"ok":true}'}}]}), {status:200});
+  };
+  try {
+    const config = {provider:"opencode.ai",providerKey:"opencode-go",baseUrl:"https://opencode.ai/inference/go/openai/v1",apiKey:"synthetic-key",model:"glm-5.2"};
+    const request = {messages:[{role:"user" as const,content:"Synthetic"}],responseFormat:"json_object" as const,maxOutputTokens:128,timeoutMs:15000,sessionKey:"synthetic-report-a"};
+    await executeAiChatCompletion(config, request);
+    await executeAiChatCompletion(config, request);
+    await executeAiChatCompletion(config, {...request,sessionKey:"synthetic-report-b"});
+    await executeAiChatCompletion(config, {...request,sessionKey:undefined});
+    assert.equal(calls.length,5);
+    const session = calls[0].headers.get("x-opencode-session");
+    assert.match(session!,/^[a-f0-9]{64}$/);
+    assert.equal(calls[1].headers.get("x-opencode-session"),session);
+    assert.equal(calls[2].headers.get("x-opencode-session"),session);
+    assert.notEqual(calls[3].headers.get("x-opencode-session"),session);
+    assert.ok(calls[4].headers.get("x-opencode-session"));
+    assert.equal(calls[1].body.response_format,undefined);
+    for(const call of calls) {
+      assert.equal(call.url,config.baseUrl+"/chat/completions");
+      assert.match(call.headers.get("user-agent")!,/^fnos-app-health-records\/\d+\.\d+\.\d+$/);
+      assert.equal(call.headers.get("authorization"),"Bearer synthetic-key");
+      assert.equal(call.body.sessionKey,undefined);
+      assert.ok(!call.headers.get("x-opencode-session")!.includes("synthetic-report"));
+    }
+  } finally { globalThis.fetch = originalFetch; }
 });

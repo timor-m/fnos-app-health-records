@@ -36,3 +36,11 @@ describe('AI environment snapshots',()=>{
   expect(feedbackSnapshotDisplay({ai:{...ai,model:'port'}})).toContainEqual({label:'AI 提取模型（提交时配置）',value:'port'});
  });
 });
+
+
+it('retains and displays OpenCode Go in the safe AI environment snapshot',async()=>{
+ const {feedbackEnvironmentPayload,feedbackSnapshotDisplay}=await import('../src/utils/feedback-environment');
+ const payload=feedbackEnvironmentPayload({ai:{enabled:true,visionEnabled:false,provider:'opencode-go',model:'glm-5.2',extractionDepth:'overview'}},{userAgent:'unknown',width:800,height:600});
+ expect(payload.ai?.provider).toBe('opencode-go');
+ expect(feedbackSnapshotDisplay(payload)).toContainEqual({label:'AI 服务商',value:'OpenCode Go'});
+});

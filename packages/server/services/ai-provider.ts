@@ -1,4 +1,4 @@
-export type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "minimax" | "ollama" | "custom";
+export type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "minimax" | "opencode-go" | "ollama" | "custom";
 
 export type AiProviderOption = {
   label: string;
@@ -61,6 +61,14 @@ export const aiProviderCatalog: Record<AiProviderKey, AiProviderOption> = {
     defaultVisionModel: "",
     defaultMaxOutputTokens: 2_048,
     modelHint: "中国大陆使用 api.minimaxi.com；M2 系列仅支持文本，M3 可用于视觉增强，请测试确认"
+  },
+  "opencode-go": {
+    label: "OpenCode Go",
+    defaultBaseUrl: "https://opencode.ai/inference/go/openai/v1",
+    defaultTextModel: "glm-5.2",
+    defaultVisionModel: "",
+    defaultMaxOutputTokens: 8_192,
+    modelHint: "使用 Go API Key；仅适配 Chat Completions 模型（如 glm-5.2）。Go 面向编程智能体，报告整理是否可用以服务方规定与实际测试为准"
   },
   ollama: {
     label: "Ollama",

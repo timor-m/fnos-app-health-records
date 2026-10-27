@@ -67,7 +67,7 @@ export function feedbackSnapshotDisplay(snapshot?:Record<string,Record<string,un
   const fields:Record<string,Record<string,string>>={app:{version:'应用版本'},deployment:{type:'部署环境',accessMode:'接入方式'},server:{platform:'服务端系统',arch:'系统架构',kernelVersion:'系统内核',nodeVersion:'Node.js'},database:{schemaVersion:'数据库版本'},client:{browserName:'浏览器',browserVersion:'浏览器版本',osName:'客户端系统',viewportWidth:'页面宽度',viewportHeight:'页面高度'},ocr:{available:'OCR 可用',engine:'OCR 引擎',modelVersion:'OCR 模型版本',pythonVersion:'Python',rapidocrVersion:'RapidOCR',pymupdfVersion:'PyMuPDF',tableModel:'表格识别可用',layoutModel:'版面分析可用'},ai:{enabled:'AI 已启用',visionEnabled:'AI 视觉增强',provider:'AI 服务商',model:'AI 提取模型（提交时配置）',visionModel:'AI 视觉模型（提交时配置）',extractionDepth:'AI 解析程度'}};
   const values:Record<string,string>={fnos:'fnOS',docker:'Docker',development:'开发环境',gateway:'网关访问',port:'端口直连',unknown:'未获取'};
   const ai = snapshot?.ai ? feedbackAiSnapshot({...snapshot.ai,enabled:snapshot.ai.enabled===true,visionEnabled:snapshot.ai.visionEnabled===true}) : null;
-  const providers:Record<string,string>={deepseek:'DeepSeek',kimi:'Kimi',glm:'GLM',qwen:'Qwen',openai:'OpenAI',doubao:'豆包',minimax:'MiniMax',ollama:'Ollama',custom:'自定义'};
+  const providers:Record<string,string>={deepseek:'DeepSeek',kimi:'Kimi',glm:'GLM',qwen:'Qwen',openai:'OpenAI',doubao:'豆包',minimax:'MiniMax','opencode-go':'OpenCode Go',ollama:'Ollama',custom:'自定义'};
   return Object.entries(fields).flatMap(([group,labels])=>Object.entries(labels)
     .filter(([key])=>snapshot?.[group] && Object.prototype.hasOwnProperty.call(snapshot[group],key))
     .map(([key,label])=>{
