@@ -2195,6 +2195,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .ai-header-remove:hover { color: var(--danger); }
 @media (min-width: 761px) and (pointer: fine) {
   .modal-panel.ai-profile-editor { width: min(800px, 100%); max-height: min(900px, calc(100dvh - 48px)); }
+  .ai-profile-editor .ai-editor-footer { position: sticky; bottom: 0; z-index: 3; background: var(--surface); }
 }
 @media (max-width: 760px), (pointer: coarse) {
   .ai-header-row { grid-template-columns: minmax(0, 1fr) auto; }

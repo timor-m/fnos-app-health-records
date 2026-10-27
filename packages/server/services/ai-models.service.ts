@@ -2,7 +2,7 @@ import {createError} from "h3";
 import {resolveAiHeaders} from "./ai-headers";
 import type {AiSettingsInput} from "./ai-settings.service";
 import { findAiProfile, parseStoredSettings, resolveActiveProfile, resolveAiBaseUrl } from "./ai-settings.service";
-import { normalizeAiProvider, aiProviderCatalog, aiProviderHasCredentials } from "./ai-provider";
+import { normalizeAiProvider, aiProviderCatalog, aiProviderHasCredentials, resolveAiModelsUrl } from "./ai-provider";
 import { fetchWithTimeout } from "../utils/outbound-request";
 import { aiRuntimeHeaders } from "./ai-runtime.service";
 
@@ -34,11 +34,10 @@ export async function listAiModels(input: AiSettingsInput = {}) {
   }
 
   try {
-    // 调用 OpenAI 兼容的 /v1/models 端点
-    const modelsUrl = `${baseUrl}/models`;
+    const modelsUrl = resolveAiModelsUrl(provider, baseUrl);
     const response = await fetchWithTimeout(modelsUrl, {
       method: "GET",
-      headers: aiRuntimeHeaders({provider, providerKey: provider, apiKey, headers})
+      headers: aiRuntimeHeaders({provider, providerKey: provider, baseUrl, apiKey, headers})
     }, {
       timeoutMs: 10_000,
       timeoutCode: "AI_MODELS_TIMEOUT",
@@ -48,9 +47,14 @@ export async function listAiModels(input: AiSettingsInput = {}) {
     });
 
     if (!response.ok) {
+      const reason = response.status === 401 ? "认证失败，请检查 API Key 和自定义鉴权 Header"
+        : response.status === 403 ? "访问被拒绝，请检查账号权限、请求头及服务方使用限制"
+        : response.status === 404 ? "模型列表地址不存在，请检查 API 地址和服务商预设"
+        : response.status === 429 ? "请求受限，请检查调用频率、额度或余额"
+        : "请检查 AI 服务状态、配置和网络";
       throw createError({
         statusCode: 502, data: { code: "AI_UPSTREAM_ERROR", meta: { upstreamStatus: response.status } },
-        statusMessage: "获取模型列表失败，请检查 AI 服务状态和配置"
+        statusMessage: `获取模型列表失败（上游 HTTP ${response.status}）：${reason}`
       });
     }
 

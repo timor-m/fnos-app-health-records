@@ -95,6 +95,21 @@ export function normalizeAiProvider(value: unknown): AiProviderKey {
     : "deepseek";
 }
 
+export function resolveAiModelsUrl(provider: AiProviderKey, baseUrl: string) {
+  const base = baseUrl.replace(/\/+$/, "");
+  // Go exposes its model catalog outside the OpenAI protocol-specific path.
+  return `${isOpenCodeTarget(provider, baseUrl) ? base.replace(/\/openai\/v1$/, "/v1") : base}/models`;
+}
+
+export function isOpenCodeTarget(provider: string, baseUrl?: string) {
+  if (provider === "opencode-go") return true;
+  try {
+    return new URL(baseUrl || "").hostname === "opencode.ai";
+  } catch {
+    return false;
+  }
+}
+
 export function resolveAiMaxOutputTokens(provider: AiProviderKey) {
   const configured = Number(process.env.AI_MAX_OUTPUT_TOKENS);
   if (Number.isFinite(configured) && configured > 0) {

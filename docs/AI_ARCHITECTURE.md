@@ -144,7 +144,13 @@ OCR 重建后的每一行会先标记为元数据、表头、章节标题、定�
 
 新增 `opencode-go` provider，复用现有多连接配置与 OpenAI Chat Completions 运行时；默认地址为 `https://opencode.ai/inference/go/openai/v1`，默认文本模型 `glm-5.2`，视觉模型留空，必须填写 Go API Key。仅适配该 Chat Completions 端点支持的模型，不包含 Anthropic Messages、Responses 或 Google 专用协议。连接测试会验证结构化 JSON 输出。
 
-按 [OpenCode Go 官方文档](https://opencode.ai/v2/docs/console/go/)，客户端使用健康档案自身的 User-Agent，并附带 `x-opencode-session`；文本解析与原图复核使用同一报告会话范围，经进程内随机密钥 HMAC 生成不透明会话 ID，不发送原始报告/成员标识；同进程内重试和多单元调用保持一致，重启后开启新会话。独立连接测试使用随机会话。其他 provider 不增加这些请求头。
+Go 模型目录使用独立路径 `/inference/go/v1/models`，不在 `/openai/v1` 后追加 `/models`。模型列表及完整测试共用路径解析，保留配置的域名和反向代理前缀，聊天请求仍使用 `/inference/go/openai/v1/chat/completions`。目录公开可读，目录请求成功不代表 API Key 验证通过，完整测试通过后续模型调用验证鉴权。
+
+按 [OpenCode Go 官方文档](https://opencode.ai/v2/docs/console/go/)及 [Hermes PR #101864](https://github.com/NousResearch/hermes-agent/pull/101864)，客户端使用健康档案自身的 User-Agent，并附带 `x-opencode-session`。识别 Go 预设以及主机名严格为 `opencode.ai` 的自定义地址，覆盖模型目录、连接测试和实际调用；其他主机的自定义连接不增加这些请求头。显式配置的同名 Header 优先。
+
+文本解析与原图复核使用同一报告会话范围，经进程内随机密钥 HMAC 生成不透明会话 ID，不发送原始报告/成员标识；同进程内重试和多单元调用保持一致，重启后开启新会话。独立连接测试使用随机会话，完整测试中的目录、文本与两次视觉探测共用同一随机会话。模型列表错误显示上游 HTTP 状态和固定分类提示，不回显上游响应正文或凭据。
+
+2026-10-27 对照验证：使用应用自身客户端标识及会话头读取官方目录、不携带凭据时返回 200；携带合成无效凭据时返回 401，说明匿名目录可读不能证明用户 Key 可用。本地真实 HTTP 回归覆盖完整测试四次请求的会话、User-Agent 与鉴权头；这不等于已复现用户 NAS 网络或真实账号上的失败。
 
 Go 官方面向编程智能体，健康报告整理不在其主要适用场景内。配置页保留此提示，不伪装为编码客户端；未以真实 Go 账号验证服务许可、额度、模型可用性或健康报告请求是否被接受。需要管理员按服务方规定及实际连接测试判断可用性。应用与数据库版本保持不变，无迁移。
 

@@ -250,3 +250,26 @@ test("OpenCode Go identifies the client and keeps opaque sessions stable across 
     }
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test('custom OpenCode chat calls share opaque sessions while unrelated and lookalike hosts are unchanged',async()=>{
+ const originalFetch=globalThis.fetch;
+ const captured:Headers[]=[];
+ globalThis.fetch=async(_url,init)=>{captured.push(new Headers(init?.headers));return new Response(JSON.stringify({choices:[{message:{content:'ok'}}]}));};
+ try {
+  const config={provider:'opencode.ai',providerKey:'custom',baseUrl:'https://opencode.ai/inference/go/openai/v1',apiKey:'synthetic-key',model:'glm-5.3'};
+  const request={messages:[{role:'user' as const,content:'Synthetic'}],maxOutputTokens:32,timeoutMs:1000,sessionKey:'synthetic-conversation'};
+  await executeAiChatCompletion(config,request);
+  await executeAiChatCompletion(config,request);
+  await executeAiChatCompletion({...config,baseUrl:'https://opencode.ai/zen/v1'},request);
+  await executeAiChatCompletion({...config,baseUrl:'https://opencode.ai.synthetic.invalid/v1'},request);
+  await executeAiChatCompletion({...config,baseUrl:'https://other.synthetic.invalid/v1'},request);
+  const session=captured[0].get('x-opencode-session');
+  assert.match(session!,/^[a-f0-9]{64}$/);
+  assert.equal(captured[1].get('x-opencode-session'),session);
+  assert.equal(captured[2].get('x-opencode-session'),session);
+  for(const headers of captured.slice(3)) {
+   assert.equal(headers.has('x-opencode-session'),false);
+   assert.equal(headers.has('user-agent'),false);
+  }
+ } finally {globalThis.fetch=originalFetch;}
+});

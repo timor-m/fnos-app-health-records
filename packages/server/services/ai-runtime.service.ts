@@ -1,6 +1,7 @@
 import { fetchWithTimeout } from "../utils/outbound-request";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import packageJson from "../../../package.json" with { type: "json" };
+import { isOpenCodeTarget } from "./ai-provider";
 
 // Process-local salt keeps routing sessions opaque without retaining a report map.
 const sessionSalt = randomBytes(32);
@@ -19,9 +20,8 @@ export type AiRuntimeConfig = {
   headers?: Record<string, string>;
 };
 
-export function aiRuntimeHeaders(config: Pick<AiRuntimeConfig, "provider" | "providerKey" | "apiKey" | "headers">, sessionKey?: string): Record<string, string> {
-  const isOpenCodeGo = config.providerKey === "opencode-go" || config.provider === "opencode-go";
-  const sessionId = isOpenCodeGo
+export function aiRuntimeHeaders(config: Pick<AiRuntimeConfig, "provider" | "providerKey" | "apiKey" | "headers"> & Partial<Pick<AiRuntimeConfig, "baseUrl">>, sessionKey?: string): Record<string, string> {
+  const sessionId = isOpenCodeTarget(config.providerKey || config.provider, config.baseUrl)
     ? sessionKey ? createHmac("sha256", sessionSalt).update(sessionKey).digest("hex") : randomUUID()
     : null;
   const headers = new Headers({

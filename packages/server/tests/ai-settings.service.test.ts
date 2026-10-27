@@ -808,7 +808,7 @@ test("saves OpenCode Go independently, reloads its key and tests structured outp
       assert.equal(new Headers(init?.headers).get("authorization"),"Bearer synthetic-go-key");
       assert.ok(new Headers(init?.headers).get("x-opencode-session"));
       if (init?.method === "GET") {
-        assert.equal(String(url),"https://opencode.ai/inference/go/openai/v1/models");
+        assert.equal(String(url),"https://opencode.ai/inference/go/v1/models");
         return new Response(JSON.stringify({data:[{id:"glm-5.2",name:"GLM-5.2"}]}),{status:200});
       }
       assert.equal(String(url),"https://opencode.ai/inference/go/openai/v1/chat/completions");
