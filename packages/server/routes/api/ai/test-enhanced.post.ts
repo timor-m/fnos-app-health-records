@@ -1,10 +1,11 @@
 import {resolveAiHeaders} from "../../../services/ai-headers";
+import { randomUUID } from "node:crypto";
 import { createError, defineEventHandler, readBody } from "h3";
 import { ok } from "../../../utils/api-response";
 import { getRequestUser } from "../../../utils/request-user";
 import { isAdministrator } from "../../../domain/request-user";
 import { findAiProfile, parseStoredSettings, resolveActiveProfile, resolveAiBaseUrl } from "../../../services/ai-settings.service";
-import { normalizeAiProvider, aiProviderCatalog, isMiniMaxM2Model, aiProviderHasCredentials } from "../../../services/ai-provider";
+import { normalizeAiProvider, aiProviderCatalog, isMiniMaxM2Model, aiProviderHasCredentials, resolveAiModelsUrl } from "../../../services/ai-provider";
 import { aiVisionProbeImageUrl } from "../../../services/ai-vision-probe";
 import { executeAiChatCompletion, aiRuntimeHeaders } from "../../../services/ai-runtime.service";
 
@@ -76,18 +77,19 @@ export default defineEventHandler(async (event) => {
   }
 
   const steps: TestStep[] = [];
+  const sessionKey = randomUUID();
   const overallStartTime = Date.now();
 
-  // 步骤 1：测试 API Key 可用性（通过获取模型列表）
+  // Go 的模型目录公开可读，实际鉴权由后续模型调用验证。
   const step1Start = Date.now();
-  const serviceStepName = provider === "ollama" ? "测试 Ollama 服务" : "测试 API Key";
+  const serviceStepName = provider === "ollama" ? "测试 Ollama 服务" : provider === "opencode-go" ? "测试模型列表" : "测试 API Key";
   steps.push({ name: serviceStepName, status: "pending", message: "正在验证..." });
 
   try {
-    const modelsUrl = `${baseUrl}/models`;
+    const modelsUrl = resolveAiModelsUrl(provider, baseUrl);
     const response = await fetch(modelsUrl, {
       method: "GET",
-      headers: aiRuntimeHeaders({provider,providerKey:provider,apiKey,headers}),
+      headers: aiRuntimeHeaders({provider,providerKey:provider,baseUrl,apiKey,headers}, sessionKey),
       signal: AbortSignal.timeout(10_000)
     });
 
@@ -98,7 +100,7 @@ export default defineEventHandler(async (event) => {
     steps[steps.length - 1] = {
       name: serviceStepName,
       status: "success",
-      message: provider === "ollama" ? "Ollama 服务可访问" : "API Key 验证通过",
+      message: provider === "ollama" ? "Ollama 服务可访问" : provider === "opencode-go" ? "模型列表可访问，API Key 将通过模型调用验证" : "API Key 验证通过",
       elapsedMs: Date.now() - step1Start
     };
   } catch (cause) {
@@ -130,6 +132,7 @@ export default defineEventHandler(async (event) => {
     const result = await executeAiChatCompletion(
       { provider, providerKey: provider, baseUrl, apiKey, headers, model: textModel },
       {
+        sessionKey,
         messages: [{ role: "user", content: "reply ok" }],
         temperature: 0,
         maxOutputTokens: 4,
@@ -193,6 +196,7 @@ export default defineEventHandler(async (event) => {
       const result = await executeAiChatCompletion(
         { provider, providerKey: provider, baseUrl, apiKey, headers, model: visionModel },
         {
+          sessionKey,
           messages: [{
             role: "user",
             content: [
@@ -259,6 +263,7 @@ export default defineEventHandler(async (event) => {
       const result = await executeAiChatCompletion(
         { provider, providerKey: provider, baseUrl, apiKey, headers, model: visionModel },
         {
+          sessionKey,
           messages: [{
             role: "user",
             content: [
