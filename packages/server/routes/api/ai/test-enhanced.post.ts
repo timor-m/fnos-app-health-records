@@ -1,11 +1,12 @@
+import {resolveAiHeaders} from "../../../services/ai-headers";
 import { createError, defineEventHandler, readBody } from "h3";
 import { ok } from "../../../utils/api-response";
 import { getRequestUser } from "../../../utils/request-user";
 import { isAdministrator } from "../../../domain/request-user";
 import { findAiProfile, parseStoredSettings, resolveActiveProfile, resolveAiBaseUrl } from "../../../services/ai-settings.service";
-import { normalizeAiProvider, aiProviderCatalog, isMiniMaxM2Model } from "../../../services/ai-provider";
+import { normalizeAiProvider, aiProviderCatalog, isMiniMaxM2Model, aiProviderHasCredentials } from "../../../services/ai-provider";
 import { aiVisionProbeImageUrl } from "../../../services/ai-vision-probe";
-import { executeAiChatCompletion } from "../../../services/ai-runtime.service";
+import { executeAiChatCompletion, aiRuntimeHeaders } from "../../../services/ai-runtime.service";
 
 type TestStep = {
   name: string;
@@ -46,6 +47,7 @@ export default defineEventHandler(async (event) => {
     apiKey: ""
   };
 
+  const headers = resolveAiHeaders(body.headers, fallback?.headers);
   const apiKey = typeof body.apiKey === "string" && body.apiKey.trim()
     ? body.apiKey.trim()
     : current.apiKey;
@@ -59,7 +61,7 @@ export default defineEventHandler(async (event) => {
   }
 
   // 验证必填项
-  if (aiProviderCatalog[provider].apiKeyRequired !== false && !apiKey) {
+  if (!aiProviderHasCredentials(provider, apiKey, headers)) {
     throw createError({
       statusCode: 400, data: { code: "AI_CONFIG_INVALID" },
       statusMessage: `请先配置 ${aiProviderCatalog[provider].label} API Key`
@@ -85,7 +87,7 @@ export default defineEventHandler(async (event) => {
     const modelsUrl = `${baseUrl}/models`;
     const response = await fetch(modelsUrl, {
       method: "GET",
-      headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+      headers: aiRuntimeHeaders({provider,providerKey:provider,apiKey,headers}),
       signal: AbortSignal.timeout(10_000)
     });
 
@@ -126,7 +128,7 @@ export default defineEventHandler(async (event) => {
 
   try {
     const result = await executeAiChatCompletion(
-      { provider, providerKey: provider, baseUrl, apiKey, model: textModel },
+      { provider, providerKey: provider, baseUrl, apiKey, headers, model: textModel },
       {
         messages: [{ role: "user", content: "reply ok" }],
         temperature: 0,
@@ -189,7 +191,7 @@ export default defineEventHandler(async (event) => {
 
     try {
       const result = await executeAiChatCompletion(
-        { provider, providerKey: provider, baseUrl, apiKey, model: visionModel },
+        { provider, providerKey: provider, baseUrl, apiKey, headers, model: visionModel },
         {
           messages: [{
             role: "user",
@@ -255,7 +257,7 @@ export default defineEventHandler(async (event) => {
 
     try {
       const result = await executeAiChatCompletion(
-        { provider, providerKey: provider, baseUrl, apiKey, model: visionModel },
+        { provider, providerKey: provider, baseUrl, apiKey, headers, model: visionModel },
         {
           messages: [{
             role: "user",

@@ -10,7 +10,7 @@ import { cleanIndicatorName } from "../utils/indicator-name";
 import { cleanOcrResult } from "../utils/ocr-result";
 import { getAiTaskSettings } from "./ai-settings.service";
 import { backfillMemberBloodTypeFromReport } from "./member.service";
-import { aiProviderHasRequiredApiKey, resolveAiMaxOutputTokens, resolveAiTemperature } from "./ai-provider";
+import { aiProviderHasCredentials, resolveAiMaxOutputTokens, resolveAiTemperature } from "./ai-provider";
 import { executeAiTask } from "./ai-task.service";
 import { buildAiChatCompletionRequestBody } from "./ai-runtime.service";
 import {
@@ -1265,7 +1265,7 @@ export function isAiExtractionConfigured() {
   return (
     settings.enabled &&
     Boolean(settings.model && settings.baseUrl) &&
-    (!aiProviderHasRequiredApiKey(settings.provider) || Boolean(settings.apiKey))
+    aiProviderHasCredentials(settings.provider, settings.apiKey, settings.headers)
   );
 }
 
@@ -1678,7 +1678,7 @@ function parseJsonContent(content: string) {
 export const requestAiExtraction: AiExecutor = async (input) => {
   const settings = getAiTaskSettings("report_extraction", true);
   if (!settings.enabled || !settings.model || !settings.baseUrl ||
-      (aiProviderHasRequiredApiKey(settings.provider) && !settings.apiKey)) {
+      !aiProviderHasCredentials(settings.provider, settings.apiKey, settings.headers)) {
     throw Object.assign(new Error("AI 解析尚未完整配置"), {
       code: "AI_NOT_CONFIGURED",
     });

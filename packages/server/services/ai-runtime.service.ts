@@ -16,20 +16,23 @@ export type AiRuntimeConfig = {
   baseUrl: string;
   apiKey: string;
   model: string;
+  headers?: Record<string, string>;
 };
 
-export function aiRuntimeHeaders(config: Pick<AiRuntimeConfig, "provider" | "providerKey" | "apiKey">, sessionKey?: string): Record<string, string> {
+export function aiRuntimeHeaders(config: Pick<AiRuntimeConfig, "provider" | "providerKey" | "apiKey" | "headers">, sessionKey?: string): Record<string, string> {
   const isOpenCodeGo = config.providerKey === "opencode-go" || config.provider === "opencode-go";
   const sessionId = isOpenCodeGo
     ? sessionKey ? createHmac("sha256", sessionSalt).update(sessionKey).digest("hex") : randomUUID()
     : null;
-  return {
+  const headers = new Headers({
     ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}),
     ...(sessionId ? {
       "user-agent": `${packageJson.name}/${packageJson.version}`,
       "x-opencode-session": sessionId
     } : {})
-  };
+  });
+  for (const [name, value] of Object.entries(config.headers || {})) headers.set(name, value);
+  return Object.fromEntries(headers.entries());
 }
 
 export type AiRuntimeRequest = {
@@ -120,8 +123,8 @@ export async function executeAiChatCompletion(
   const send = (body: Record<string, unknown>) => fetchWithTimeout(endpoint, {
     method: "POST",
     headers: {
-      ...headers,
-      "content-type": "application/json"
+      "content-type": "application/json",
+      ...headers
     },
     body: JSON.stringify(body)
   }, requestOptions);

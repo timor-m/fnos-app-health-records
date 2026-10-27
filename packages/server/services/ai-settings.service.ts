@@ -1,3 +1,4 @@
+import {resolveAiHeaders, type AiHeaderInput} from "./ai-headers";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -8,7 +9,7 @@ import { getAppConfig } from "../utils/runtime-config";
 import {
   aiProviderCatalog,
   isMiniMaxM2Model,
-  aiProviderHasRequiredApiKey,
+  aiProviderHasCredentials,
   normalizeAiProvider,
   resolveAiTemperature,
   type AiProviderKey
@@ -42,6 +43,7 @@ export type AiProfile = {
   textModel: string;
   visionModel: string;
   apiKey: string;
+  headers: Record<string, string>;
 };
 
 export type AiTaskBinding = {
@@ -59,6 +61,7 @@ export type AiProfileInput = {
   visionModel?: string;
   apiKey?: string;
   clearApiKey?: boolean;
+  headers?: AiHeaderInput[];
 };
 
 export type AiTaskBindingInput = {
@@ -84,10 +87,12 @@ export type AiSettingsInput = {
   visionModel?: string;
   apiKey?: string;
   clearApiKey?: boolean;
+  headers?: AiHeaderInput[];
   testVision?: boolean;
 };
 
 type StoredAiProfile = {
+  headersEncrypted?: string;
   id?: string;
   name?: string;
   provider?: string;
@@ -201,7 +206,8 @@ function providerDefaults(provider: AiProviderKey) {
     baseUrl: defaults.defaultBaseUrl,
     textModel: defaults.defaultTextModel,
     visionModel: defaults.defaultVisionModel,
-    apiKey: ""
+    apiKey: "",
+    headers: {}
   };
 }
 
@@ -229,6 +235,7 @@ function parseStoredProfile(raw: StoredAiProfile, taken: Set<string>): AiProfile
     id,
     name: (typeof raw.name === "string" ? raw.name.trim() : "") || aiProviderCatalog[provider].label,
     provider,
+    headers: typeof raw.headersEncrypted === "string" ? resolveAiHeaders(Object.entries(JSON.parse(decrypt(raw.headersEncrypted))).map(([name,value])=>({name,value}))) : {},
     visionEnabled: raw.visionEnabled === true,
     baseUrl: normalizeProviderBaseUrl(provider, typeof raw.baseUrl === "string" ? raw.baseUrl : defaults.baseUrl),
     textModel: typeof raw.textModel === "string" ? raw.textModel : defaults.textModel,
@@ -248,6 +255,7 @@ function migrateLegacySettings(stored: StoredAiSettings): ParsedAiSettings {
     if (!raw) return undefined;
     const defaults = providerDefaults(provider);
     return {
+      headers: {},
       visionEnabled: raw.visionEnabled === true,
       baseUrl: normalizeProviderBaseUrl(provider, typeof raw.baseUrl === "string" ? raw.baseUrl : defaults.baseUrl),
       textModel: typeof raw.textModel === "string" ? raw.textModel : defaults.textModel,
@@ -275,6 +283,7 @@ function migrateLegacySettings(stored: StoredAiSettings): ParsedAiSettings {
       baseUrl: merged?.baseUrl ?? flat?.baseUrl ?? "",
       textModel: merged?.textModel ?? flat?.textModel ?? "",
       visionModel: merged?.visionModel ?? flat?.visionModel ?? "",
+      headers: {},
       apiKey: merged?.apiKey ?? flat?.apiKey ?? ""
     };
   }
@@ -439,7 +448,8 @@ function serializeSettings(parsed: ParsedAiSettings) {
       baseUrl: profile.baseUrl,
       textModel: profile.textModel,
       visionModel: profile.visionModel,
-      apiKeyEncrypted: encrypt(profile.apiKey)
+      apiKeyEncrypted: encrypt(profile.apiKey),
+      ...(Object.keys(profile.headers).length ? {headersEncrypted:encrypt(JSON.stringify(profile.headers))} : {})
     })),
     taskBindings: parsed.taskBindings
   };
@@ -455,6 +465,7 @@ function publicProfile(profile: AiProfile) {
     baseUrl: profile.baseUrl,
     textModel: profile.textModel,
     visionModel: profile.visionModel,
+    headers: Object.keys(profile.headers).map(name=>({name,value:"",configured:true})),
     apiKeyConfigured: Boolean(profile.apiKey),
     apiKeyMasked: maskApiKey(profile.apiKey)
   };
@@ -530,6 +541,7 @@ export function getAiTaskSettings(taskKey: AiTaskKey, includeSecret = false) {
     visionModel: profile?.visionModel || "",
     visionEnabled: profile?.visionEnabled === true,
     apiKey: includeSecret ? profile?.apiKey || "" : "",
+    headers: includeSecret ? profile?.headers || {} : {},
     inherited: !binding
   };
 }
@@ -547,6 +559,7 @@ function hasLegacySaveFields(input: AiSettingsInput) {
     || input.visionModel !== undefined
     || input.visionEnabled !== undefined
     || typeof input.apiKey === "string"
+    || input.headers !== undefined
     || input.clearApiKey === true
   );
 }
@@ -586,6 +599,7 @@ function applyProfileInput(
     baseUrl: resolveAiBaseUrl(provider, raw.baseUrl, existing?.baseUrl || defaults.baseUrl),
     textModel: String(raw.textModel || existing?.textModel || defaults.textModel).trim(),
     visionModel,
+    headers: resolveAiHeaders(raw.headers, existing?.headers),
     apiKey
   };
 }
@@ -691,6 +705,7 @@ export function saveAiSettings(input: AiSettingsInput | undefined) {
         textModel: input.textModel,
         visionModel: input.visionModel,
         apiKey: input.apiKey,
+        headers: input.headers,
         clearApiKey: input.clearApiKey
       },
       existing,
@@ -726,6 +741,7 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
   const fallbackProfile = byId
     || (input.provider ? parsed.profiles.find((profile) => profile.provider === provider) : resolveActiveProfile(parsed));
   const current = fallbackProfile || { ...providerDefaults(provider) };
+  const headers = resolveAiHeaders(input.headers, current.headers);
   const apiKey = typeof input.apiKey === "string" && input.apiKey.trim() ? input.apiKey.trim() : current.apiKey;
   const textModel = String(input.textModel || current.textModel).trim();
   const testVision = input.testVision === true;
@@ -733,7 +749,7 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
   if (isMiniMaxM2Model(model) && testVision) {
     throw createError({ statusCode: 400, data: { code: "AI_CONFIG_INVALID" }, statusMessage: "MiniMax M2 系列当前不支持图片输入，请使用文本模型测试" });
   }
-  if ((aiProviderHasRequiredApiKey(provider) && !apiKey) || !model) {
+  if (!aiProviderHasCredentials(provider, apiKey, headers) || !model) {
     throw createError({
       statusCode: 400, data: { code: "AI_CONFIG_INVALID" },
       statusMessage: aiProviderCatalog[provider].apiKeyRequired === false
@@ -748,6 +764,7 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
     const response = await executeAiChatCompletion({
       provider,
       providerKey: provider,
+      headers,
       baseUrl,
       apiKey,
       model

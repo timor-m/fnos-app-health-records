@@ -7,7 +7,7 @@ import { getAppConfig } from "../utils/runtime-config";
 import { writeAiInputDebugLog } from "../utils/ai-input-debug-log";
 import { getAiTaskSettings } from "./ai-settings.service";
 import {
-  aiProviderHasRequiredApiKey,
+  aiProviderHasCredentials,
   resolveAiTemperature,
 } from "./ai-provider";
 import {
@@ -423,7 +423,7 @@ export const runVisionReview: AiVisionReviewExecutor = async (
     !settings.visionEnabled ||
     !settings.visionModel ||
     !settings.baseUrl ||
-    (aiProviderHasRequiredApiKey(settings.provider) && !settings.apiKey)
+    !aiProviderHasCredentials(settings.provider, settings.apiKey, settings.headers)
   ) {
     options.onEvent?.({type:'vision_review_skipped',message:'当前未启用或未配置可用的视觉增强，本轮未发送原图',detail:{reason:'not_configured'}});
     return null;
@@ -462,6 +462,7 @@ export const runVisionReview: AiVisionReviewExecutor = async (
     providerKey: settings.provider,
     baseUrl: settings.baseUrl,
     apiKey: settings.apiKey,
+    headers: settings.headers,
     model: settings.visionModel,
   };
   const acceptedAll: AiObservation[] = [];

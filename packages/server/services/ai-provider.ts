@@ -107,6 +107,10 @@ export function aiProviderHasRequiredApiKey(provider: AiProviderKey) {
   return aiProviderCatalog[provider].apiKeyRequired !== false;
 }
 
+export function aiProviderHasCredentials(provider: AiProviderKey, apiKey: string, headers: Record<string, string> = {}) {
+  return !aiProviderHasRequiredApiKey(provider) || Boolean(apiKey || headers.authorization || headers["x-api-key"]);
+}
+
 export function resolveAiTemperature(
   provider: AiProviderKey,
   model: string,

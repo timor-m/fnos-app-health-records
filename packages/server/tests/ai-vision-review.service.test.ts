@@ -155,6 +155,7 @@ async function withAiSettings(
       visionModel: "vision-model",
       visionEnabled,
       apiKey: "test-key",
+      headers: [{name:"X-Vision-Test",value:"synthetic-vision-header"}],
     });
     await run();
   } finally {
@@ -286,6 +287,7 @@ test("runVisionReview reviews pages, accepts anchored observations and accumulat
         onEvent: (event) => events.push(event),
         loadImage: async () => ({ dataUrl: "data:image/jpeg;base64,AAAA", bytes: 4 }),
         chat: async (_config: AiRuntimeConfig, request: AiRuntimeRequest) => {
+          assert.equal(_config.headers?.["x-vision-test"],"synthetic-vision-header");
           seenRequests.push(request);
           return chatResponse(visionJson);
         },

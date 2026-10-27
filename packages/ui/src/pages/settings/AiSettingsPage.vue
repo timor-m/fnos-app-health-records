@@ -34,7 +34,9 @@ type AiProviderOption = {
   modelHint?: string;
   apiKeyRequired?: boolean;
 };
+type AiHeaderRow = {name:string;value:string;configured?:boolean};
 type AiProfile = {
+  headers?: AiHeaderRow[];
   id: string;
   name: string;
   provider: AiProviderKey;
@@ -121,7 +123,8 @@ const editor = ref({
   visionEnabled: false,
   apiKey: "",
   apiKeyConfigured: false,
-  apiKeyMasked: ""
+  apiKeyMasked: "",
+  headers: [] as AiHeaderRow[]
 });
 const currentEditorProvider = computed(() =>
   ai.value.providers.find((provider) => provider.key === editor.value.provider) || null
@@ -170,7 +173,8 @@ function openEditor(profile?: AiProfile) {
       visionEnabled: profile.visionEnabled,
       apiKey: "",
       apiKeyConfigured: profile.apiKeyConfigured,
-      apiKeyMasked: profile.apiKeyMasked
+      apiKeyMasked: profile.apiKeyMasked,
+      headers: (profile.headers || []).map(header=>({...header,value:""}))
     };
   } else {
     editorId.value = newProfileId();
@@ -184,7 +188,8 @@ function openEditor(profile?: AiProfile) {
       visionEnabled: false,
       apiKey: "",
       apiKeyConfigured: false,
-      apiKeyMasked: ""
+      apiKeyMasked: "",
+      headers: []
     };
   }
   editorSnapshot.value = JSON.stringify(editor.value);
@@ -195,6 +200,7 @@ function closeEditor() {
   if (saving.value) return;
   editorOpen.value = false;
   editor.value.apiKey = "";
+  editor.value.headers = [];
   editorClearKey.value = false;
 }
 
@@ -234,7 +240,8 @@ async function applyEditor() {
     textModel: editor.value.textModel.trim(),
     visionModel: editor.value.visionModel.trim(),
     apiKeyConfigured: editor.value.apiKeyConfigured,
-    apiKeyMasked: editor.value.apiKeyMasked
+    apiKeyMasked: editor.value.apiKeyMasked,
+    headers: editorHeaders().map(header=>({name:header.name,value:"",configured:true}))
   };
   const exists = ai.value.profiles.some((item) => item.id === profile.id);
   const candidate = {
@@ -242,7 +249,7 @@ async function applyEditor() {
     profiles: exists ? ai.value.profiles.map((item) => item.id === profile.id ? profile : item) : [...ai.value.profiles, profile],
     defaultProfileId: ai.value.defaultProfileId || profile.id
   };
-  if (await save(candidate, { id: profile.id, apiKey: typedKey, clearApiKey: editorClearKey.value && !typedKey })) {
+  if (await save(candidate, { id: profile.id, apiKey: typedKey, clearApiKey: editorClearKey.value && !typedKey, headers: editorHeaders() })) {
     closeEditor();
     toast.show("AI 配置已保存");
   } else {
@@ -276,6 +283,10 @@ function removeProfile(profile: AiProfile) {
 }
 
 /* ---------- 编辑器内的连接测试 ---------- */
+function editorHeaders() {
+  return editor.value.headers.filter(header=>header.name.trim() || header.value).map(header=>({name:header.name.trim(),value:header.value}));
+}
+
 function editorBody() {
   return {
     ...(persistedIds.value.has(editorId.value) ? { profileId: editorId.value } : {}),
@@ -284,6 +295,7 @@ function editorBody() {
     textModel: editor.value.textModel,
     visionModel: editor.value.visionModel,
     visionEnabled: editor.value.visionEnabled,
+    headers: editorHeaders(),
     ...(editor.value.apiKey.trim() ? { apiKey: editor.value.apiKey.trim() } : {})
   };
 }
@@ -291,13 +303,8 @@ function editorBody() {
 async function fetchModelList(type: "text" | "vision") {
   modelListLoading.value = true;
   try {
-    const params = new URLSearchParams();
-    params.set("provider", editor.value.provider);
-    params.set("baseUrl", editor.value.baseUrl);
-    if (editor.value.apiKey.trim()) params.set("apiKey", editor.value.apiKey.trim());
-    if (persistedIds.value.has(editorId.value)) params.set("profileId", editorId.value);
-    const result = await request<{ models: Array<{ id: string; name: string }>; total: number }>(`ai/models?${params.toString()}`, {
-      method: "GET"
+    const result = await request<{ models: Array<{ id: string; name: string }>; total: number }>("ai/models", {
+      method: "POST", body: JSON.stringify(editorBody())
     });
     if (type === "text") {
       textModelList.value = result.models;
@@ -391,7 +398,7 @@ function applyLoadedSettings(value: AiSettings) {
   savedSnapshot.value = JSON.stringify(ai.value);
 }
 
-async function save(settings = ai.value, secret?: { id: string; apiKey: string; clearApiKey: boolean }) {
+async function save(settings = ai.value, secret?: { id: string; apiKey: string; clearApiKey: boolean; headers?: Array<{name:string;value:string}> }) {
   if (saving.value) return false;
   saving.value = true; message.value = "";
   try {
@@ -417,6 +424,7 @@ async function save(settings = ai.value, secret?: { id: string; apiKey: string; 
         baseUrl: profile.baseUrl,
         textModel: profile.textModel,
         visionModel: profile.visionModel,
+        ...(secret?.id === profile.id ? {headers: secret.headers} : {}),
         ...(secret?.id === profile.id && secret.apiKey ? { apiKey: secret.apiKey } : {}),
         ...(secret?.id === profile.id && secret.clearApiKey ? { clearApiKey: true } : {})
       })),
@@ -611,6 +619,19 @@ onUnmounted(() => {
                 已保存 {{ editor.apiKeyMasked }}，留空保持不变；<button type="button" class="ai-clear-key" @click="clearSavedKey">清除已保存的 Key</button>
               </small>
             </label>
+            <details class="ai-custom-headers" :open="editor.headers.length > 0">
+              <summary>进阶配置</summary>
+              <div class="ai-custom-headers-content">
+                <strong>自定义 Headers</strong>
+                <div v-for="(header,index) in editor.headers" :key="index" class="ai-header-row">
+                  <input v-model="header.name" :aria-label="'Header 名称 '+(index+1)" placeholder="Header 名称" autocomplete="off" spellcheck="false" />
+                  <input v-model="header.value" type="password" :aria-label="'Header 值 '+(index+1)" :placeholder="header.configured ? '已配置，留空保持不变' : 'Header 值'" autocomplete="new-password" />
+                  <button type="button" class="ai-header-remove" :aria-label="'删除 Header '+(index+1)" @click="editor.headers.splice(index,1)"><X :size="16" /></button>
+                </div>
+                <button type="button" class="soft-action-button" :disabled="editor.headers.length >= 32" @click="editor.headers.push({name:'',value:''})"><Plus :size="14" />添加 Header</button>
+                <small class="field-hint">附加到此连接的每次 AI 请求，同名 Header 覆盖默认值。已有值留空保持不变，删除行可移除；可配置 Authorization 或 x-api-key 鉴权。</small>
+              </div>
+            </details>
             <div class="form-grid ai-model-grid">
               <label>
                 <span>文本模型</span>
