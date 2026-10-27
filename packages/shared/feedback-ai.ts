@@ -1,5 +1,5 @@
 export const feedbackAiFields = ['enabled','visionEnabled','provider','model','visionModel','extractionDepth'] as const;
-const providers = new Set(['deepseek','kimi','glm','qwen','openai','doubao','minimax','ollama','custom']);
+const providers = new Set(['deepseek','kimi','glm','qwen','openai','doubao','minimax','opencode-go','ollama','custom']);
 
 type AiConfiguration = {
   enabled: boolean; visionEnabled: boolean;

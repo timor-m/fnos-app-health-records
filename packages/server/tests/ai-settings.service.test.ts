@@ -16,6 +16,8 @@ import {
 import { isAiExtractionConfigured } from "../services/ai-extraction.service.ts";
 import { executeAiTask } from "../services/ai-task.service.ts";
 import { aiProviderCatalog, isMiniMaxM2Model } from "../services/ai-provider.ts";
+import { H3 } from "h3";
+import modelsHandler from "../routes/api/ai/models.get.ts";
 
 async function withDatabase(run: () => Promise<void> | void) {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-ai-settings-"));
@@ -793,5 +795,47 @@ test("saves and sends image input to DeepSeek multimodal models", async () => {
       assert.equal(imageSent, true);
     } finally { globalThis.fetch = originalFetch; }
     }
+  });
+});
+
+
+test("saves OpenCode Go independently, reloads its key and tests structured output at the preset endpoint", async () => {
+  await withDatabase(async () => {
+    const originalFetch = globalThis.fetch;
+    let calls=0;
+    globalThis.fetch = async (url,init) => {
+      calls++;
+      assert.equal(new Headers(init?.headers).get("authorization"),"Bearer synthetic-go-key");
+      assert.ok(new Headers(init?.headers).get("x-opencode-session"));
+      if (init?.method === "GET") {
+        assert.equal(String(url),"https://opencode.ai/inference/go/openai/v1/models");
+        return new Response(JSON.stringify({data:[{id:"glm-5.2",name:"GLM-5.2"}]}),{status:200});
+      }
+      assert.equal(String(url),"https://opencode.ai/inference/go/openai/v1/chat/completions");
+      const body=JSON.parse(String(init?.body));
+      assert.equal(body.model,"glm-5.2");
+      assert.deepEqual(body.response_format,{type:"json_object"});
+      assert.equal(body.max_tokens,2048);
+      return new Response(JSON.stringify({model:body.model,choices:[{message:{content:'{"ok":true}'},finish_reason:"stop"}]}),{status:200});
+    };
+    try {
+      const saved=saveAiSettings({enabled:true,provider:"opencode-go",apiKey:"synthetic-go-key"});
+      assert.equal(saved.provider,"opencode-go");
+      assert.equal(saved.baseUrl,"https://opencode.ai/inference/go/openai/v1");
+      assert.equal(saved.textModel,"glm-5.2");
+      assert.equal(saved.visionModel,"");
+      assert.ok(saved.providers.some(p=>p.key==="opencode-go" && p.label==="OpenCode Go"));
+      assert.ok(!JSON.stringify(saved).includes("synthetic-go-key"));
+      closeDatabaseForTests();
+      assert.equal(getAiSettings().provider,"opencode-go");
+      assert.equal((await testAiConnection({provider:"opencode-go"})).model,"glm-5.2");
+      assert.equal(calls,1);
+      const app=new H3();
+      app.use(event=>{event.context.requestUser={id:"synthetic-admin",displayName:"Synthetic",provider:"development",authenticated:true,isGatewayAdmin:true};});
+      app.get('/models',modelsHandler);
+      const response=await app.request('http://localhost/models?provider=opencode-go');
+      assert.equal(response.status,200);
+      assert.deepEqual((await response.json()).data.models,[{id:"glm-5.2",name:"GLM-5.2",ownedBy:""}]);
+    } finally {globalThis.fetch=originalFetch;}
   });
 });

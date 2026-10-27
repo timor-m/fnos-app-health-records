@@ -24,7 +24,7 @@ import { useConfirm } from "../../composables/useConfirm";
 import { useToast } from "../../composables/useToast";
 import { request } from "../../utils/api";
 
-type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "minimax" | "ollama" | "custom";
+type AiProviderKey = "deepseek" | "kimi" | "glm" | "qwen" | "openai" | "doubao" | "minimax" | "opencode-go" | "ollama" | "custom";
 type AiProviderOption = {
   key: AiProviderKey;
   label: string;
@@ -34,7 +34,9 @@ type AiProviderOption = {
   modelHint?: string;
   apiKeyRequired?: boolean;
 };
+type AiHeaderRow = {name:string;value:string;configured?:boolean};
 type AiProfile = {
+  headers?: AiHeaderRow[];
   id: string;
   name: string;
   provider: AiProviderKey;
@@ -111,6 +113,8 @@ function hostOf(baseUrl: string) {
 const editorOpen = ref(false);
 const editorId = ref("");
 const editorMessage = ref("");
+const editorHeadersLoading = ref(false);
+let editorLoadSequence = 0;
 const testing = ref(false);
 const editor = ref({
   name: "",
@@ -121,7 +125,8 @@ const editor = ref({
   visionEnabled: false,
   apiKey: "",
   apiKeyConfigured: false,
-  apiKeyMasked: ""
+  apiKeyMasked: "",
+  headers: [] as AiHeaderRow[]
 });
 const currentEditorProvider = computed(() =>
   ai.value.providers.find((provider) => provider.key === editor.value.provider) || null
@@ -170,7 +175,8 @@ function openEditor(profile?: AiProfile) {
       visionEnabled: profile.visionEnabled,
       apiKey: "",
       apiKeyConfigured: profile.apiKeyConfigured,
-      apiKeyMasked: profile.apiKeyMasked
+      apiKeyMasked: profile.apiKeyMasked,
+      headers: (profile.headers || []).map(header=>({...header,value:""}))
     };
   } else {
     editorId.value = newProfileId();
@@ -184,17 +190,36 @@ function openEditor(profile?: AiProfile) {
       visionEnabled: false,
       apiKey: "",
       apiKeyConfigured: false,
-      apiKeyMasked: ""
+      apiKeyMasked: "",
+      headers: []
     };
   }
   editorSnapshot.value = JSON.stringify(editor.value);
   editorOpen.value = true;
+  const sequence = ++editorLoadSequence;
+  editorHeadersLoading.value = false;
+  if (profile?.headers?.length && persistedIds.value.has(profile.id)) {
+    editorHeadersLoading.value = true;
+    request<AiHeaderRow[]>(`ai/headers?profileId=${encodeURIComponent(profile.id)}`).then(headers => {
+      if (sequence !== editorLoadSequence) return;
+      editor.value.headers = headers;
+      editorSnapshot.value = JSON.stringify({ ...JSON.parse(editorSnapshot.value), headers });
+    }).catch(() => {
+      if (sequence === editorLoadSequence) editorMessage.value = "读取 Header 值失败，请关闭后重试；留空保存仍会保留原值";
+    }).finally(() => {
+      if (sequence === editorLoadSequence) editorHeadersLoading.value = false;
+    });
+  }
 }
 
 function closeEditor() {
   if (saving.value) return;
   editorOpen.value = false;
+  ++editorLoadSequence;
+  editorHeadersLoading.value = false;
   editor.value.apiKey = "";
+  editor.value.headers = [];
+  editorSnapshot.value = "";
   editorClearKey.value = false;
 }
 
@@ -215,7 +240,7 @@ function clearSavedKey() {
 }
 
 async function applyEditor() {
-  if (saving.value) return;
+  if (saving.value || editorHeadersLoading.value) return;
   editorMessage.value = "";
   if (!editor.value.baseUrl.trim()) {
     editorMessage.value = "请填写 API 地址";
@@ -234,7 +259,8 @@ async function applyEditor() {
     textModel: editor.value.textModel.trim(),
     visionModel: editor.value.visionModel.trim(),
     apiKeyConfigured: editor.value.apiKeyConfigured,
-    apiKeyMasked: editor.value.apiKeyMasked
+    apiKeyMasked: editor.value.apiKeyMasked,
+    headers: editorHeaders().map(header=>({name:header.name,value:"",configured:true}))
   };
   const exists = ai.value.profiles.some((item) => item.id === profile.id);
   const candidate = {
@@ -242,7 +268,7 @@ async function applyEditor() {
     profiles: exists ? ai.value.profiles.map((item) => item.id === profile.id ? profile : item) : [...ai.value.profiles, profile],
     defaultProfileId: ai.value.defaultProfileId || profile.id
   };
-  if (await save(candidate, { id: profile.id, apiKey: typedKey, clearApiKey: editorClearKey.value && !typedKey })) {
+  if (await save(candidate, { id: profile.id, apiKey: typedKey, clearApiKey: editorClearKey.value && !typedKey, headers: editorHeaders() })) {
     closeEditor();
     toast.show("AI 配置已保存");
   } else {
@@ -276,6 +302,10 @@ function removeProfile(profile: AiProfile) {
 }
 
 /* ---------- 编辑器内的连接测试 ---------- */
+function editorHeaders() {
+  return editor.value.headers.filter(header=>header.name.trim() || header.value).map(header=>({name:header.name.trim(),value:header.value}));
+}
+
 function editorBody() {
   return {
     ...(persistedIds.value.has(editorId.value) ? { profileId: editorId.value } : {}),
@@ -284,6 +314,7 @@ function editorBody() {
     textModel: editor.value.textModel,
     visionModel: editor.value.visionModel,
     visionEnabled: editor.value.visionEnabled,
+    headers: editorHeaders(),
     ...(editor.value.apiKey.trim() ? { apiKey: editor.value.apiKey.trim() } : {})
   };
 }
@@ -291,13 +322,8 @@ function editorBody() {
 async function fetchModelList(type: "text" | "vision") {
   modelListLoading.value = true;
   try {
-    const params = new URLSearchParams();
-    params.set("provider", editor.value.provider);
-    params.set("baseUrl", editor.value.baseUrl);
-    if (editor.value.apiKey.trim()) params.set("apiKey", editor.value.apiKey.trim());
-    if (persistedIds.value.has(editorId.value)) params.set("profileId", editorId.value);
-    const result = await request<{ models: Array<{ id: string; name: string }>; total: number }>(`ai/models?${params.toString()}`, {
-      method: "GET"
+    const result = await request<{ models: Array<{ id: string; name: string }>; total: number }>("ai/models", {
+      method: "POST", body: JSON.stringify(editorBody())
     });
     if (type === "text") {
       textModelList.value = result.models;
@@ -391,7 +417,7 @@ function applyLoadedSettings(value: AiSettings) {
   savedSnapshot.value = JSON.stringify(ai.value);
 }
 
-async function save(settings = ai.value, secret?: { id: string; apiKey: string; clearApiKey: boolean }) {
+async function save(settings = ai.value, secret?: { id: string; apiKey: string; clearApiKey: boolean; headers?: Array<{name:string;value:string}> }) {
   if (saving.value) return false;
   saving.value = true; message.value = "";
   try {
@@ -417,6 +443,7 @@ async function save(settings = ai.value, secret?: { id: string; apiKey: string; 
         baseUrl: profile.baseUrl,
         textModel: profile.textModel,
         visionModel: profile.visionModel,
+        ...(secret?.id === profile.id ? {headers: secret.headers} : {}),
         ...(secret?.id === profile.id && secret.apiKey ? { apiKey: secret.apiKey } : {}),
         ...(secret?.id === profile.id && secret.clearApiKey ? { clearApiKey: true } : {})
       })),
@@ -483,6 +510,9 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  ++editorLoadSequence;
+  editor.value.headers = [];
+  editorSnapshot.value = "";
   document.removeEventListener("click", handleClickOutside);
   window.removeEventListener("beforeunload", beforeUnload);
 });
@@ -611,6 +641,21 @@ onUnmounted(() => {
                 已保存 {{ editor.apiKeyMasked }}，留空保持不变；<button type="button" class="ai-clear-key" @click="clearSavedKey">清除已保存的 Key</button>
               </small>
             </label>
+            <details class="ai-custom-headers" :open="editor.headers.length > 0">
+              <summary>进阶配置</summary>
+              <div class="ai-custom-headers-content" :inert="editorHeadersLoading">
+                <strong>自定义 Headers</strong>
+                <small v-if="editorHeadersLoading" class="field-hint">正在读取 Header 值…</small>
+                <div v-for="(header,index) in editor.headers" :key="index" class="ai-header-row" role="group" :aria-label="'Header '+(index+1)">
+                  <strong class="ai-header-group-title">Header {{ index + 1 }}</strong>
+                  <input v-model="header.name" :aria-label="'Header 名称 '+(index+1)" placeholder="Header 名称" autocomplete="off" spellcheck="false" />
+                  <input v-model="header.value" type="text" :aria-label="'Header 值 '+(index+1)" :placeholder="header.configured ? '已配置，留空保持不变' : 'Header 值'" autocomplete="off" spellcheck="false" />
+                  <button type="button" class="ai-header-remove" :aria-label="'删除 Header '+(index+1)" @click="editor.headers.splice(index,1)"><Trash2 :size="16" /><span>删除此组</span></button>
+                </div>
+                <button type="button" class="soft-action-button" :disabled="editor.headers.length >= 32" @click="editor.headers.push({name:'',value:''})"><Plus :size="14" />添加 Header</button>
+                <small class="field-hint">附加到此连接的每次 AI 请求，同名 Header 覆盖默认值。已有值留空保持不变，按组删除名称和值；可配置 Authorization 或 x-api-key 鉴权。</small>
+              </div>
+            </details>
             <div class="form-grid ai-model-grid">
               <label>
                 <span>文本模型</span>
@@ -686,23 +731,26 @@ onUnmounted(() => {
           <p v-if="editorMessage" class="form-message ai-editor-message">{{ editorMessage }}</p>
 
           <footer class="ai-editor-footer">
-            <button type="button" class="soft-action-button" :disabled="saving || testing" @click="test">
-              <LoaderCircle v-if="testing" class="spin-icon" :size="15" />
-              <TestTubeDiagonal v-else :size="15" />
-              快速测试
-            </button>
-            <button type="button" class="soft-action-button" :disabled="saving || enhancedTesting" @click="testEnhanced">
-              <LoaderCircle v-if="enhancedTesting" class="spin-icon" :size="15" />
-              <TestTubeDiagonal v-else :size="15" />
-              完整测试
-            </button>
-            <button v-if="supportsVision && editor.visionModel.trim()" type="button" class="soft-action-button" :disabled="saving || testing" @click="testVision">测试视觉</button>
-            <span class="spacer"></span>
-            <button type="button" :disabled="saving" @click="closeEditor">取消</button>
-            <button type="button" class="primary-button" :disabled="saving" @click="applyEditor">
-              <LoaderCircle v-if="saving" class="spin-icon" :size="17" />
-              {{ saving ? "保存中" : "保存配置" }}
-            </button>
+            <div class="ai-editor-test-actions" role="group" aria-label="连接测试">
+              <button type="button" class="soft-action-button" :disabled="saving || testing" @click="test">
+                <LoaderCircle v-if="testing" class="spin-icon" :size="15" />
+                <TestTubeDiagonal v-else :size="15" />
+                快速测试
+              </button>
+              <button type="button" class="soft-action-button" :disabled="saving || enhancedTesting" @click="testEnhanced">
+                <LoaderCircle v-if="enhancedTesting" class="spin-icon" :size="15" />
+                <TestTubeDiagonal v-else :size="15" />
+                完整测试
+              </button>
+              <button v-if="supportsVision && editor.visionModel.trim()" type="button" class="soft-action-button" :disabled="saving || testing" @click="testVision">测试视觉</button>
+            </div>
+            <div class="ai-editor-save-actions" role="group" aria-label="配置操作">
+              <button type="button" class="ai-editor-cancel" :disabled="saving" @click="closeEditor">取消</button>
+              <button type="button" class="primary-button" :disabled="saving || editorHeadersLoading" @click="applyEditor">
+                <LoaderCircle v-if="saving" class="spin-icon" :size="17" />
+                {{ saving ? "保存中" : "保存配置" }}
+              </button>
+            </div>
           </footer>
         </section>
       </div>

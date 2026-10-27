@@ -1,4 +1,9 @@
 import { fetchWithTimeout } from "../utils/outbound-request";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import packageJson from "../../../package.json" with { type: "json" };
+
+// Process-local salt keeps routing sessions opaque without retaining a report map.
+const sessionSalt = randomBytes(32);
 
 export type AiRuntimeMessage = {
   role: "system" | "user" | "assistant";
@@ -11,9 +16,27 @@ export type AiRuntimeConfig = {
   baseUrl: string;
   apiKey: string;
   model: string;
+  headers?: Record<string, string>;
 };
 
+export function aiRuntimeHeaders(config: Pick<AiRuntimeConfig, "provider" | "providerKey" | "apiKey" | "headers">, sessionKey?: string): Record<string, string> {
+  const isOpenCodeGo = config.providerKey === "opencode-go" || config.provider === "opencode-go";
+  const sessionId = isOpenCodeGo
+    ? sessionKey ? createHmac("sha256", sessionSalt).update(sessionKey).digest("hex") : randomUUID()
+    : null;
+  const headers = new Headers({
+    ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}),
+    ...(sessionId ? {
+      "user-agent": `${packageJson.name}/${packageJson.version}`,
+      "x-opencode-session": sessionId
+    } : {})
+  });
+  for (const [name, value] of Object.entries(config.headers || {})) headers.set(name, value);
+  return Object.fromEntries(headers.entries());
+}
+
 export type AiRuntimeRequest = {
+  sessionKey?: string;
   messages: AiRuntimeMessage[];
   maxOutputTokens: number;
   temperature?: number;
@@ -89,6 +112,7 @@ export async function executeAiChatCompletion(
   const isMiniMax = config.providerKey === "minimax" || config.provider === "minimax";
   let requestBody = buildAiChatCompletionRequestBody(config, request);
   const endpoint = `${config.baseUrl}/chat/completions`;
+  const headers = aiRuntimeHeaders(config, request.sessionKey);
   const requestOptions = {
     timeoutMs: request.timeoutMs,
     timeoutCode: request.timeoutCode || "AI_REQUEST_TIMEOUT",
@@ -99,8 +123,8 @@ export async function executeAiChatCompletion(
   const send = (body: Record<string, unknown>) => fetchWithTimeout(endpoint, {
     method: "POST",
     headers: {
-      ...(config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {}),
-      "content-type": "application/json"
+      "content-type": "application/json",
+      ...headers
     },
     body: JSON.stringify(body)
   }, requestOptions);

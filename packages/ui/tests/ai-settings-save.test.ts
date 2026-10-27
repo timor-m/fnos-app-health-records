@@ -11,13 +11,14 @@ import AiSettings from "../src/pages/settings/AiSettingsPage.vue";
 function fixture() {
   return {
     enabled: true, requestTimeoutSeconds: 600, extractionDepth: "overview", defaultProfileId: "main",
-    profiles: [{ id: "main", name: "合成连接", provider: "deepseek", providerLabel: "DeepSeek", baseUrl: "https://example.test/v1", textModel: "synthetic-model", visionModel: "", visionEnabled: false, apiKeyConfigured: true, apiKeyMasked: "old••••0000" }],
+    profiles: [{ id: "main", name: "合成连接", provider: "deepseek", providerLabel: "DeepSeek", baseUrl: "https://example.test/v1", textModel: "synthetic-model", visionModel: "", visionEnabled: false, apiKeyConfigured: true, apiKeyMasked: "old••••0000", headers: [] as Array<{name:string;value:string;configured?:boolean}> }],
     providers: [{ key: "deepseek", label: "DeepSeek", defaultBaseUrl: "https://example.test/v1", defaultTextModel: "synthetic-model", defaultVisionModel: "" }],
     tasks: [], taskBindings: {}
   };
 }
 let wrapper: ReturnType<typeof mount>;
 let stored: ReturnType<typeof fixture>;
+let headerSecrets: Record<string, string>;
 const puts = () => mocks.request.mock.calls.filter(([, init]) => init?.method === "PUT");
 function button(text: string, selector = "button") {
   const match = wrapper.findAll(selector).find(b => b.text() === text);
@@ -30,17 +31,21 @@ async function start() {
 }
 async function edit() {
   await wrapper.get('[aria-label="编辑连接配置"]').trigger("click");
+  await flushPromises();
 }
 const editorSave = () => button("保存配置", ".ai-editor-footer button");
 
 beforeEach(() => {
-  vi.clearAllMocks(); stored = fixture();
+  vi.clearAllMocks(); stored = fixture(); headerSecrets = {};
   mocks.request.mockImplementation(async (_path, init) => {
+    if (_path.startsWith('ai/headers?')) return Object.entries(headerSecrets).map(([name,value])=>({name,value,configured:true}));
     if (init?.method === "PUT") {
       const input = JSON.parse(init.body);
       stored = { ...stored, ...input, profiles: input.profiles.map((p: any) => {
         const { apiKey, clearApiKey, ...profile } = p;
-        return { ...profile, providerLabel: "DeepSeek", apiKeyConfigured: !clearApiKey, apiKeyMasked: clearApiKey ? "" : apiKey ? "new••••1111" : "old••••0000" };
+        if (profile.headers) headerSecrets = Object.fromEntries(profile.headers.map((header:any)=>[header.name.toLowerCase(),header.value || headerSecrets[header.name.toLowerCase()]]));
+        const headers=(profile.headers || stored.profiles.find(old=>old.id===profile.id)?.headers || []).map((header:any)=>({name:header.name.toLowerCase(),value:'',configured:true}));
+        return { ...profile, headers, providerLabel: "DeepSeek", apiKeyConfigured: !clearApiKey, apiKeyMasked: clearApiKey ? "" : apiKey ? "new••••1111" : "old••••0000" };
       }) };
     }
     return structuredClone(stored);
@@ -133,4 +138,96 @@ it("warns when leaving or reloading unsaved page or editor changes", async () =>
   expect(mocks.guard({ fullPath: "/me" })).toBe(true);
   await wrapper.get('input[type="number"]').setValue("900");
   expect(mocks.guard({ fullPath: "/me" })).toBe(false);
+});
+
+
+it("selects the OpenCode Go preset and saves its endpoint and model as a separate connection",async()=>{
+ stored.providers.push({key:"opencode-go",label:"OpenCode Go",defaultBaseUrl:"https://opencode.ai/inference/go/openai/v1",defaultTextModel:"glm-5.2",defaultVisionModel:""});
+ await start();
+ await button("添加连接配置").trigger("click");
+ const select=wrapper.findAllComponents({name:"FormSelect"}).find(item=>item.props('ariaLabel')==='服务商预设')!;
+ expect(select.props('options')).toContainEqual({value:'opencode-go',label:'OpenCode Go'});
+ select.vm.$emit('update:modelValue','opencode-go');await flushPromises();await select.trigger('change');await flushPromises();
+ await wrapper.get('input[type="password"]').setValue('synthetic-go-key');
+ await editorSave().trigger('click');await flushPromises();
+ const profiles=JSON.parse(puts()[0][1].body).profiles;
+ expect(profiles.find((item:any)=>item.provider==='opencode-go')).toMatchObject({baseUrl:'https://opencode.ai/inference/go/openai/v1',textModel:'glm-5.2',apiKey:'synthetic-go-key'});
+ expect(profiles.find((item:any)=>item.id==='main').provider).toBe('deepseek');
+});
+
+
+it('adds, displays, reloads and removes custom headers while clearing editor values after save',async()=>{
+ await start();await edit();
+ await button('添加 Header').trigger('click');
+ await wrapper.get('[aria-label="Header 名称 1"]').setValue('X-Token');
+ await wrapper.get('[aria-label="Header 值 1"]').setValue('synthetic-private-header');
+ expect(wrapper.get('[aria-label="Header 值 1"]').attributes('type')).toBe('text');
+ await editorSave().trigger('click');await flushPromises();
+ expect(JSON.parse(puts()[0][1].body).profiles[0].headers).toEqual([{name:'X-Token',value:'synthetic-private-header'}]);
+ expect(JSON.stringify(stored)).not.toContain('synthetic-private-header');
+ await edit();
+ expect((wrapper.get('[aria-label="Header 值 1"]').element as HTMLInputElement).value).toBe('synthetic-private-header');
+ expect(wrapper.get('[aria-label="Header 值 1"]').attributes('placeholder')).toContain('留空保持');
+ await editorSave().trigger('click');await flushPromises();
+ expect(JSON.parse(puts()[1][1].body).profiles[0].headers).toEqual([{name:'x-token',value:'synthetic-private-header'}]);
+ await edit();await wrapper.get('[aria-label="删除 Header 1"]').trigger('click');
+ await editorSave().trigger('click');await flushPromises();
+ expect(JSON.parse(puts()[2][1].body).profiles[0].headers).toEqual([]);
+});
+
+it('deletes a complete header group while preserving the other name and value',async()=>{
+ await start();await edit();
+ await button('添加 Header').trigger('click');
+ await wrapper.get('[aria-label="Header 名称 1"]').setValue('X-First');
+ await wrapper.get('[aria-label="Header 值 1"]').setValue('synthetic-first');
+ await button('添加 Header').trigger('click');
+ await wrapper.get('[aria-label="Header 名称 2"]').setValue('X-Second');
+ await wrapper.get('[aria-label="Header 值 2"]').setValue('synthetic-second');
+ const first=wrapper.get('[role="group"][aria-label="Header 1"]');
+ expect(first.get('button').text()).toContain('删除此组');
+ await first.get('button').trigger('click');
+ expect(wrapper.findAll('.ai-header-row')).toHaveLength(1);
+ expect((wrapper.get('[aria-label="Header 名称 1"]').element as HTMLInputElement).value).toBe('X-Second');
+ expect((wrapper.get('[aria-label="Header 值 1"]').element as HTMLInputElement).value).toBe('synthetic-second');
+ await editorSave().trigger('click');await flushPromises();
+ expect(JSON.parse(puts()[0][1].body).profiles[0].headers).toEqual([{name:'X-Second',value:'synthetic-second'}]);
+});
+
+it('disables save while reading saved headers and ignores a response after closing the editor',async()=>{
+ stored.profiles[0].headers=[{name:'x-app',value:'',configured:true}];
+ const original=mocks.request.getMockImplementation()!;
+ let resolveHeaders!: (value: unknown)=>void;
+ mocks.request.mockImplementation((path,init)=>path.startsWith('ai/headers?') ? new Promise(resolve=>{resolveHeaders=resolve;}) : original(path,init));
+ await start();await edit();
+ expect(editorSave().attributes('disabled')).toBeDefined();
+ await button('取消','.ai-editor-footer button').trigger('click');
+ await button('添加连接配置').trigger('click');
+ resolveHeaders([{name:'x-app',value:'synthetic-late-secret',configured:true}]);
+ await flushPromises();
+ expect(wrapper.findAll('.ai-header-row')).toHaveLength(0);
+ expect(editorSave().attributes('disabled')).toBeUndefined();
+});
+
+it('uses unsaved custom headers in model listing and both tests without putting values in URLs or saving',async()=>{
+ await start();await edit();
+ await button('添加 Header').trigger('click');
+ await wrapper.get('[aria-label="Header 名称 1"]').setValue('X-App');
+ await wrapper.get('[aria-label="Header 值 1"]').setValue('synthetic-unsaved-header');
+ const original=mocks.request.getMockImplementation()!;
+ mocks.request.mockImplementation(async(path,init)=>{
+  if(path==='ai/models')return {models:[],total:0};
+  if(path==='ai/test')return {model:'synthetic',elapsedMs:1};
+  if(path==='ai/test-enhanced')return {steps:[],overallSuccess:true,totalElapsedMs:1};
+  return original(path,init);
+ });
+ await wrapper.findAll('[title="获取模型列表"]')[0].trigger('click');await flushPromises();
+ await button('快速测试').trigger('click');await flushPromises();
+ await button('完整测试').trigger('click');await flushPromises();
+ for(const endpoint of ['ai/models','ai/test','ai/test-enhanced']) {
+  const call=mocks.request.mock.calls.find(([path])=>path===endpoint)!;
+  expect(call[1].method).toBe('POST');
+  expect(call[0]).not.toContain('synthetic-unsaved-header');
+  expect(JSON.parse(call[1].body).headers).toEqual([{name:'X-App',value:'synthetic-unsaved-header'}]);
+ }
+ expect(puts()).toHaveLength(0);
 });

@@ -1982,6 +1982,7 @@ async function loadDetail(reportId: string, preserveCurrent = false) {
   const seq = ++detailSeq;
   detailLoading.value = true;
   detailError.value = "";
+  duplicateCandidatesError.value = "";
   if (!preserveCurrent) detail.value = null;
   try {
     const initial = initialDetailConsumed ? null : props.initialDetail;
@@ -2079,6 +2080,7 @@ watch(() => [props.reportId, props.expectedMemberId] as const, ([reportId]) => {
   jobsLoadingSeq = 0;
   ocrSeq += 1;
   selectedJobs.value = [];
+  jobsSnapshotLoaded = false;
   pageRefreshAwaitingJobs.value = false;
   jobsLoading.value = false;
   jobsPollFailures = 0;
@@ -2254,7 +2256,7 @@ onActivated(() => {
             <span>{{ candidate.reason }} · {{ candidate.matchedFields.join("、") }}</span>
           </button>
           <div v-if="source.status === 'needs_review'" class="duplicate-actions">
-            <button v-if="canManageReport" class="duplicate-confirm-button" type="button" :disabled="confirming" @click="confirmReady">
+            <button v-if="canManageReport" class="duplicate-confirm-button" type="button" :disabled="confirming || duplicateCandidatesPending" @click="confirmReady">
               <CheckCircle2 :size="15" />仍然确认归档
             </button>
           </div>
