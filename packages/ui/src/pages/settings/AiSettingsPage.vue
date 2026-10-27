@@ -113,6 +113,8 @@ function hostOf(baseUrl: string) {
 const editorOpen = ref(false);
 const editorId = ref("");
 const editorMessage = ref("");
+const editorHeadersLoading = ref(false);
+let editorLoadSequence = 0;
 const testing = ref(false);
 const editor = ref({
   name: "",
@@ -194,13 +196,30 @@ function openEditor(profile?: AiProfile) {
   }
   editorSnapshot.value = JSON.stringify(editor.value);
   editorOpen.value = true;
+  const sequence = ++editorLoadSequence;
+  editorHeadersLoading.value = false;
+  if (profile?.headers?.length && persistedIds.value.has(profile.id)) {
+    editorHeadersLoading.value = true;
+    request<AiHeaderRow[]>(`ai/headers?profileId=${encodeURIComponent(profile.id)}`).then(headers => {
+      if (sequence !== editorLoadSequence) return;
+      editor.value.headers = headers;
+      editorSnapshot.value = JSON.stringify({ ...JSON.parse(editorSnapshot.value), headers });
+    }).catch(() => {
+      if (sequence === editorLoadSequence) editorMessage.value = "读取 Header 值失败，请关闭后重试；留空保存仍会保留原值";
+    }).finally(() => {
+      if (sequence === editorLoadSequence) editorHeadersLoading.value = false;
+    });
+  }
 }
 
 function closeEditor() {
   if (saving.value) return;
   editorOpen.value = false;
+  ++editorLoadSequence;
+  editorHeadersLoading.value = false;
   editor.value.apiKey = "";
   editor.value.headers = [];
+  editorSnapshot.value = "";
   editorClearKey.value = false;
 }
 
@@ -221,7 +240,7 @@ function clearSavedKey() {
 }
 
 async function applyEditor() {
-  if (saving.value) return;
+  if (saving.value || editorHeadersLoading.value) return;
   editorMessage.value = "";
   if (!editor.value.baseUrl.trim()) {
     editorMessage.value = "请填写 API 地址";
@@ -491,6 +510,9 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  ++editorLoadSequence;
+  editor.value.headers = [];
+  editorSnapshot.value = "";
   document.removeEventListener("click", handleClickOutside);
   window.removeEventListener("beforeunload", beforeUnload);
 });
@@ -621,15 +643,17 @@ onUnmounted(() => {
             </label>
             <details class="ai-custom-headers" :open="editor.headers.length > 0">
               <summary>进阶配置</summary>
-              <div class="ai-custom-headers-content">
+              <div class="ai-custom-headers-content" :inert="editorHeadersLoading">
                 <strong>自定义 Headers</strong>
-                <div v-for="(header,index) in editor.headers" :key="index" class="ai-header-row">
+                <small v-if="editorHeadersLoading" class="field-hint">正在读取 Header 值…</small>
+                <div v-for="(header,index) in editor.headers" :key="index" class="ai-header-row" role="group" :aria-label="'Header '+(index+1)">
+                  <strong class="ai-header-group-title">Header {{ index + 1 }}</strong>
                   <input v-model="header.name" :aria-label="'Header 名称 '+(index+1)" placeholder="Header 名称" autocomplete="off" spellcheck="false" />
-                  <input v-model="header.value" type="password" :aria-label="'Header 值 '+(index+1)" :placeholder="header.configured ? '已配置，留空保持不变' : 'Header 值'" autocomplete="new-password" />
-                  <button type="button" class="ai-header-remove" :aria-label="'删除 Header '+(index+1)" @click="editor.headers.splice(index,1)"><X :size="16" /></button>
+                  <input v-model="header.value" type="text" :aria-label="'Header 值 '+(index+1)" :placeholder="header.configured ? '已配置，留空保持不变' : 'Header 值'" autocomplete="off" spellcheck="false" />
+                  <button type="button" class="ai-header-remove" :aria-label="'删除 Header '+(index+1)" @click="editor.headers.splice(index,1)"><Trash2 :size="16" /><span>删除此组</span></button>
                 </div>
                 <button type="button" class="soft-action-button" :disabled="editor.headers.length >= 32" @click="editor.headers.push({name:'',value:''})"><Plus :size="14" />添加 Header</button>
-                <small class="field-hint">附加到此连接的每次 AI 请求，同名 Header 覆盖默认值。已有值留空保持不变，删除行可移除；可配置 Authorization 或 x-api-key 鉴权。</small>
+                <small class="field-hint">附加到此连接的每次 AI 请求，同名 Header 覆盖默认值。已有值留空保持不变，按组删除名称和值；可配置 Authorization 或 x-api-key 鉴权。</small>
               </div>
             </details>
             <div class="form-grid ai-model-grid">
@@ -707,23 +731,26 @@ onUnmounted(() => {
           <p v-if="editorMessage" class="form-message ai-editor-message">{{ editorMessage }}</p>
 
           <footer class="ai-editor-footer">
-            <button type="button" class="soft-action-button" :disabled="saving || testing" @click="test">
-              <LoaderCircle v-if="testing" class="spin-icon" :size="15" />
-              <TestTubeDiagonal v-else :size="15" />
-              快速测试
-            </button>
-            <button type="button" class="soft-action-button" :disabled="saving || enhancedTesting" @click="testEnhanced">
-              <LoaderCircle v-if="enhancedTesting" class="spin-icon" :size="15" />
-              <TestTubeDiagonal v-else :size="15" />
-              完整测试
-            </button>
-            <button v-if="supportsVision && editor.visionModel.trim()" type="button" class="soft-action-button" :disabled="saving || testing" @click="testVision">测试视觉</button>
-            <span class="spacer"></span>
-            <button type="button" :disabled="saving" @click="closeEditor">取消</button>
-            <button type="button" class="primary-button" :disabled="saving" @click="applyEditor">
-              <LoaderCircle v-if="saving" class="spin-icon" :size="17" />
-              {{ saving ? "保存中" : "保存配置" }}
-            </button>
+            <div class="ai-editor-test-actions" role="group" aria-label="连接测试">
+              <button type="button" class="soft-action-button" :disabled="saving || testing" @click="test">
+                <LoaderCircle v-if="testing" class="spin-icon" :size="15" />
+                <TestTubeDiagonal v-else :size="15" />
+                快速测试
+              </button>
+              <button type="button" class="soft-action-button" :disabled="saving || enhancedTesting" @click="testEnhanced">
+                <LoaderCircle v-if="enhancedTesting" class="spin-icon" :size="15" />
+                <TestTubeDiagonal v-else :size="15" />
+                完整测试
+              </button>
+              <button v-if="supportsVision && editor.visionModel.trim()" type="button" class="soft-action-button" :disabled="saving || testing" @click="testVision">测试视觉</button>
+            </div>
+            <div class="ai-editor-save-actions" role="group" aria-label="配置操作">
+              <button type="button" class="ai-editor-cancel" :disabled="saving" @click="closeEditor">取消</button>
+              <button type="button" class="primary-button" :disabled="saving || editorHeadersLoading" @click="applyEditor">
+                <LoaderCircle v-if="saving" class="spin-icon" :size="17" />
+                {{ saving ? "保存中" : "保存配置" }}
+              </button>
+            </div>
           </footer>
         </section>
       </div>

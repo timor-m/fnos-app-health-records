@@ -12,6 +12,7 @@ import {isAiExtractionConfigured} from "../services/ai-extraction.service";
 import {aiRuntimeHeaders} from "../services/ai-runtime.service";
 import modelsPost from "../routes/api/ai/models.post";
 import enhancedTest from "../routes/api/ai/test-enhanced.post";
+import headersGet from "../routes/api/ai/headers.get";
 
 async function fixture(action:()=>Promise<void>|void) {
   const previous=process.env.STORAGE_DIR, originalFetch=globalThis.fetch;
@@ -24,6 +25,23 @@ async function fixture(action:()=>Promise<void>|void) {
   }
 }
 const response=(content='ok')=>new Response(JSON.stringify({choices:[{message:{content},finish_reason:'stop'}]}),{status:200});
+
+test('header editor reads only the selected connection, requires an administrator and prevents caching',()=>fixture(async()=>{
+  const saved=saveAiSettings({profiles:[{id:'first',provider:'custom',baseUrl:'https://first.synthetic.invalid/v1',headers:[{name:'X-App',value:'synthetic-first'}]},{id:'second',provider:'custom',baseUrl:'https://second.synthetic.invalid/v1',headers:[{name:'X-App',value:'synthetic-second'}]}]});
+  let allowed=true;
+  const app=new H3();
+  app.use(event=>{event.context.requestUser={id:'synthetic-admin',displayName:'Synthetic',provider:'development',authenticated:allowed,isGatewayAdmin:allowed};});
+  app.get('/headers',headersGet);
+  const result=await app.request('http://localhost/headers?profileId=second');
+  assert.equal(result.status,200);
+  assert.equal(result.headers.get('cache-control'),'private, no-store');
+  assert.deepEqual((await result.json()).data,[{name:'x-app',value:'synthetic-second',configured:true}]);
+  assert.ok(!JSON.stringify(saved).includes('synthetic-second'));
+  assert.equal((await app.request('http://localhost/headers?profileId=missing')).status,404);
+  assert.equal((await app.request('http://localhost/headers')).status,400);
+  allowed=false;
+  assert.equal((await app.request('http://localhost/headers?profileId=second')).status,403);
+}));
 
 test('headers are encrypted, never returned as plaintext, and blank/omitted/delete semantics survive reopening',()=>fixture(()=>{
   const saved=saveAiSettings({enabled:true,provider:'custom',baseUrl:'https://synthetic.invalid/v1',textModel:'synthetic',apiKey:'synthetic-key',headers:[{name:'X-Token',value:'synthetic-private-token'},{name:'User-Agent',value:'synthetic-client/1'}]});
