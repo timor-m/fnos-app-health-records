@@ -50,6 +50,22 @@
 
 名称与边界依据：[国家卫健委血脂知识要点](https://www.nhc.gov.cn/jkj/s10033/200706/ee3b3ad6fd0e4b44980a76d206ce182f.shtml)、[济南市精神卫生中心检验项目目录](https://qsy.jinan.gov.cn/colqsy11762/art/2023/art_qsy11762_qsy54228.html)、[艾迪康 sdLDL-C 项目说明](https://www.adicon.com.cn/project/9126.html)、[台大医院检验医学部说明](https://epaper.ntuh.gov.tw/health/202012/health_5.html)。单位依据：[sdLDL-C 试剂说明书](https://www.upingbio.com/uploads/20241206110917/YPD1109.pdf)。这些资料用于确认项目名称、含义和单位，不作为所有机构通用的参考范围。
 
+### 尿微量白蛋白与白蛋白/肌酐比值
+
+远程 revision 24 分别收录以下两个定量项目，归入已有尿液检验分类，不修改核心字典、应用版本或数据库 schema。
+
+| 申请原名 | 标准名称 / Key | 兼容单位 |
+| --- | --- | --- |
+| 微量白蛋白(mAlb)测定 | 尿微量白蛋白 / `urine_microalbumin` | mg/L、mg/dL、μg/mL |
+| 尿微量白蛋白比尿肌酐 | 尿白蛋白/肌酐比值 / `urine_albumin_creatinine_ratio` | mg/g、mg/mmol |
+
+- 两者均为独立新增项，原有核心及远程字典未命中。别名包含申请原名、明确的尿液项目名称及 mAlb/UACR；不把裸 `ALB` 或 `ACR` 作为全局别名。
+- 保留原报告数值和单位，不增加单位换算；不同单位分别形成趋势。不与血清白蛋白、尿总蛋白、尿总蛋白/肌酐比值或定时尿白蛋白排泄量合并，不由系统自行计算比值。
+- mg/24h 等排泄量单位不在浓度或比值的兼容列表内；即使名称匹配，也沿用现有低置信与禁止进入默认趋势的单位边界。
+- 发布后管理员安装远程字典即可回填历史指标，无需重新 OCR 或调用 AI。未发布的本地 revision 不代表线上已可更新。
+
+名称及标本依据：[北京药监局 mALB 定量检测试剂信息](https://xxcx.yjj.beijing.gov.cn/eportal/ui?exampleId=f832a05abb7e4fe7adc7982c73bce6d8&pageId=723916)、[新竹台大医院尿微量白蛋白项目](https://www.hch.gov.tw/?aid=642&iid=2343&page_name=detail&pid=0)、[义大医院尿液微白蛋白/肌酸酐比值](https://exdep.edah.org.tw/cp/index.php/zh-tw/2017-06-26-08-19-55/2017-06-28-09-06-14/290-acr)。单位边界另参考 [义大医院生化项目单位公告](https://exdep.edah.org.tw/cp/images/see_pdf/201911_anno.pdf)和 [NHS 尿白蛋白/肌酐比值项目](https://www.nwlpathology.nhs.uk/test/albumincreatinine-ratio-urine/)。这些资料用于确认字典语义和单位，不提供统一诊断阈值或参考范围。
+
 字段按功能保守保留：
 
 - `canonicalKey`、`displayName`：稳定标识与用户可见名称。

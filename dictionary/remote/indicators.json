@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 23,
+  "revision": 24,
   "indicators": [
     {
       "canonicalKey": "lipid_ldl_hdl_ratio",
@@ -4638,6 +4638,71 @@
         "全血细胞"
       ],
       "explanation": "表示血液中体积较大的血小板数量，需结合检测方法和原报告参考范围观察。"
+    },
+    {
+      "canonicalKey": "urine_microalbumin",
+      "displayName": "尿微量白蛋白",
+      "categoryKey": "urinalysis",
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "urine",
+      "sectionHints": [
+        "尿液",
+        "尿常规",
+        "肾功能",
+        "尿微量白蛋白"
+      ],
+      "order": 83,
+      "defaultUnit": "mg/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "尿微量白蛋白",
+        "尿微量白蛋白测定",
+        "微量白蛋白(mAlb)测定",
+        "尿微量白蛋白(mAlb)测定",
+        "尿微量白蛋白(mAlb)",
+        "微量白蛋白",
+        "mAlb",
+        "Urine microalbumin"
+      ],
+      "allowedUnits": [
+        "mg/L",
+        "mg/dL",
+        "μg/mL"
+      ],
+      "explanation": "尿液中白蛋白的浓度，与血清白蛋白、尿总蛋白、白蛋白/肌酐比值及定时尿排泄量分别比较；保留报告单位，不自行换算或计算。"
+    },
+    {
+      "canonicalKey": "urine_albumin_creatinine_ratio",
+      "displayName": "尿白蛋白/肌酐比值",
+      "categoryKey": "urinalysis",
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "urine",
+      "sectionHints": [
+        "尿液",
+        "尿常规",
+        "肾功能",
+        "尿微量白蛋白"
+      ],
+      "order": 84,
+      "defaultUnit": "mg/g",
+      "unitDimension": "ratio",
+      "aliases": [
+        "尿白蛋白/肌酐比值",
+        "尿白蛋白肌酐比值",
+        "尿微量白蛋白比尿肌酐",
+        "尿微量白蛋白/尿肌酐",
+        "尿微量白蛋白与尿肌酐比值",
+        "尿微量白蛋白/肌酐比值",
+        "UACR",
+        "Urine albumin creatinine ratio"
+      ],
+      "allowedUnits": [
+        "mg/g",
+        "mg/mmol"
+      ],
+      "explanation": "原报告给出的尿白蛋白与尿肌酐比值，与单独的尿白蛋白浓度、尿总蛋白/肌酐比值及定时尿排泄量分别比较；不同单位分别形成趋势，不自行换算或由其他指标计算。"
     }
   ],
   "extensions": [
