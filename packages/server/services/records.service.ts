@@ -8050,7 +8050,7 @@ export function preflightRestore(user:RequestUser,archivePath:string,takeover=fa
   for(const [key,plan] of restorePlans) if(plan.expires<Date.now()) restorePlans.delete(key);
   const plan:RestorePlan={token:createId('restore'),digest:sha256File(archivePath),actorId:user.id,deployment:target.identityDomain,strategy,accessPolicy,expires:Date.now()+15*60000,
    identitySubject:identity?.subject,accountFingerprint:restoreAccountFingerprint(),
-   warning:accessPolicy==='admin_takeover'?`${manifest.identity?.authMode==='fnos'?'检测到飞牛备份。':manifest.identity?.authMode==='local'?'检测到本地账号备份。':'此备份来源未标明。'}恢复后，${memberCount} 个成员档案（含回收站）将由当前管理员管理，可将已有档案设为本人，或在成员共享中分配给目标环境账号。源账号保持隔离，不创建源账号的登录入口。`:strategy==='same'?'账号、授权和档案将回到备份时间点，之后新增的账号及授权可能不再存在；所有账号需要重新登录。':'来源身份无法与当前部署确认一致。源账号全部待映射，当前管理员仅保留系统维护权限，须使用受控映射工具逐项确认。'};
+   warning:accessPolicy==='admin_takeover'?`${manifest.identity?.authMode==='fnos'?'检测到飞牛备份。':manifest.identity?.authMode==='local'?'检测到本地账号备份。':'此备份来源未标明。'}恢复后，${memberCount} 个成员档案（含回收站）将由当前管理员管理，可将已有档案设为本人，或在成员共享中分配给目标环境账号。源账号保持隔离，不创建源账号的登录入口。`:strategy==='same'?'账号、授权和档案将回到备份时间点，之后新增的账号及授权可能不再存在；所有账号需要重新登录。':canChooseTakeover?'来源身份无法与当前部署确认一致。默认隔离源账号，当前管理员不会自动获得档案权限。如需将完整备份迁入当前环境，请勾选“由当前管理员接管全部档案”，重新预检后确认。':'来源身份无法与当前部署确认一致。源账号全部待映射，当前管理员仅保留系统维护权限，须使用受控映射工具逐项确认。'};
   restorePlans.set(plan.token,plan);
   return {token:plan.token,strategy,accessPolicy,canChooseTakeover,memberCount,sourceMode:manifest.identity?.authMode||'unknown',targetMode:target.authMode,warning:plan.warning,expiresAt:new Date(plan.expires).toISOString(),validation};
  } finally {rmSync(root,{recursive:true,force:true});}

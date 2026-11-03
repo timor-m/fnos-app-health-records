@@ -33,7 +33,10 @@ export function restoreAccessPolicy(sourceMode: string | undefined, strategy: 's
   const targetMode = getAppConfig().authMode;
   const supportedTarget = targetMode === 'local' || targetMode === 'fnos';
   const crossAuthentication = (targetMode === 'local' && sourceMode === 'fnos') || (targetMode === 'fnos' && sourceMode === 'local');
-  const canChooseTakeover = supportedTarget && strategy === 'cross' && sourceMode === undefined;
+  // A different NAS has a different identity domain, even when gateway UIDs match.
+  // Keep isolation as the default and require a fresh, explicit takeover preflight.
+  const canChooseTakeover = supportedTarget && strategy === 'cross'
+    && (sourceMode === undefined || (sourceMode === 'fnos' && targetMode === 'fnos'));
   if (takeover && !canChooseTakeover) throw createError({ statusCode: 400, statusMessage: '此备份不支持手动接管选项，请重新预检' });
   const accessPolicy: RestoreAccessPolicy = strategy === 'same' ? 'preserve'
     : supportedTarget && (crossAuthentication || (canChooseTakeover && takeover)) ? 'admin_takeover' : 'isolate';

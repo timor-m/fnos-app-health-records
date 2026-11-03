@@ -108,7 +108,7 @@ describe('restore authorization UX', () => {
     expect(mocks.toast).toHaveBeenCalledWith('synthetic preflight failure', 3600);
   });
 
-  it('uploaded legacy backups preflight again and bind confirmation to the same file', async () => {
+  for (const provider of ['local', 'fnos_gateway']) it(`${provider} optional takeover preflights again and binds confirmation to the same uploaded file`, async () => {
     mocks.upload.mockImplementation(async (_path, body: FormData) => {
       if (body.get('token')) {
         expect(body.get('token')).toBe('upload-chosen');
@@ -116,7 +116,9 @@ describe('restore authorization UX', () => {
       }
       return { token: body.get('takeover') === 'true' ? 'upload-chosen' : 'upload-initial', warning: 'synthetic', canChooseTakeover: true };
     });
-    const page = render(); await flushPromises(); await chooseFile(page, '选择外部备份文件');
+    const page = render(true, provider); await flushPromises(); await chooseFile(page, '选择外部备份文件');
+    expect((document.querySelector('[role="alertdialog"] input') as HTMLInputElement).checked).toBe(false);
+    expect(document.querySelector('[role="alertdialog"]')!.textContent).toContain('由当前管理员接管全部档案');
     await confirm.choose(true); await confirm.confirm();
     expect(mocks.upload).toHaveBeenCalledTimes(3);
     const files = mocks.upload.mock.calls.map(([, body]) => body.get('backup'));

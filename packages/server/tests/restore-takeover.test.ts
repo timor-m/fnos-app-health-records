@@ -10,7 +10,7 @@ import { getDatabase, closeDatabaseForTests } from '../database/client';
 import { bootstrapLocalAdministrator, createLocalAccount } from '../services/auth.service';
 import { createMember, assertMemberAccess, assertMemberShare, setMemberPermission } from '../services/member.service';
 import { getAccountPreferences, setMemberHidden, updateAccountPreferences } from '../services/member-preferences.service';
-import { createFullBackup, preflightRestore, preflightStoredBackup, restoreBackup, restoreUploadedBackup, listMembers, getReportDetail } from '../services/records.service';
+import { createFullBackup, preflightRestore, preflightStoredBackup, restoreBackup, restoreUploadedBackup, listMembers, getReportDetail, listBackups, validateBackup } from '../services/records.service';
 import { getRestoreTakeoverRepairStatus, preflightRestoreTakeoverRepair, applyRestoreTakeoverRepair } from '../services/restore-takeover-repair.service';
 import { getRequestUser } from '../utils/request-user';
 import type { RequestUser } from '../domain/request-user';
@@ -40,7 +40,7 @@ function rewriteArchive(root: string, path: string, name: string, edit: (manifes
   execFileSync('tar', ['-czf', output, '-C', stage, '.']);
   return output;
 }
-async function fixture(run: (f: { root: string; source: string; target: string; admin: RequestUser; owners: RequestUser[]; ids: string[]; backup: ReturnType<typeof createFullBackup> }) => void | Promise<void>, reverse = false) {
+async function fixture(run: (f: { root: string; source: string; target: string; admin: RequestUser; owners: RequestUser[]; ids: string[]; backup: ReturnType<typeof createFullBackup> }) => void | Promise<void>, reverse = false, sameFnos = false) {
   const root = mkdtempSync(join(tmpdir(), 'restore-takeover-'));
   const env = { ...process.env };
   const source = join(root, 'source'), target = join(root, 'target');
@@ -62,9 +62,9 @@ async function fixture(run: (f: { root: string; source: string; target: string; 
     getDatabase().prepare("INSERT INTO reports(id,member_id,created_by,report_type,title,status) VALUES('synthetic-report',?,?,'exam','synthetic','ready')").run(ids[0], owners[0].id);
     mkdirSync(join(source, 'reports'), { recursive: true }); writeFileSync(join(source, 'reports/synthetic.bin'), 'synthetic-original');
     const backup = createFullBackup(owners[0]);
-    closeDatabaseForTests(); process.env.STORAGE_DIR = target; process.env.AUTH_MODE = reverse ? 'fnos' : 'local';
+    closeDatabaseForTests(); process.env.STORAGE_DIR = target; process.env.AUTH_MODE = reverse || sameFnos ? 'fnos' : 'local';
     let admin: RequestUser;
-    if (reverse) admin = gateway();
+    if (reverse || sameFnos) admin = gateway(sameFnos ? '1000' : '2000');
     else {
       bootstrapLocalAdministrator();
       const id = String(getDatabase().prepare('SELECT id FROM users').get()!.id);
@@ -280,7 +280,7 @@ for (const stored of [false, true]) test(`local to fnOS ${stored ? 'stored' : 'u
   assert.throws(() => restoreUploadedBackup(login, f.backup.path, plan.token), status(409));
 }, true));
 
-test('fnOS legacy takeover requires explicit choice; same-mode archives remain isolated', () => fixture(f => {
+test('fnOS legacy and foreign NAS backups require explicit choice; same-instance restore cannot take over', () => fixture(f => {
   const legacy = rewriteArchive(f.root, f.backup.path, 'unknown-on-fnos', manifest => { delete manifest.identity; });
   assert.equal(preflightRestore(f.admin, legacy).accessPolicy, 'isolate');
   const chosen = preflightRestore(f.admin, legacy, true);
@@ -290,10 +290,72 @@ test('fnOS legacy takeover requires explicit choice; same-mode archives remain i
   assert.equal(preflightRestore(f.admin, own.path).accessPolicy, 'preserve');
   const foreign = rewriteArchive(f.root, own.path, 'foreign-fnos', manifest => { manifest.identity.id = 'other'; });
   assert.equal(preflightRestore(f.admin, foreign).accessPolicy, 'isolate');
-  assert.throws(() => preflightRestore(f.admin, foreign, true), status(400));
+  assert.equal(preflightRestore(f.admin, foreign).canChooseTakeover, true);
+  assert.equal(preflightRestore(f.admin, foreign, true).accessPolicy, 'admin_takeover');
+  assert.throws(() => preflightRestore(f.admin, own.path, true), status(400));
   restoreUploadedBackup(f.admin, legacy, chosen.token);
   assert.equal(listMembers(gateway()).length, 2);
 }, true));
+
+for (const stored of [false, true]) for (const takeover of [false, true]) {
+  test(`fnOS to another NAS ${stored ? 'stored' : 'uploaded'} restore ${takeover ? 'explicitly takes over' : 'remains isolated by default'}`, () => fixture(f => {
+    const targetMember = createMember(f.admin, { displayName: 'synthetic-target', relationship: 'other' });
+    if (stored) cpSync(join(f.source, 'backups/full'), join(f.target, 'backups/full'), { recursive: true });
+    const preflight = (chosen = false) => stored
+      ? preflightStoredBackup(f.admin, f.backup.id, chosen)
+      : preflightRestore(f.admin, f.backup.path, chosen);
+    const initial = preflight();
+    assert.equal(initial.strategy, 'cross');
+    assert.equal(initial.sourceMode, 'fnos'); assert.equal(initial.targetMode, 'fnos');
+    assert.equal(initial.accessPolicy, 'isolate'); assert.equal(initial.canChooseTakeover, true);
+    assert.match(initial.warning, /勾选/);
+    assert.notEqual(f.admin.id, f.owners[0].id, 'equal gateway UIDs on different NAS devices do not prove identity');
+    assert.equal(assertMemberAccess(f.admin, targetMember.id), 'manager', 'preflight must not replace target data');
+    assert.throws(() => preflightRestore({ ...f.admin, isAdmin: false, isGatewayAdmin: false }, f.backup.path, true), status(403));
+    const plan = takeover ? preflight(true) : initial;
+    const result = stored ? restoreBackup(f.admin, f.backup.id, plan.token) : restoreUploadedBackup(f.admin, f.backup.path, plan.token);
+    const login = gateway('1000');
+    assert.equal(login.id, result.identityRebind.userId);
+    assert.equal(result.identityRebind.accessPolicy, takeover ? 'admin_takeover' : 'isolate');
+    assert.equal(result.identityRebind.memberPermissionCount, takeover ? 3 : 0);
+    assert.deepEqual(listMembers(login).map(m => m.id).sort(), takeover ? f.ids.slice(0, 2).sort() : []);
+    assert.equal(getDatabase().prepare('SELECT 1 FROM health_members WHERE id=?').get(targetMember.id), undefined);
+    assert.equal(getDatabase().prepare('SELECT created_by FROM health_members WHERE id=?').get(f.ids[0])!.created_by, f.owners[0].id);
+    assert.ok(getDatabase().prepare('SELECT deleted_at FROM health_members WHERE id=?').get(f.ids[2])!.deleted_at);
+    assert.equal(readFileSync(join(f.target, 'reports/synthetic.bin'), 'utf8'), 'synthetic-original');
+    assert.equal(getAccountPreferences(login)?.selfMemberId ?? null, null);
+    assert.throws(() => assertMemberAccess(f.owners[0], f.ids[0]), status(403));
+    const ordinary = gateway('1001', false);
+    assert.equal(listMembers(ordinary).length, 0, 'a matching old NAS UID receives no access');
+    if (takeover) {
+      assert.equal(getReportDetail(login, 'synthetic-report').id, 'synthetic-report');
+      for (const id of f.ids.slice(0, 2)) assertMemberShare(login, id);
+      assert.equal(getDatabase().prepare('SELECT can_manage_sharing FROM member_permissions WHERE member_id=? AND user_id=?').get(f.ids[2], login.id)!.can_manage_sharing, 1);
+      const version = Number(getDatabase().prepare('SELECT version FROM member_permission_versions WHERE member_id=?').get(f.ids[0])!.version);
+      setMemberPermission(login, f.ids[0], { userId: ordinary.id, permission: 'viewer', version });
+      assert.equal(assertMemberAccess(ordinary, f.ids[0]), 'viewer');
+      assert.throws(() => assertMemberAccess(ordinary, f.ids[1]), status(403));
+    }
+    assert.throws(() => restoreUploadedBackup(login, f.backup.path, plan.token), status(409));
+  }, false, true));
+}
+
+for (const switched of [false, true]) test(`cross-NAS explicit takeover rolls back ${switched ? 'after switching' : 'before switching'}`, () => fixture(f => {
+  const existing = createMember(f.admin, { displayName: 'synthetic-target', createSelf: true });
+  const failing = rewriteArchive(f.root, f.backup.path, 'nas-grant-failure', (_manifest, db) => {
+    db.exec(switched ? "CREATE TRIGGER reject_restore_audit BEFORE INSERT ON audit_logs WHEN NEW.action='backup.restore' BEGIN SELECT RAISE(ABORT,'synthetic NAS restore failure'); END"
+      : "CREATE TRIGGER reject_takeover BEFORE INSERT ON member_permissions BEGIN SELECT RAISE(ABORT,'synthetic NAS grant failure'); END");
+  });
+  const plan = preflightRestore(f.admin, failing, true);
+  assert.throws(() => restoreUploadedBackup(f.admin, failing, plan.token), /synthetic NAS/);
+  assert.equal(gateway('1000').id, f.admin.id);
+  assert.equal(assertMemberAccess(f.admin, existing.id), 'manager');
+  assert.equal(existsSync(join(f.target, 'reports/synthetic.bin')), false);
+  assert.equal(existsSync(join(f.target, 'restore-maintenance.json')), false);
+  const safety = listBackups(f.admin).filter(backup => backup.reason === 'pre_restore');
+  assert.equal(safety.length, 1);
+  assert.equal(validateBackup(f.admin, safety[0].id).valid, true);
+}, false, true));
 
 test('fnOS restore rejects stale roles, pending identities, wrong providers and changed gateway subjects', () => fixture(f => {
   assert.throws(() => preflightRestore({ ...f.admin, authenticated: false }, f.backup.path), status(403));

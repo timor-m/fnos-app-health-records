@@ -57,7 +57,7 @@ const repairStatusError = ref(false);
 const checkingRepairStatus = ref(false);
 const backupBusy = computed(() => creatingBackup.value || uploadingRestore.value || repairing.value || preflighting.value || Boolean(restoringId.value));
 const restoreMessage = (plan: RestorePlan) => `${plan.warning}\n恢复会替换当前数据、配置和密钥，系统会先创建安全备份。`;
-function legacyChoice(plan: RestorePlan, change: (checked: boolean) => Promise<string>) {
+function takeoverChoice(plan: RestorePlan, change: (checked: boolean) => Promise<string>) {
   return plan.canChooseTakeover ? { label: '由当前管理员接管全部档案', checked: false, change } : undefined;
 }
 async function loadRepairStatus() {
@@ -183,7 +183,7 @@ async function restoreBackup(backup: BackupSummary) {
   confirmDialog.ask({
     title: "从备份恢复",
     message: restoreMessage(plan),
-    choice: legacyChoice(plan,async checked=>{
+    choice: takeoverChoice(plan,async checked=>{
       plan=await request(`backups/${encodeURIComponent(backup.id)}/preflight`,{method:'POST',body:JSON.stringify({takeover:checked})});
       return restoreMessage(plan);
     }),
@@ -222,7 +222,7 @@ async function restoreUploadedBackup(event: Event) {
   confirmDialog.ask({
     title: "从外部备份恢复",
     message: restoreMessage(plan),
-    choice: legacyChoice(plan,async checked=>{
+    choice: takeoverChoice(plan,async checked=>{
       const body=new FormData();body.append('backup',file);body.append('takeover',String(checked));
       plan=await requestUpload('backups/restore-upload',body);
       return restoreMessage(plan);
