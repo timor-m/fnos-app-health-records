@@ -36,7 +36,8 @@ export type MemberIdentityAssessment = {
   patientBirthDate: string | null;
   patientAgeText: string | null;
   patientApproxBirthDate: string | null;
-  mismatchedFields: Array<"sex" | "birthDate">;
+  mismatchedFields: Array<"name" | "sex" | "birthDate">;
+  verificationIncomplete: boolean;
   candidates: Array<{
     id: string;
     displayName: string;
@@ -140,7 +141,7 @@ export function patientAgeFromOcrText(
 }
 
 /*
- * 患者姓名只在显式“姓名”标签旁采信。姓名不发给 AI（AI 输入在规划阶段脱敏），
+ * 患者姓名只在显式身份标签旁采信。姓名不发给 AI（AI 输入在规划阶段脱敏），
  * 但原始 OCR 文本本就保存在本地，这里直接本地提取用于成员归属提醒和
  * 创建成员表单的预填，数据不出库。
  */
@@ -155,14 +156,21 @@ export function patientNameFromOcrText(
     } catch {
       continue;
     }
-    for (const line of lines) {
-      const text = String(line.text || "").trim();
+    for (let index = 0; index < lines.length; index++) {
+      const text = String(lines[index].text || "").normalize("NFKC").trim();
       if (!text) continue;
-      const match = text.match(/姓名\s*[:：]\s*([^\s，,；;、|]{2,15})/);
+      const label = text.match(/(?:患\s*者\s*姓\s*名|病\s*人\s*姓\s*名|姓\s*名|用\s*药\s*人(?:\s*姓\s*名)?|患\s*者\s*名)\s*[:：|｜]/);
+      if (!label) continue;
+      if (/(?:医师|医生|药师|审核人|发药人|调剂人|联系人|家属|监护人)[:：]?$/.test(text.slice(0, label.index).replace(/\s+/g, ""))) continue;
+      // A standalone label followed by one value is a common OCR cell split.
+      // Never cross another labelled field or accept an unlabelled name alone.
+      const value = text.slice(label.index! + label[0].length).trim() ||
+        String(lines[index + 1]?.text || "").normalize("NFKC").trim();
+      const match = value.match(/^([^\s，,；;、|｜:：]{2,15})(?=$|[\s，,；;、|｜:：])/);
       if (!match) continue;
       const name = match[1].trim();
       /* 纯中文（可带间隔号）或纯字母名才采信，排除“姓名：张3”一类 OCR 噪声 */
-      if (!/^[一-鿿·]+$|^[A-Za-z][A-Za-z .]{1,14}$/.test(name)) continue;
+      if (!/^[一-鿿·]+$|^[A-Za-z][A-Za-z .]{1,14}$/.test(name) || /姓名|性别|年龄|医师|医生|药师|出生|科室|诊断|处方|日期|药品/.test(name)) continue;
       return name;
     }
   }
@@ -178,6 +186,8 @@ function reportOcrLinesJson(reportId: string) {
       FROM ocr_results o
       JOIN report_pages p ON p.id = o.page_id
       WHERE p.report_id = ?
+      AND o.rowid = (SELECT latest.rowid FROM ocr_results latest WHERE latest.page_id = p.id
+        ORDER BY latest.created_at DESC, latest.rowid DESC LIMIT 1)
       ORDER BY p.page_number
       LIMIT 3
     `,
@@ -241,7 +251,7 @@ function approxBirthDateFromAge(
 
 /*
  * 评估报告患者与当前成员是否可能不符：
- * - 成员资料没有性别和出生日期，或 OCR 提取不到任何信号时，不判断（返回 null）
+ * - OCR 提取不到任何信号时不判断；成员资料不足以比对时提示待核对，不断言冲突
  * - 性别冲突或出生日期冲突即视为可能不符；候选成员要求出生日期精确一致，
  *   仅性别一致太弱，不构成归属建议
  * - 用户已忽略的提醒不再返回
@@ -272,7 +282,6 @@ export function assessReportMemberIdentity(
       }
     | undefined;
   if (!report) return null;
-  if (!report.memberSex && !report.memberBirthDate) return null;
   const dismissed = db
     .prepare(
       "SELECT 1 AS found FROM report_field_overrides WHERE report_id = ? AND field_key = ?",
@@ -280,11 +289,11 @@ export function assessReportMemberIdentity(
     .get(reportId, identityDismissedFieldKey);
   if (dismissed) return null;
   const patient = patientIdentityForReport(reportId);
-  if (!patient.sex && !patient.birthDate && !patient.age) return null;
+  if (!patient.name && !patient.sex && !patient.birthDate && !patient.age) return null;
   /* 患者姓名与当前成员档案名一致时视为同一人，出生日期/性别差异不再提醒 */
   if (patient.name && sameIdentityName(report.memberDisplayName, patient.name))
     return null;
-  const mismatchedFields: Array<"sex" | "birthDate"> = [];
+  const mismatchedFields: MemberIdentityAssessment["mismatchedFields"] = [];
   if (
     report.memberSex &&
     report.memberSex !== "unknown" &&
@@ -319,7 +328,16 @@ export function assessReportMemberIdentity(
     )
       mismatchedFields.push("birthDate");
   }
-  if (!mismatchedFields.length) return null;
+  // Keep specific demographic conflicts first. A different display name may
+  // be a nickname or relationship label, so it only requests confirmation.
+  if (!mismatchedFields.length && patient.name && !sameIdentityName(report.memberDisplayName, patient.name)) {
+    mismatchedFields.push("name");
+  }
+  const verificationIncomplete = !patient.name && !mismatchedFields.length && !Boolean(
+    (patient.sex && report.memberSex && report.memberSex !== "unknown") ||
+    ((patient.birthDate || patient.age) && report.memberBirthDate),
+  );
+  if (!mismatchedFields.length && !verificationIncomplete) return null;
   /*
    * 候选成员要求身份强一致：有精确出生日期时按日期等值匹配；
    * 只有年龄信号时按报告参考日期折算的月龄落在容差内匹配。
@@ -418,6 +436,7 @@ export function assessReportMemberIdentity(
         ? approxBirthDateFromAge(report.referenceDate, patient.age)
         : null,
     mismatchedFields,
+    verificationIncomplete,
     candidates,
   };
 }

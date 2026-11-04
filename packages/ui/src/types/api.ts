@@ -1217,7 +1217,8 @@ export type ReportDetail = ReportSummary & {
     patientBirthDate: string | null;
     patientAgeText: string | null;
     patientApproxBirthDate: string | null;
-    mismatchedFields: Array<"sex" | "birthDate">;
+    mismatchedFields: Array<"name" | "sex" | "birthDate">;
+    verificationIncomplete: boolean;
     candidates: Array<{
       id: string;
       displayName: string;

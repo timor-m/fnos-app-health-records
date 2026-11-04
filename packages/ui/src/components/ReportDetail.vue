@@ -1583,7 +1583,7 @@ const memberPatientInfo = computed(() => {
 });
 const memberMismatchFieldLabels = computed(() =>
   (memberIdentityAssessment.value?.mismatchedFields || [])
-    .map((field) => (field === "sex" ? "性别" : "出生日期/年龄"))
+    .map((field) => (field === "name" ? "姓名/称呼" : field === "sex" ? "性别" : "出生日期/年龄"))
     .join("和")
 );
 const assigningMember = ref(false);
@@ -2132,8 +2132,9 @@ onActivated(() => {
       <section v-if="memberIdentityAssessment" class="duplicate-warning member-mismatch-notice">
         <CircleAlert :size="18" />
         <div>
-          <strong>这份报告可能不属于当前成员</strong>
-          <p>报告患者信息（{{ memberPatientInfo }}）与当前成员资料的{{ memberMismatchFieldLabels }}不一致，可能上传时选错了成员。核对后可以一键归属，或创建新成员并归属。</p>
+          <strong>{{ memberIdentityAssessment.verificationIncomplete ? '成员归属待核对' : '这份报告可能不属于当前成员' }}</strong>
+          <p v-if="memberIdentityAssessment.verificationIncomplete">已识别到患者信息（{{ memberPatientInfo }}），但未能可靠识别姓名，当前成员资料也不足以完成身份比对，请对照原件核对归属。</p>
+          <p v-else>报告患者信息（{{ memberPatientInfo }}）与当前成员资料的{{ memberMismatchFieldLabels }}不一致，请核对是否选对成员；成员使用昵称或亲属称呼时，也可以确认属于当前成员。核对后可以一键归属，或创建新成员并归属。</p>
           <div class="duplicate-actions member-mismatch-actions">
             <button v-if="canManageReport"
               v-for="candidate in memberIdentityAssessment.candidates"
@@ -2151,7 +2152,7 @@ onActivated(() => {
               <Plus :size="15" />创建新成员并归属
             </button>
             <button v-if="canManageReport" class="soft-action-button" type="button" :disabled="dismissingMismatch" @click="dismissMemberMismatch">
-              {{ dismissingMismatch ? "处理中" : "忽略提醒" }}
+              {{ dismissingMismatch ? "处理中" : "确认属于当前成员" }}
             </button>
           </div>
           <form v-if="memberCreateOpen" class="member-create-form" @submit.prevent="submitMemberCreate">

@@ -155,14 +155,14 @@ test("flags age mismatch for age-only reports and suggests age-matched members",
       ocrLines: childReportOcr,
     },
   );
-  /* 成员年龄与报告年龄一致时不提醒 */
+  /* 年龄一致不能抹掉姓名差异（成员可能使用昵称）。 */
   await withDatabase(
     ({ reportId }) => {
       const db = getDatabase();
       db.exec(
         "UPDATE reports SET sampled_at = '2026-07-23 18:17:00' WHERE id = 'report'",
       );
-      assert.equal(assessReportMemberIdentity(manager, reportId), null);
+      assert.deepEqual(assessReportMemberIdentity(manager, reportId)?.mismatchedFields, ["name"]);
     },
     {
       memberSex: null,
@@ -181,6 +181,12 @@ test("extracts patient name only next to an explicit label", () => {
   assert.equal(patientNameFromOcrText([ocrLinesJson(["姓名："])]), null);
   assert.equal(patientNameFromOcrText([ocrLinesJson(["姓名：张3"])]), null);
   assert.equal(patientNameFromOcrText([ocrLinesJson(["患者姓名一栏"])]), null);
+  for (const lines of [["用药人：李小明"], ["患 者 姓 名：李小明"], ["姓 名：李小明"], ["姓名：", "李小明"]]) {
+    assert.equal(patientNameFromOcrText([ocrLinesJson(lines)]), "李小明");
+  }
+  for (const lines of [["姓名：", "性别：男"], ["医生：李小明"], ["医生姓名：李小明"], ["药师姓名：李小明"], ["联系人姓名：李小明"], ["李小明"], ["姓名：", "处方医师"]]) {
+    assert.equal(patientNameFromOcrText([ocrLinesJson(lines)]), null);
+  }
 });
 
 test("suggests members whose display name matches the patient name", async () => {
@@ -268,19 +274,62 @@ test("suggests members whose birth date matches the patient exactly", async () =
   );
 });
 
-test("stays silent when member profile matches or lacks identity fields", async () => {
+test("name differences request confirmation even with matching or missing demographic fields", async () => {
   await withDatabase(
     ({ reportId }) => {
-      assert.equal(assessReportMemberIdentity(manager, reportId), null);
+      assert.deepEqual(assessReportMemberIdentity(manager, reportId)?.mismatchedFields, ["name"]);
     },
     { memberSex: "male", memberBirthDate: "1985-03-12" },
   );
   await withDatabase(
     ({ reportId }) => {
-      assert.equal(assessReportMemberIdentity(manager, reportId), null);
+      const assessment = assessReportMemberIdentity(manager, reportId);
+      assert.deepEqual(assessment?.mismatchedFields, ["name"]);
+      assert.equal(assessment?.verificationIncomplete, false);
     },
     { memberSex: null, memberBirthDate: null },
   );
+});
+
+test("missing OCR name and incomplete member profile request verification without claiming a conflict", async () => {
+  await withDatabase(({ reportId }) => {
+    getDatabase().prepare("UPDATE reports SET report_type='prescription' WHERE id=?").run(reportId);
+    const assessment=assessReportMemberIdentity(manager,reportId);
+    assert.ok(assessment);
+    assert.equal(assessment.patientName,null);
+    assert.equal(assessment.verificationIncomplete,true);
+    assert.deepEqual(assessment.mismatchedFields,[]);
+    dismissReportMemberIdentity(manager,reportId);
+    assert.equal(assessReportMemberIdentity(manager,reportId),null);
+  },{memberSex:null,memberBirthDate:null,ocrLines:["药材调剂单（代煎）","龄：35岁"]});
+  await withDatabase(({ reportId }) => {
+    assert.equal(assessReportMemberIdentity(manager,reportId),null);
+  },{memberSex:null,memberBirthDate:null,ocrLines:["药材调剂单（代煎）","合成药材 8g"]});
+  await withDatabase(({ reportId }) => {
+    assert.equal(assessReportMemberIdentity(manager,reportId),null);
+  },{memberSex:"female",memberBirthDate:null,ocrLines:["性别：女","年龄：35岁"]});
+});
+
+test("name-only dispensing identity works without member demographics and can be confirmed", async () => {
+  await withDatabase(({reportId})=>{
+    const assessment=assessReportMemberIdentity(manager,reportId);
+    assert.equal(assessment?.patientName,"李小明");
+    assert.deepEqual(assessment?.mismatchedFields,["name"]);
+    assert.equal(assessment?.verificationIncomplete,false);
+    dismissReportMemberIdentity(manager,reportId);
+    assert.equal(assessReportMemberIdentity(manager,reportId),null);
+  },{memberSex:null,memberBirthDate:null,ocrLines:["用药人：李小明"]});
+});
+
+test("member verification uses the latest OCR for each source page", async () => {
+  await withDatabase(({reportId})=>{
+    const db=getDatabase();
+    db.prepare("UPDATE health_members SET display_name='李小明' WHERE id='member-self'").run();
+    db.prepare("INSERT INTO processing_jobs(id,report_id,page_id,job_type,status,pipeline_version,deduplication_key) VALUES('ocr-new',?,'page-1','ocr','completed','unit-test','ocr-new')").run(reportId);
+    db.prepare("INSERT INTO ocr_results(id,job_id,page_id,engine,model_version,lines_json,text_length) VALUES('new','ocr-new','page-1','test','test',?,10)")
+      .run(ocrLinesJson(["用药人：李小明"]));
+    assert.equal(assessReportMemberIdentity(manager,reportId),null);
+  },{memberSex:null,memberBirthDate:null});
 });
 
 test("dismissal hides the assessment until the report is reassigned", async () => {
@@ -324,6 +373,9 @@ test("assigns the report to another member and clears stale blood type source", 
         (db.prepare("SELECT member_id AS m FROM app_notifications WHERE id = 'notice-1'").get() as { m: string }).m,
         "member-target",
       );
+      // A relationship label still needs explicit confirmation after reassignment.
+      assert.deepEqual(assessReportMemberIdentity(manager, reportId)?.mismatchedFields, ["name"]);
+      dismissReportMemberIdentity(manager, reportId);
       assert.equal(assessReportMemberIdentity(manager, reportId), null);
       assert.throws(
         () => assignReportMember(manager, reportId, { memberId: "member-target" }),
