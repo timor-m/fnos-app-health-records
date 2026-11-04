@@ -64,6 +64,7 @@ const objects = [
   'medication_intake_course_insert', 'medication_intake_course_update'
 ];
 const additiveColumns = {
+  report_medications: { formula_json: 'TEXT CHECK(formula_json IS NULL OR json_valid(formula_json))' },
   medication_courses: { specification: 'TEXT', dosage_form: 'TEXT', deleted_at:'TEXT', purge_after:'TEXT' },
   medication_intakes: { specification: 'TEXT', dosage_form: 'TEXT', route: 'TEXT', deleted_at:'TEXT', purge_after:'TEXT',
     source_report_id: 'TEXT REFERENCES reports(id) ON DELETE SET NULL', source_medication_id: 'TEXT',

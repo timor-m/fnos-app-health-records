@@ -1,4 +1,7 @@
 import {mutateStandaloneTrash} from '../services/health-record-trash.service';
+import {syntheticFormula} from './fixtures/decoction-formula';
+import {createClinicalFact,updateClinicalFact} from '../services/clinical-fact.service';
+import {getReportDetail,updateReportPages,deleteReportPage} from '../services/records.service';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -36,6 +39,74 @@ function fixture(run:(db:DatabaseSync)=>void){
     run(db);
   }finally{closeDatabaseForTests();if(previous===undefined)delete process.env.STORAGE_DIR;else process.env.STORAGE_DIR=previous;rmSync(directory,{recursive:true,force:true});}
 }
+
+test('a decoction is confirmed and taken as one medication with its original formula snapshot',()=>fixture(db=>{
+  const created=createClinicalFact(manager,'report-a','medication',{medicationName:'合成汤剂',context:'prescription',formula:syntheticFormula});
+  const source=listHistoricalMedications(manager,'member-a').find(item=>item.medicationId===created.id)!;
+  assert.deepEqual(source.formula,syntheticFormula);
+  const document=listMedicationDocuments(manager,{memberId:'member-a'}).find(item=>item.id==='report-a');
+  assert.equal(document?.formulaCount,1);assert.equal(document?.medicationCount,2);
+  assert.equal(getReportDetail(manager,'report-a').medications.find(item=>item.id===created.id)?.formula?.ingredients.length,6);
+  assert.equal(listMedications(manager,{memberId:'member-a'}).courses.length,0);
+  const course=createMedicationCourse(manager,{memberId:'member-a',sourceMedicationId:created.id,confirmed:true,startedAt:'2025-01-02'});
+  assert.equal(listMedications(manager,{memberId:'member-a'}).courses.length,1);
+  assert.deepEqual(course.source?.formula,syntheticFormula);
+  assert.equal(course.dose,null,'ingredient grams never become an ingestion dose');
+  const intake=createMedicationIntake(manager,{memberId:'member-a',courseId:course.id,takenAt:'2025-01-03',amount:'1',amountUnit:'袋'});
+  assert.deepEqual(intake.source?.formula,syntheticFormula);
+  const changed=structuredClone(syntheticFormula);changed.ingredients[0].amount='99';
+  updateClinicalFact(manager,'medication',created.id,{formula:changed});
+  assert.equal(listHistoricalMedications(manager,'member-a').find(item=>item.medicationId===created.id)?.formula?.ingredients[0].amount,'99');
+  assert.deepEqual(getMedicationCourse(manager,course.id).source?.formula,syntheticFormula);
+  assert.deepEqual(getMedicationIntake(manager,intake.id).source?.formula,syntheticFormula);
+  status(()=>updateClinicalFact(viewer,'medication',created.id,{formula:changed}),403);
+  status(()=>updateClinicalFact(manager,'medication',created.id,{formula:{kind:'decoction',ingredients:[{name:''}]}}),400);
+}));
+
+test('formula constituent evidence follows page reorder and removal without rewriting confirmed snapshots',()=>fixture(db=>{
+  for (const number of [1,2]) db.prepare(`INSERT INTO report_pages(id,report_id,page_number,original_name,mime_type,storage_path,file_size,sha256)
+    VALUES(?,'report-a',?,?,'image/png',?,1,?)`).run(`page-${number}`,number,`${number}.png`,`${number}.png`,`hash-${number}`);
+  db.prepare('UPDATE report_medications SET formula_json=?,evidence_json=? WHERE id=?')
+    .run(JSON.stringify(syntheticFormula),JSON.stringify(syntheticFormula.ingredients.flatMap(item=>item.evidence)),'source-a');
+  const course=createMedicationCourse(manager,{memberId:'member-a',sourceMedicationId:'source-a',confirmed:true,startedAt:'2025-01-02'});
+  updateReportPages(manager,'report-a',{pages:[{id:'page-2'},{id:'page-1'}]});
+  let saved=JSON.parse(String(db.prepare('SELECT formula_json FROM report_medications WHERE id=?').get('source-a')?.formula_json));
+  assert.equal(saved.ingredients[0].evidence[0].pageNumber,2);
+  assert.equal(saved.ingredients[3].evidence[0].pageNumber,1);
+  deleteReportPage(manager,'report-a','page-1');
+  saved=JSON.parse(String(db.prepare('SELECT formula_json FROM report_medications WHERE id=?').get('source-a')?.formula_json));
+  assert.deepEqual(saved.ingredients[0].evidence,[]);
+  assert.equal(saved.ingredients[3].evidence[0].pageNumber,1);
+  assert.deepEqual(getMedicationCourse(manager,course.id).source?.formula,syntheticFormula);
+}));
+
+test('formula columns are backed up before additive completion and reopen without data loss',()=>fixture(db=>{
+  db.exec('ALTER TABLE report_medications DROP COLUMN formula_json');
+  assert.equal(medicationDraftNeedsRepair(db),true);
+  const root=process.env.STORAGE_DIR!;closeDatabaseForTests();
+  const reopened=getDatabase();
+  assert.equal(reopened.prepare('SELECT medication_name FROM report_medications WHERE id=?').get('source-a')?.medication_name,'合成药品');
+  assert.equal(reopened.prepare('SELECT formula_json FROM report_medications WHERE id=?').get('source-a')?.formula_json,null);
+  assert.equal(reopened.prepare('SELECT MAX(version) n FROM schema_migrations').get()?.n,19);
+  const backups=readdirSync(join(root,'backups','db'));assert.equal(backups.length,1);
+  const backup=new DatabaseSync(join(root,'backups','db',backups[0]),{readOnly:true});try{
+    assert.ok(!backup.prepare('PRAGMA table_info(report_medications)').all().some(row=>row.name==='formula_json'));
+    assert.ok(backup.prepare('SELECT 1 FROM report_medications WHERE id=?').get('source-a'));
+  }finally{backup.close();}
+  closeDatabaseForTests();getDatabase();assert.deepEqual(readdirSync(join(root,'backups','db')),backups);
+}));
+
+test('failed formula backup does not alter the database or continue startup',()=>fixture(db=>{
+  db.exec('ALTER TABLE report_medications DROP COLUMN formula_json');
+  assert.equal(medicationDraftNeedsRepair(db),true);
+  const root=process.env.STORAGE_DIR!;closeDatabaseForTests();
+  mkdirSync(join(root,'backups'),{recursive:true});writeFileSync(join(root,'backups','db'),'blocked backup');
+  assert.throws(()=>getDatabase());closeDatabaseForTests();
+  const unchanged=new DatabaseSync(join(root,'db','health-records.sqlite'),{readOnly:true});try{
+    assert.ok(!unchanged.prepare('PRAGMA table_info(report_medications)').all().some(row=>row.name==='formula_json'));
+    assert.ok(unchanged.prepare('SELECT 1 FROM report_medications WHERE id=?').get('source-a'));
+  }finally{unchanged.close();}
+}));
 
 test('historical prescriptions require explicit confirmation and retain their original snapshots through re-extraction',()=>fixture(db=>{
   assert.equal(listHistoricalMedications(manager,'member-a').length,1);

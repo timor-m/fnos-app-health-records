@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import MedicationFormulaPanel from './MedicationFormulaPanel.vue';
 import FormSuggest from './FormSuggest.vue';
 import MedicationUnitPicker from './MedicationUnitPicker.vue';
 import { medicationDosageFormOptions, medicationFrequencyOptions, medicationRouteOptions } from '../utils/record-form-options';
@@ -32,9 +33,10 @@ const leave=useUnsavedRecord(()=>JSON.stringify([form,context.value,repeatAcknow
 async function cancel(){if(await leave.confirmLeave())emit('cancel');}
 const isRepeat=computed(()=>Boolean(props.source && 'confirmedCourseIds' in props.source && props.source.confirmedCourseIds.length && !props.action));
 const courseOptions=computed(()=>[{value:'',label:'不关联已有用药'},...(props.courses || []).map(course=>({value:course.id,label:`${course.medicationName} ${course.specification || ''} · ${medicationStatusLabels[course.status]} · ${course.startedAt.slice(0,10)}`}))]);
+const sourceFormula=computed(()=>props.intake?.source?.formula || props.course?.source?.formula || props.source?.formula || props.courses?.find(course=>course.id===form.courseId)?.source?.formula || null);
 const editableFields = computed(()=>props.mode==='intake' || !props.action || props.action==='adjust');
 const title = computed(()=>props.mode==='intake' ? (props.intake ? '编辑这次服药' : '记一次已服药')
-  : props.action ? `${medicationActionLabels[props.action]}用药` : '确认开始用药');
+  : props.action ? `${medicationActionLabels[props.action]}用药` : sourceFormula.value ? '确认整方使用' : '确认开始用药');
 function localNow() { const now=new Date();return new Date(now.getTime()-now.getTimezoneOffset()*60000).toISOString().slice(0,16); }
 function displayedIntakeTime(){return props.intake?.takenAt ? formatMedicationDate(props.intake.takenAt).replace(' ','T') : null;}
 function reset() {
@@ -98,11 +100,13 @@ onBeforeUnmount(()=>{generation++;});
       <p v-else-if="mode==='intake'" class="medication-form-hint">仅记录这一次已经服用的药。不要求每天记录，也不会自动生成服药记录。</p>
       <p v-else-if="action && action!=='adjust'" class="medication-form-hint">{{ course?.medicationName }} · {{ [course?.specification,course?.dose,course?.doseUnit].filter(Boolean).join(' ') }}</p>
       <p v-else class="medication-form-hint">记录你已开始使用的药品及用法，以后可在这条记录中调整或停止。</p>
+      <MedicationFormulaPanel v-if="sourceFormula" :formula="sourceFormula" title="来源配方" />
+      <p v-if="sourceFormula" class="medication-form-hint">按整张药方记录服用，药材投料克数不是每次服用量。配方如有变化，请核对新药单后另行确认使用。</p>
       <fieldset :disabled="saving" class="medication-form-grid">
         <label v-if="mode==='intake' && courses?.length" class="full">从已有用药带入（选填）<FormSelect v-model="form.courseId" :options="courseOptions" :disabled="saving" aria-label="选择已有用药" @change="chooseCourse" /></label>
-        <label v-if="editableFields" class="full">药品名称<input v-model="form.medicationName" name="medicationName" required maxlength="200" placeholder="填写药盒或处方上的名称" /></label>
+        <label v-if="editableFields" class="full">{{ sourceFormula ? '药方名称' : '药品名称' }}<input v-model="form.medicationName" name="medicationName" required maxlength="200" placeholder="填写药盒或处方上的名称" /></label>
         <template v-if="mode==='course' && editableFields">
-          <label>每次用量（选填）<input v-model="form.dose" name="dose" maxlength="200" placeholder="例如 1" /></label>
+          <label>{{ sourceFormula ? '整方每次服用量（选填）' : '每次用量（选填）' }}<input v-model="form.dose" name="dose" maxlength="200" placeholder="例如 1" /></label>
           <MedicationUnitPicker v-model="form.doseUnit" label="用量单位" title="用量单位（选填）" name="doseUnit" maxlength="200" :disabled="saving" />
           <label class="full">频次（选填）<FormSuggest v-model="form.frequency" :options="medicationFrequencyOptions" label="用药频次" name="frequency" maxlength="200" placeholder="选择或填写" :disabled="saving" /></label>
         </template>

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import MedicationFormulaPanel from './MedicationFormulaPanel.vue';
+import {parseMedicationFormula,type MedicationFormula} from '../../../shared/medication-formula';
 import FormSuggest from './FormSuggest.vue';
 import MedicationUnitPicker from './MedicationUnitPicker.vue';
 import { medicationDosageFormOptions, medicationFrequencyOptions, medicationQuantityUnitOptions, medicationRouteOptions } from '../utils/record-form-options';
@@ -109,13 +111,19 @@ function factText(key: string) {
   return value === null || value === undefined ? "" : String(value);
 }
 
+const formula=ref<MedicationFormula|null>(null);
+function setFormula(enabled:boolean){
+  formula.value=enabled?{kind:'decoction',doseCount:null,preparation:null,ingredients:[{name:'',amount:null,unit:null,amountBasis:'unspecified',totalAmount:null,totalUnit:null,instructions:null,evidence:[]}]}:null;
+  if(enabled){form.medicationName ||= '中药汤剂';form.genericName='';form.specification='';form.dosageForm='汤剂';if(form.context==='other')form.context='prescription';}
+}
 const editVersion=ref<number>();
 let generation=0;let alive=true;onBeforeUnmount(()=>{alive=false;generation++;});
-const leave=useUnsavedRecord(()=>props.open?JSON.stringify(form):'',saving);
+const leave=useUnsavedRecord(()=>props.open?JSON.stringify([form,formula.value]):'',saving);
 const submissionKey=createSubmissionKey();
 async function close(){if(await leave.confirmLeave())emit('close');}
 watch(() => [props.open, props.reportId, props.type, props.fact] as const, ([open]) => {
   generation++;saving.value=false;editVersion.value=props.expectedSourceVersion;if(!open){leave.reset();return;}
+  formula.value=parseMedicationFormula(props.fact?.formula);
   Object.assign(form, {
     sectionName: factText("sectionName"),
     diagnosisType: factText("diagnosisType") || "other",
@@ -178,7 +186,7 @@ function payload() {
       genericName: form.genericName, specification: form.specification, dosageForm: form.dosageForm,
       dose: form.dose, doseUnit: form.doseUnit, frequency: form.frequency, route: form.route,
       duration: form.duration, quantity: form.quantity, quantityUnit: form.quantityUnit,
-      instructions: form.instructions
+      instructions: form.instructions, formula: formula.value
     };
   }
   if (props.type === "procedure") {
@@ -251,18 +259,20 @@ async function save() {
             <label class="clinical-fact-check"><input v-model="form.isPrimary" type="checkbox" /><span>主要诊断</span></label>
           </div>
           <div v-else-if="type === 'medication'" class="form-grid">
-            <label><span>用药场景</span><FormSelect v-model="form.context" :options="medicationContextOptions" /></label>
-            <label><span>报告章节</span><input v-model="form.sectionName" /></label>
-            <label class="field-wide"><span>药品名称</span><input v-model="form.medicationName" required /></label>
-            <label><span>通用名</span><input v-model="form.genericName" /></label>
-            <label><span>规格</span><input v-model="form.specification" /></label>
-            <label><span>剂型</span><FormSuggest v-model="form.dosageForm" :options="medicationDosageFormOptions" label="剂型" name="dosageForm" placeholder="选择或填写" :disabled="saving" /></label>
-            <label><span>每次剂量</span><input v-model="form.dose" /></label>
+            <label class="field-wide"><span>药单类型</span><select :value="formula?'decoction':'single'" :disabled="saving" @change="setFormula(($event.target as HTMLSelectElement).value==='decoction')"><option value="single">单个药品</option><option value="decoction">中药汤剂（整方）</option></select></label>
+            <label v-if="!formula"><span>用药场景</span><FormSelect v-model="form.context" :options="medicationContextOptions" /></label>
+            <label v-if="!formula"><span>报告章节</span><input v-model="form.sectionName" /></label>
+            <label class="field-wide"><span>{{ formula ? '药方名称' : '药品名称' }}</span><input v-model="form.medicationName" required /></label>
+            <MedicationFormulaPanel v-if="formula" v-model:formula="formula" class="field-wide" editable :disabled="saving" />
+            <label v-if="!formula"><span>通用名</span><input v-model="form.genericName" /></label>
+            <label v-if="!formula"><span>规格</span><input v-model="form.specification" /></label>
+            <label v-if="!formula"><span>剂型</span><FormSuggest v-model="form.dosageForm" :options="medicationDosageFormOptions" label="剂型" name="dosageForm" placeholder="选择或填写" :disabled="saving" /></label>
+            <label><span>{{ formula ? '整方每次服用量' : '每次剂量' }}</span><input v-model="form.dose" /></label>
             <MedicationUnitPicker v-model="form.doseUnit" label="剂量单位" name="doseUnit" :disabled="saving" />
             <label><span>频次</span><FormSuggest v-model="form.frequency" :options="medicationFrequencyOptions" label="用药频次" name="frequency" placeholder="选择或填写" :disabled="saving" /></label>
             <label><span>途径</span><FormSuggest v-model="form.route" :options="medicationRouteOptions" label="使用途径" name="route" placeholder="选择或填写" :disabled="saving" /></label>
             <label><span>疗程</span><input v-model="form.duration" /></label>
-            <label><span>数量</span><input v-model="form.quantity" /></label>
+            <label><span>{{ formula ? '整方调剂数量' : '数量' }}</span><input v-model="form.quantity" /></label>
             <label><span>数量单位</span><FormSuggest v-model="form.quantityUnit" :options="medicationQuantityUnitOptions" label="数量单位" name="quantityUnit" placeholder="选择或填写" :disabled="saving" /></label>
             <label class="field-wide"><span>原文用法</span><textarea v-model="form.instructions" rows="3"></textarea></label>
           </div>

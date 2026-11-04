@@ -1,3 +1,4 @@
+import { parseMedicationFormula } from '../../shared/medication-formula';
 import { assertReportWriteVersion,bumpReportWriteVersion } from './report-write-version';
 import { runHealthWorkflowRequest } from './health-workflow-request.service';
 import { assertNoPageAppend } from "./page-append-lock.service";
@@ -113,6 +114,11 @@ function fieldsFor(type: ClinicalFactType, input: Record<string, unknown>, creat
     putText("sectionName", "section_name", 200);
     putEnum("context", "medication_context", ["prescription", "outpatient", "inpatient", "discharge", "other"], "other");
     putText("medicationName", "medication_name", 300, true);
+    if ('formula' in input) {
+      const formula = parseMedicationFormula(input.formula);
+      if (input.formula != null && !formula) throw createError({ statusCode: 400, statusMessage: '请填写完整的中药配方明细' });
+      values.set('formula_json', formula ? JSON.stringify(formula) : null);
+    }
     putText("genericName", "generic_name", 300);
     putText("specification", "specification", 300);
     putText("dosageForm", "dosage_form", 100);

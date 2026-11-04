@@ -4,7 +4,7 @@ import MedicationRecordModal from './MedicationRecordModal.vue';
 import { request } from '../utils/api';
 import { useToast } from '../composables/useToast';
 import type { HistoricalMedication } from '../types/medications';
-const props=defineProps<{memberId:string;medicationId:string}>();
+const props=defineProps<{memberId:string;medicationId:string;formula?:boolean}>();
 const source=ref<HistoricalMedication|null>(null);const loading=ref(false);const error=ref('');let sequence=0;
 const editing=ref(false);const currentCourseId=ref<string|undefined>();
 let active=true;
@@ -29,7 +29,7 @@ onActivated(()=>{active=true;});
 </script>
 <template>
   <div class="report-medication-use">
-    <button v-if="!source" type="button" class="soft-action-button" :disabled="loading" @click="open">{{ loading ? '加载中…' : '确认实际使用' }}</button>
+    <button v-if="!source" type="button" class="soft-action-button" :disabled="loading" @click="open">{{ loading ? '加载中…' : formula ? '确认整方使用' : '确认实际使用' }}</button>
     <p v-if="error" role="alert">{{ error }}</p>
     <div v-if="source?.confirmedCourseIds.length" class="report-medication-existing">
       <p>这条报告用药已有确认的用药记录，可直接查看和调整。</p>

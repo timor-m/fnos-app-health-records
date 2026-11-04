@@ -58,7 +58,7 @@ export function healthRecordSnapshot(user:RequestUser,input:Input) {
  const overview=listMedications(user,{memberId});const medicationDocuments=listMedicationDocuments(user,{memberId});
  const documentMap=new Map(medicationDocuments.map(doc=>[doc.id,doc]));
  const documentEntries=new Map<string,HealthFeedEntry>();
- for(const doc of medicationDocuments){const item=base('medication_document',doc.id,memberId,'medication',doc.title,doc.date,'prescription');Object.assign(item,{documents:documents.filter(value=>value.id===doc.id),description:doc.medicationNames.join(' · '),medicationCount:doc.medicationCount,confirmedCount:0,activeCount:0,status:doc.status});documentEntries.set(doc.id,item);}
+ for(const doc of medicationDocuments){const item=base('medication_document',doc.id,memberId,'medication',doc.title,doc.date,'prescription');Object.assign(item,{documents:documents.filter(value=>value.id===doc.id),description:doc.medicationNames.join(' · '),medicationCount:doc.medicationCount,...(doc.formulaCount?{formulaCount:doc.formulaCount}:{}),confirmedCount:0,activeCount:0,status:doc.status});documentEntries.set(doc.id,item);}
  for(const course of overview.courses){
   const intakes=overview.intakes.filter(intake=>intake.courseId===course.id);
   const date=[course.startedAt,course.lastChangedAt,...intakes.map(intake=>intake.takenAt)].filter(Boolean).sort((a,b)=>Date.parse(a)-Date.parse(b)).at(-1)||null;

@@ -1,4 +1,5 @@
 import { DOMWrapper, flushPromises, mount } from '@vue/test-utils';
+import {syntheticFormula} from '../../server/tests/fixtures/decoction-formula';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { KeepAlive, defineComponent, ref } from 'vue';
 import MedicationRecords from '../src/components/MedicationRecords.vue';
@@ -131,6 +132,22 @@ it('confirming a historical prescription preserves specification and explicitly 
   expect(JSON.parse(call[1].body)).toMatchObject({memberId:'member',medicationName:'合成药品',specification:'合成规格',dosageForm:'片剂',sourceMedicationId:'source',
     startedAt:'2025-01-02T09:00',confirmed:true});
   expect(app.notifyDataChanged).toHaveBeenCalledOnce();wrapper.unmount();
+});
+
+it('confirms a decoction once with a blank ingestion dose rather than creating constituent courses',async()=>{
+  const wrapper=mount(MedicationEditor,{props:{memberId:'member',mode:'course',
+    source:{...source,medicationName:'合成汤剂',specification:null,dosageForm:'汤剂',dose:null,doseUnit:null,formula:syntheticFormula}}});
+  await flushPromises();
+  expect(wrapper.text()).toContain('配方');
+  expect(wrapper.text()).toContain('6 味');
+  expect(wrapper.get<HTMLInputElement>('input[name=dose]').element.value).toBe('');
+  expect(wrapper.get<HTMLInputElement>('input[name=medicationName]').element.value).toBe('合成汤剂');
+  await wrapper.get('.date-input').setValue('2025-01-02T09:00');
+  await wrapper.get('form').trigger('submit');await flushPromises();
+  const posts=mocks.request.mock.calls.filter(([path,options])=>path==='medications'&&options?.method==='POST');
+  expect(posts).toHaveLength(1);
+  expect(JSON.parse(posts[0]![1].body)).toMatchObject({sourceMedicationId:'source',medicationName:'合成汤剂',confirmed:true,dose:''});
+  wrapper.unmount();
 });
 
 it('actual intake editing uses PATCH and removal uses the shared recycle bin after confirmation',async()=>{

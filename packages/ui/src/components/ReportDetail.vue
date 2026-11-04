@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import MedicationFormulaPanel from './MedicationFormulaPanel.vue';
 import SourceRegionPicker from "./SourceRegionPicker.vue";
 import type {SourceRegion} from "../../../shared/source-region";
 import { observationSourceSections } from "../utils/observation-source-order";
@@ -1630,7 +1631,7 @@ const memberPatientInfo = computed(() => {
 });
 const memberMismatchFieldLabels = computed(() =>
   (memberIdentityAssessment.value?.mismatchedFields || [])
-    .map((field) => (field === "sex" ? "性别" : "出生日期/年龄"))
+    .map((field) => (field === "name" ? "姓名/称呼" : field === "sex" ? "性别" : "出生日期/年龄"))
     .join("和")
 );
 const assigningMember = ref(false);
@@ -2265,8 +2266,9 @@ onActivated(() => {
       <section v-if="memberIdentityAssessment" class="duplicate-warning member-mismatch-notice">
         <CircleAlert :size="18" />
         <div>
-          <strong>这份报告可能不属于当前成员</strong>
-          <p>报告患者信息（{{ memberPatientInfo }}）与当前成员资料的{{ memberMismatchFieldLabels }}不一致，可能上传时选错了成员。核对后可以一键归属，或创建新成员并归属。</p>
+          <strong>{{ memberIdentityAssessment.verificationIncomplete ? '成员归属待核对' : '这份报告可能不属于当前成员' }}</strong>
+          <p v-if="memberIdentityAssessment.verificationIncomplete">已识别到患者信息（{{ memberPatientInfo }}），但未能可靠识别姓名，当前成员资料也不足以完成身份比对，请对照原件核对归属。</p>
+          <p v-else>报告患者信息（{{ memberPatientInfo }}）与当前成员资料的{{ memberMismatchFieldLabels }}不一致，请核对是否选对成员；成员使用昵称或亲属称呼时，也可以确认属于当前成员。核对后可以一键归属，或创建新成员并归属。</p>
           <div class="duplicate-actions member-mismatch-actions">
             <button v-if="canManageReport"
               v-for="candidate in memberIdentityAssessment.candidates"
@@ -2284,7 +2286,7 @@ onActivated(() => {
               <Plus :size="15" />创建新成员并归属
             </button>
             <button v-if="canManageReport" class="soft-action-button" type="button" :disabled="dismissingMismatch" @click="dismissMemberMismatch">
-              {{ dismissingMismatch ? "处理中" : "忽略提醒" }}
+              {{ dismissingMismatch ? "处理中" : "确认属于当前成员" }}
             </button>
           </div>
           <form v-if="memberCreateOpen" class="member-create-form" @submit.prevent="submitMemberCreate">
@@ -2382,8 +2384,9 @@ onActivated(() => {
           </div>
         </section>
         <section v-if="detail?.medications.length" class="clinical-fact-panel">
-          <header><strong>报告所列用药</strong><span>共 {{ detail.medications.length }} 项</span></header>
+          <header><strong>{{ detail.medications.every(item=>item.formula) ? '报告所列药方' : '报告所列用药' }}</strong><span>共 {{ detail.medications.length }} {{ detail.medications.every(item=>item.formula) ? '份药方' : '项' }}</span></header>
           <p class="clinical-confirm-hint">报告中的药物不代表已使用；核对后可确认实际使用，生成用药记录。</p>
+          <p v-if="detail.medications.filter(item=>item.formula).length>1" class="formula-review-notice">识别到多份汤剂配方，请先核对是否为不同处方或重复扫描，再确认实际使用。</p>
           <div class="clinical-fact-list">
             <article v-for="item in detail.medications" :key="item.id">
               <div class="clinical-fact-heading">
@@ -2396,7 +2399,8 @@ onActivated(() => {
               </div>
               <p>{{ medicationDetail(item) || item.instructions || "原报告未注明详细用法" }}</p>
               <small v-if="item.instructions && medicationDetail(item)">{{ item.instructions }}</small>
-              <ReportMedicationUseButton v-if="canManageReport" :member-id="detail.memberId" :medication-id="item.id" />
+              <MedicationFormulaPanel v-if="item.formula" :formula="item.formula" show-source @source="openClinicalEvidence" />
+              <ReportMedicationUseButton v-if="canManageReport" :member-id="detail.memberId" :medication-id="item.id" :formula="Boolean(item.formula)" />
             </article>
           </div>
         </section>
@@ -3438,6 +3442,7 @@ onActivated(() => {
 </style>
 
 <style scoped>
+.formula-review-notice{padding:10px 12px;border:1px solid var(--line-strong);border-radius:10px;background:var(--surface-soft);font-size:12px;line-height:1.6;color:var(--muted)}
 .report-type-hint,.clinical-confirm-hint{margin:8px 0;font-size:12px;line-height:19px;color:var(--muted)}.report-type-form{display:flex;flex-direction:column;min-height:0}.report-type-form>div{padding:12px 14px;display:grid;gap:10px;overflow:auto}.report-type-form p{margin:0;font-size:12px;line-height:19px;color:var(--muted)}.report-type-form footer{margin:0;padding:8px 14px;border-top:1px solid var(--line)}
 @media (max-width:760px), (pointer:coarse) {
   .report-action-row { gap:12px 6px; align-items:center; }

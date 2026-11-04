@@ -33,7 +33,7 @@ export type HealthFeedEntry = {
   duplicateHint?: 'high' | 'possible';
   description: string | null; status: string | null; institution: string | null;
   documents: HealthDocument[]; processIds: string[]; groupId?: string;
-  medicationCount?: number; activeCount?: number; confirmedCount?: number; intakeCount?: number;
+  medicationCount?: number; formulaCount?: number; activeCount?: number; confirmedCount?: number; intakeCount?: number;
   episodeId?: string; symptomId?: string;
   doseNumber?: string | null; note?: string | null;
 };

@@ -1,3 +1,4 @@
+import { parseMedicationFormula } from '../../shared/medication-formula';
 import {trendSeriesKey} from './trend-snapshot-types';
 import {sourceRegion,rotateRegionBox} from "../../shared/source-region";
 import type {HealthProcessDetail,HealthProcessSummary} from '../../shared/health-process';
@@ -1563,7 +1564,7 @@ export function getReportDetail(
       medication_context AS context, medication_name AS medicationName,
       generic_name AS genericName, specification, dosage_form AS dosageForm,
       dose, dose_unit AS doseUnit, frequency, route, duration, quantity,
-      quantity_unit AS quantityUnit, instructions, evidence_json AS evidenceJson,
+      quantity_unit AS quantityUnit, instructions, formula_json AS formulaJson, evidence_json AS evidenceJson,
       source, manual_fields_json AS manualFieldsJson
     FROM report_medications WHERE report_id = ? AND is_deleted = 0
     ORDER BY medication_context, section_name, id
@@ -1575,11 +1576,14 @@ export function getReportDetail(
         ReportMedication,
         "evidence" | "manualFields"
       > & {
+        formulaJson: string | null;
         evidenceJson: string;
         manualFieldsJson: string;
       };
       return {
         ...fact,
+        formula: parseMedicationFormula(parseJson(fact.formulaJson, null)),
+        formulaJson: undefined,
         evidence: parseJson(fact.evidenceJson, []),
         manualFields: parseJson(fact.manualFieldsJson, []),
         evidenceJson: undefined,
@@ -4068,6 +4072,13 @@ function remapReportEvidencePageNumbers(
       }
       update.run(JSON.stringify(remapped.value), row.id);
     }
+  }
+
+  const formulas = db.prepare('SELECT id,formula_json AS formulaJson FROM report_medications WHERE report_id=? AND formula_json IS NOT NULL')
+    .all(reportId) as Array<{id:string;formulaJson:string}>;
+  for (const row of formulas) {
+    const remapped = remapEvidenceValue(parseJson(row.formulaJson, null), pageNumbers);
+    db.prepare('UPDATE report_medications SET formula_json=? WHERE id=?').run(JSON.stringify(remapped.value), row.id);
   }
 
   const extractionRows = db

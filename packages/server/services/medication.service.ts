@@ -1,3 +1,4 @@
+import { parseMedicationFormula } from '../../shared/medication-formula';
 import {associateMedicationSelections} from './health-record-association.service';
 import { createError } from 'h3';
 import { getDatabase, runInTransaction } from '../database/client';
@@ -110,13 +111,14 @@ export function listMedicationDocuments(user: RequestUser, input: Input): Medica
     .all(memberId) as Array<Omit<MedicationDocument, keyof MedicationContext | 'medicationCount' | 'medicationNames'>>)
     .map(row => ({ ...row, medicationCount: 0, medicationNames: [] as string[] }));
   const byId = new Map(documents.map(document => [document.id, document]));
-  const medications = db.prepare(`SELECT m.report_id AS reportId,m.medication_name AS medicationName
+  const medications = db.prepare(`SELECT m.report_id AS reportId,m.medication_name AS medicationName,m.formula_json IS NOT NULL AS isFormula
     FROM report_medications m JOIN reports r ON r.id=m.report_id
-    WHERE ${visibleReports} AND m.is_deleted=0 ORDER BY m.id`).all(memberId) as Array<{reportId: string; medicationName: string}>;
+    WHERE ${visibleReports} AND m.is_deleted=0 ORDER BY m.id`).all(memberId) as Array<{reportId: string; medicationName: string; isFormula: number}>;
   for (const medication of medications) {
     const document = byId.get(medication.reportId);
     if (!document) continue;
     document.medicationCount++;
+    if(medication.isFormula) document.formulaCount=(document.formulaCount || 0)+1;
     if (medication.medicationName.trim() && !document.medicationNames.includes(medication.medicationName))
       document.medicationNames.push(medication.medicationName);
   }
@@ -124,11 +126,13 @@ export function listMedicationDocuments(user: RequestUser, input: Input): Medica
 }
 
 const sourceSelect = `m.id AS medicationId,m.report_id AS reportId,r.title AS reportTitle,r.report_issued_at AS reportIssuedAt,
-  m.medication_name AS medicationName,m.dose,m.dose_unit AS doseUnit,m.frequency,m.route,m.instructions,m.specification,m.dosage_form AS dosageForm,m.duration`;
+  m.formula_json AS formulaJson,m.medication_name AS medicationName,m.dose,m.dose_unit AS doseUnit,m.frequency,m.route,m.instructions,m.specification,m.dosage_form AS dosageForm,m.duration`;
 function sourceMedication(id: string, memberId: string): MedicationSource {
   const row = getDatabase().prepare(`SELECT ${sourceSelect} FROM report_medications m JOIN reports r ON r.id=m.report_id
     WHERE m.id=? AND m.is_deleted=0 AND r.status<>'trashed' AND r.deleted_at IS NULL AND r.member_id=?`).get(id, memberId) as MedicationSource | undefined;
-  return row || fail(400, '来源用药已变化或不属于当前成员，请重新查看报告');
+  if (!row) return fail(400, '来源用药已变化或不属于当前成员，请重新查看报告');
+  const { formulaJson, ...source } = row as MedicationSource & { formulaJson: string | null };
+  return { ...source, formula: formulaJson ? parseMedicationFormula(JSON.parse(formulaJson)) : null };
 }
 export function listHistoricalMedications(user: RequestUser, memberId: string): HistoricalMedication[] {
   assertMemberAccess(user, memberId);
@@ -136,8 +140,9 @@ export function listHistoricalMedications(user: RequestUser, memberId: string): 
   return (db.prepare(`SELECT ${sourceSelect} FROM report_medications m JOIN reports r ON r.id=m.report_id
     WHERE r.member_id=? AND r.status<>'trashed' AND m.is_deleted=0
     ORDER BY COALESCE(r.report_issued_at,r.created_at) DESC,r.id,m.id`).all(memberId) as MedicationSource[])
-    .map(source => {
-      return { ...source, confirmedCourseIds: (db.prepare(`SELECT id FROM medication_courses
+    .map(row => {
+      const { formulaJson, ...source } = row as MedicationSource & { formulaJson: string | null };
+      return { ...source, formula: formulaJson ? parseMedicationFormula(JSON.parse(formulaJson)) : null, confirmedCourseIds: (db.prepare(`SELECT id FROM medication_courses
         WHERE member_id=? AND source_medication_id=? AND deleted_at IS NULL`).all(memberId, source.medicationId) as Array<{id: string}>).map(r => r.id) };
     });
 }

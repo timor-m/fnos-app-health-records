@@ -15,9 +15,10 @@ export type MedicationFields = {
 export type MedicationContext = { processId?:string; relatedRecords?: import('./health-record-associations').HealthRecordRef[] };
 export type MedicationDocument = MedicationContext & {
   id: string; memberId: string; title: string; reportType: 'prescription'; status: string;
-  date: string | null; medicationCount: number; medicationNames: string[];
+  date: string | null; medicationCount: number; formulaCount?: number; medicationNames: string[];
 };
 export type MedicationSource = MedicationFields & {
+  formula?: import('./medication-formula').MedicationFormula | null;
   reportId: string; reportTitle: string; reportIssuedAt: string | null;
   medicationId: string; duration: string | null;
 };

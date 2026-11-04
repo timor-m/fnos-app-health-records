@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import MedicationFormulaPanel from './MedicationFormulaPanel.vue';
 import { formatMedicationFrequency } from '../../../shared/medication-frequency';
 import { RouterLink } from 'vue-router';
 import { healthRecordPath } from '../utils/health-record-navigation';
@@ -46,6 +47,7 @@ function usage(item:Partial<MedicationFields>) {
         <div v-if="course.instructions"><dt>用药说明</dt><dd class="medication-detail-note">{{ course.instructions }}</dd></div>
         <div v-if="course.source"><dt>来源报告</dt><dd class="medication-detail-source"><button v-if="course.sourceReportId" type="button" class="medication-detail-link" @click="emit('source',course.sourceReportId)">{{ course.source.reportTitle }}</button><span v-else>{{ course.source.reportTitle }}（原报告不可用，已保留确认时快照）</span></dd></div>
       </dl>
+      <MedicationFormulaPanel v-if="course.source?.formula" :formula="course.source.formula" title="确认时的配方" />
       <details v-if="course.source" class="medication-detail-disclosure record-detail-disclosure">
         <summary>确认时的处方</summary>
         <div class="medication-detail-snapshot"><strong>{{ course.source.medicationName }}</strong><p>{{ usage(course.source) || '原报告未注明详细用法' }}</p><p v-if="course.source.instructions">{{ course.source.instructions }}</p><p v-if="course.source.duration">疗程：{{ course.source.duration }}</p></div>
@@ -82,6 +84,7 @@ function usage(item:Partial<MedicationFields>) {
         <div v-if="intake.source"><dt>来源用药单</dt><dd class="medication-detail-source"><button v-if="intake.sourceReportId" type="button" class="medication-detail-link" @click="emit('source',intake.sourceReportId)">{{ intake.source.reportTitle }}</button><span v-else>{{ intake.source.reportTitle }}（原报告不可用，已保留来源快照）</span></dd></div>
         <div v-if="intake.note"><dt>备注</dt><dd class="medication-detail-note">{{ intake.note }}</dd></div>
       </dl>
+      <MedicationFormulaPanel v-if="intake.source?.formula" :formula="intake.source.formula" title="服用时的来源配方" />
       <details v-if="intake.history.length" class="medication-detail-disclosure record-detail-disclosure"><summary>修订记录（{{ intake.history.length }}）</summary><ol class="medication-detail-history"><li v-for="(revision,index) in intake.history" :key="index"><div class="medication-detail-row"><strong>编辑前</strong><time>{{ formatMedicationDate(revision.recordedAt) }}</time></div><p>{{ revision.snapshot.medicationName }} {{ revision.snapshot.specification }} · {{ revision.snapshot.amount }} {{ revision.snapshot.amountUnit }} · {{ formatMedicationDate(String(revision.snapshot.takenAt || '')) }}</p></li></ol></details>
     </template>
   </div>

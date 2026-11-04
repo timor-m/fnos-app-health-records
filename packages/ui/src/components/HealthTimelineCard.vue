@@ -13,7 +13,9 @@ const states:Record<string,string>={active:'进行中',resolved:'已缓解',unkn
 const card=computed(()=>{
  const entry=props.entry;const details:string[]=[];const isVaccination=entry.kind==='vaccination';
  const dose=entry.doseNumber?.trim();const doseLabel=dose && /^\d+$/.test(dose)?`第 ${dose} 剂`:dose;
- if(entry.medicationCount)details.push(`${entry.medicationCount} 项药品`);
+ if(entry.medicationCount)details.push(entry.formulaCount
+   ? [`${entry.formulaCount} 份药方`,entry.medicationCount>entry.formulaCount?`${entry.medicationCount-entry.formulaCount} 项药品`:''].filter(Boolean).join(' · ')
+   : `${entry.medicationCount} 项药品`);
  if(entry.activeCount)details.push(`${entry.activeCount} 项正在使用`);
  else if(entry.kind==='medication_document')details.push(entry.confirmedCount?'已确认使用情况':'使用情况未确认');
  if(entry.intakeCount)details.push(`${entry.intakeCount} 次服用补充`);
