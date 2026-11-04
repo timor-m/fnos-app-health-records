@@ -27,7 +27,7 @@ function readingOrder(items: Positioned[]): Positioned[] {
   // Group overlapping cells into rows rather than using a non-transitive comparator.
   const rows: Positioned[][] = [];
   for (const item of byY) {
-    const row = rows.at(-1);
+    const row = rows[rows.length - 1];
     const anchor = row?.[0].box;
     if (anchor && Math.min(anchor[3],item.box[3])-Math.max(anchor[1],item.box[1]) > Math.min(anchor[3]-anchor[1],item.box[3]-item.box[1])*.4) row!.push(item);
     else rows.push([item]);

@@ -309,7 +309,7 @@ onBeforeUnmount(stopOcrPolling);
 
 <style scoped>
 .setup-guide-backdrop { display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 90; }
-.setup-guide-panel { width: min(520px, 100%); max-height: calc(100dvh - 40px); overflow-y: auto; padding: 18px 22px 22px; }
+.setup-guide-panel { width: min(520px, 100%); max-height: calc(100vh - 40px); max-height: calc(100dvh - 40px); overflow-y: auto; padding: 18px 22px 22px; }
 .setup-guide-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .setup-guide-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .setup-guide-title-icon { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 10px; display: flex; align-items: center; justify-content: center; background: var(--brand-softer, #e8f1fe); color: var(--brand-strong, #1f64d8); }
@@ -349,7 +349,7 @@ onBeforeUnmount(stopOcrPolling);
 .setup-guide-link:hover { color: var(--brand-strong, #1f64d8); }
 @media (max-width: 760px), (pointer: coarse) {
   .setup-guide-backdrop { padding: 0; align-items: flex-end; }
-  .setup-guide-panel { width: 100%; max-height: 94dvh; border-radius: 20px 20px 0 0; padding-bottom: calc(22px + var(--safe-bottom, 0px)); }
+  .setup-guide-panel { width: 100%; max-height: 94vh; max-height: 94dvh; border-radius: 20px 20px 0 0; padding-bottom: calc(22px + var(--safe-bottom, 0px)); }
   .setup-guide-actions button { flex: 1 1 auto; justify-content: center; }
 }
 </style>

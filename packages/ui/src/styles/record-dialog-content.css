@@ -89,7 +89,7 @@
 .health-record-detail-body .health-record-detail-content > * { min-width: 0; }
 .health-record-detail-content:has(.record-detail-loading),
 .health-record-detail-content :is(.report-bundle-detail,.vaccination-document-detail,.symptom-record-detail,.vaccination-record-detail,.medication-records):has(.record-detail-loading) { flex: 1 1 auto; display: flex; flex-direction: column; }
-.health-record-detail-page .health-record-detail-content:has(.record-detail-loading) { min-height: calc(100dvh - 144px); }
+.health-record-detail-page .health-record-detail-content:has(.record-detail-loading) { min-height: calc(100vh - 144px); min-height: calc(100dvh - 144px); }
 
 /* Vaccination forms keep their main action visible while only fields scroll. */
 .settings-form.vaccination-form { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; gap: 0; min-width: 0; padding: 0; }
@@ -123,7 +123,7 @@
 .health-record-detail-body:has(.vaccination-form) { overflow: hidden; }
 :is(.health-record-detail-body,.health-record-detail-page) .health-record-detail-content:has(.vaccination-form),
 :is(.health-record-detail-body,.health-record-detail-page) :is(.report-bundle-detail,.vaccination-document-detail,.vaccination-record-detail):has(.vaccination-form) { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
-.health-record-detail-page:has(.vaccination-form) { display: flex; flex-direction: column; height: calc(100dvh - 94px); min-height: 0; gap: 0; }
+.health-record-detail-page:has(.vaccination-form) { display: flex; flex-direction: column; height: calc(100vh - 94px); height: calc(100dvh - 94px); min-height: 0; gap: 0; }
 .health-record-detail-page:has(.vaccination-form) > .subpage-header { flex: 0 0 auto; }
 .health-record-detail-body .record-bundle-toolbar { flex: 0 0 auto; }
 .record-sheet .vaccination-detail-name { display: none; }
@@ -141,7 +141,7 @@
 .vaccination-confirmed-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .vaccination-original > .preview-stack { margin-top: 10px; }
 .vaccination-original > .preview-stack > .preview-card { padding-inline: 0; }
-.new-vaccination-page { height: calc(100dvh - 94px); display: flex; flex-direction: column; min-height: 0; }
+.new-vaccination-page { height: calc(100vh - 94px); height: calc(100dvh - 94px); display: flex; flex-direction: column; min-height: 0; }
 .new-vaccination-page > .subpage-header { flex: 0 0 auto; margin-bottom: 12px; }
 .new-vaccination-page > .subpage-header h2 { font-size: 16px; white-space: nowrap; }
 .new-vaccination-page > .subpage-header > div:not(.vaccination-header-actions) { flex: 1 0 auto; }
@@ -151,7 +151,7 @@
 .new-vaccination-page .vaccination-save-bar { background: transparent; }
 .vaccination-previous-dose { flex: 0 0 auto; margin-bottom: 8px; }
 @media(max-width:760px) {
-  .app-shell.is-vaccination-entry .workspace { display: flex; flex-direction: column; height: 100dvh; min-height: 0; padding-bottom: calc(66px + var(--safe-bottom)); }
+  .app-shell.is-vaccination-entry .workspace { display: flex; flex-direction: column; height: 100vh; height: 100dvh; min-height: 0; padding-bottom: calc(66px + var(--safe-bottom)); }
   .app-shell.is-vaccination-entry .mobile-topbar { flex: 0 0 auto; }
   .app-shell.is-vaccination-entry .page-content { flex: 1 1 auto; min-height: 0; padding-top: 8px; padding-bottom: 0; overflow: hidden; }
   .new-vaccination-page { height: 100%; }

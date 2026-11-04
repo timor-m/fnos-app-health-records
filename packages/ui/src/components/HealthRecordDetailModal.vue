@@ -48,13 +48,13 @@ function restoreFocus() {
 function onKeydown(event: KeyboardEvent) {
   if (!visible.value || !panel.value || document.querySelector('.form-select-layer,.datetime-picker-layer,.confirm-backdrop,.original-viewer')) return;
   const overlays = [...document.querySelectorAll('.modal-backdrop,.sheet-backdrop,.original-viewer,.image-preview-backdrop,.confirm-backdrop')];
-  if (overlays.at(-1) !== backdrop.value) return;
+  if (overlays[overlays.length - 1] !== backdrop.value) return;
   if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); void requestClose(); return; }
   if (event.key !== 'Tab') return;
   const items = [...panel.value.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href],summary,[tabindex="0"]')]
     .filter(item => !item.closest('[hidden]') && (!item.closest('details:not([open])') || item.tagName === 'SUMMARY')
       && getComputedStyle(item).display !== 'none' && getComputedStyle(item).visibility !== 'hidden');
-  const first = items[0]; const last = items.at(-1);
+  const first = items[0]; const last = items[items.length - 1];
   if (!first) { event.preventDefault(); panel.value.focus(); return; }
   if (event.shiftKey && (document.activeElement === panel.value || document.activeElement === first || !panel.value.contains(document.activeElement))) {
     event.preventDefault(); last?.focus();

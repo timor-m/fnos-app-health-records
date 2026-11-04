@@ -25,7 +25,7 @@ function onKeydown(event: KeyboardEvent) {
   if (event.key!=='Tab') return;
   event.stopPropagation();
   const controls=[...panel.value.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled)')];
-  const first=controls[0]; const last=controls.at(-1);
+  const first=controls[0]; const last=controls[controls.length - 1];
   if (!first) { event.preventDefault(); panel.value.focus(); return; }
   if (event.shiftKey && (document.activeElement===first || !panel.value.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
   else if (!event.shiftKey && (document.activeElement===last || !panel.value.contains(document.activeElement))) { event.preventDefault(); first.focus(); }

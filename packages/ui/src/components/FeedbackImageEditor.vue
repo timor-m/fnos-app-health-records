@@ -89,7 +89,7 @@ function paintStroke(ctx: CanvasRenderingContext2D, stroke: Stroke) {
   ctx.globalCompositeOperation = "source-over";
   ctx.strokeStyle = ctx.fillStyle = stroke.color;
   if (stroke.mode === "mask") {
-    const first = stroke.points[0], last = stroke.points.at(-1)!;
+    const first = stroke.points[0], last = stroke.points[stroke.points.length - 1]!;
     const x = Math.min(first.x, last.x), y = Math.min(first.y, last.y);
     const width = Math.abs(last.x - first.x), height = Math.abs(last.y - first.y);
     if (!width || !height) return;
@@ -178,7 +178,7 @@ function finish(event: PointerEvent) {
   if (current.value && event.type === "pointerup") {
     if (current.value.mode === "mask") current.value.points[1] = point(event);
     else current.value.points.push(point(event));
-    const first = current.value.points[0], last = current.value.points.at(-1)!;
+    const first = current.value.points[0], last = current.value.points[current.value.points.length - 1]!;
     if (current.value.mode === "draw" || (first.x !== last.x && first.y !== last.y)) strokes.value.push(current.value);
   }
   current.value = null; pointerId = null;
@@ -206,7 +206,7 @@ function keydown(event: KeyboardEvent) {
   if (event.key === "Escape") { event.preventDefault(); if (shapeMenuOpen.value) shapeMenuOpen.value = false; else if (brushSettingsOpen.value) brushSettingsOpen.value = false; else if (!saving.value) emit("cancel"); }
   if (event.key !== "Tab") return;
   const controls = Array.from(panel.value?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled)") || []).filter(element => element.getClientRects().length > 0);
-  const first = controls[0], last = controls.at(-1);
+  const first = controls[0], last = controls[controls.length - 1];
   if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.value)) { event.preventDefault(); last?.focus(); }
   if (!event.shiftKey && (document.activeElement === last || document.activeElement === panel.value)) { event.preventDefault(); first?.focus(); }
 }
@@ -237,7 +237,7 @@ function keydown(event: KeyboardEvent) {
 
 <style scoped>
 .image-editor-backdrop { z-index: 320; }
-.image-editor { width: min(900px, 100%); max-height: 94dvh; display: flex; flex-direction: column; overflow: hidden; outline: none; }
+.image-editor { width: min(900px, 100%); max-height: 94vh; max-height: 94dvh; display: flex; flex-direction: column; overflow: hidden; outline: none; }
 .image-editor header { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid var(--line); }
 h3,p { margin: 0; }h3 { font-size: 16px; }p { color: var(--muted); font-size: 12px; line-height: 1.6; }
 button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--ink); font-size: 12px; cursor: pointer; }
@@ -251,7 +251,7 @@ canvas { display: block; max-width: 100%; height: auto; margin: auto; touch-acti
 .editor-error { padding: 10px 22px; color: var(--danger); }
 footer { flex-shrink: 0; padding: 16px 22px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); }footer > div { display: flex; gap: 8px; }.editor-save { background: var(--brand); color: white; border-color: var(--brand); }
 @media (max-width:760px), (pointer:coarse) {
-.image-editor-backdrop { padding: 0; place-items: end center; }.image-editor { width: 100%; max-height: 98dvh; border-radius: 20px 20px 0 0; animation: slide-up .22s ease; padding-bottom: 0; }.image-editor .sheet-grabber { display: block; width: 36px; height: 4px; margin: 8px auto 2px; border-radius: 999px; background: var(--grabber); flex-shrink: 0; }
+.image-editor-backdrop { padding: 0; place-items: end center; }.image-editor { width: 100%; max-height: 98vh; max-height: 98dvh; border-radius: 20px 20px 0 0; animation: slide-up .22s ease; padding-bottom: 0; }.image-editor .sheet-grabber { display: block; width: 36px; height: 4px; margin: 8px auto 2px; border-radius: 999px; background: var(--grabber); flex-shrink: 0; }
 .image-editor header { padding: 14px 16px; }.editor-toolbar { padding: 12px 16px 8px; gap: 8px; }.editor-hint { padding: 4px 16px 12px; }footer { padding: 14px 16px max(14px, env(safe-area-inset-bottom)); flex-wrap: wrap; }footer > div { margin-left: auto; }button { min-height: 42px; }
 }
 .mask-selector { position: relative; }
@@ -265,7 +265,7 @@ footer { flex-shrink: 0; padding: 16px 22px; display: flex; align-items: center;
 .view-tools { display: flex; align-items: center; justify-content: space-between; padding: 0 22px 10px; gap: 12px; }
 .view-tools > span { color: var(--muted); font-size: 12px; }
 @media (max-width:760px), (pointer:coarse) {
-  .image-editor { height: 98dvh; max-height: 98dvh; }
+  .image-editor { height: 98vh; height: 98dvh; max-height: 98vh; max-height: 98dvh; }
   .image-editor > .sheet-grabber { order: 0; }
   .image-editor > header { order: 1; padding: 10px 16px 12px; flex-shrink: 0; }
   .image-editor > header p { display: none; }

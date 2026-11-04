@@ -204,7 +204,7 @@ function readInput(commit = false) {
   const monthDays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   const valid = match && years.value.includes(y) && m >= 1 && m <= 12 && d >= 1 && d <= monthDays[m - 1]
     && (!props.showTime || (h >= 0 && h <= 23 && minute >= 0 && minute <= 59));
-  inputError.value = valid ? '' : `请输入有效日期（${inputPlaceholder.value}，年份 ${years.value[0]}–${years.value.at(-1)}）`;
+  inputError.value = valid ? '' : `请输入有效日期（${inputPlaceholder.value}，年份 ${years.value[0]}–${years.value[years.value.length - 1]}）`;
   inputElement.value?.setCustomValidity(inputError.value);
   if (valid && commit) {
     const value = `${y}-${padZero(m)}-${padZero(d)}` + (props.showTime ? `T${padZero(h)}:${padZero(minute)}` : '');

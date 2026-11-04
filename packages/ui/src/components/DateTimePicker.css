@@ -10,6 +10,7 @@
 .datetime-picker-panel {
   position: fixed;
   width: min(460px, calc(100vw - 32px));
+  max-height: min(560px, calc(100vh - 32px));
   max-height: min(560px, calc(100dvh - 32px));
   overflow: hidden;
   background: var(--surface, #ffffff);
@@ -150,6 +151,7 @@
     top: auto !important;
     left: 0 !important;
     width: 100%;
+    max-height: min(560px, calc(100vh - var(--safe-top, 0px)));
     max-height: min(560px, calc(100dvh - var(--safe-top, 0px)));
     border: 0;
     border-radius: 18px 18px 0 0;

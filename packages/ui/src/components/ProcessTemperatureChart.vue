@@ -7,7 +7,7 @@ const points=computed(()=>{
  const rows=props.readings.filter(r=>Number.isFinite(r.value)&&Number.isFinite(Date.parse(r.at))).slice().sort((a,b)=>Date.parse(a.at)-Date.parse(b.at));
  if(!rows.length)return [];
  const low=Math.floor(Math.min(...rows.map(r=>r.value))-.5),high=Math.ceil(Math.max(...rows.map(r=>r.value))+.5);
- const start=Date.parse(rows[0].at),span=Date.parse(rows.at(-1)!.at)-start;
+ const start=Date.parse(rows[0].at),span=Date.parse(rows[rows.length - 1]!.at)-start;
  return rows.map(row=>({...row,x:span?34+(Date.parse(row.at)-start)/span*292:180,y:20+(high-row.value)/(high-low)*104}));
 });
 const highest=computed(()=>points.value.reduce((max,p)=>Math.max(max,p.value),-Infinity));
@@ -19,8 +19,8 @@ const line=computed(()=>points.value.map(p=>`${p.x},${p.y}`).join(' '));
   <svg viewBox="0 0 350 155" role="img" :aria-label="`体温变化，共 ${points.length} 次记录`">
    <line x1="34" y1="132" x2="326" y2="132" class="chart-axis"/>
    <polyline v-if="points.length>1" :points="line" fill="none" class="chart-line"/>
-   <g v-for="(point,index) in points" :key="point.updateId"><circle :cx="point.x" :cy="point.y" r="3" class="chart-dot"><title>{{formatMedicationDate(point.at)}} · {{point.value}}℃</title></circle><text v-if="points.length<=8||point.updateId===points.at(-1)?.updateId||point.value===highest" :x="point.x" :y="index>0&&point.x-points[index-1].x<28?point.y+15:point.y-7" text-anchor="middle">{{point.value}}</text></g>
-   <text x="34" y="149">{{formatMedicationDate(points[0].at)}}</text><text v-if="points.length>1" x="326" y="149" text-anchor="end">{{formatMedicationDate(points.at(-1)!.at)}}</text>
+   <g v-for="(point,index) in points" :key="point.updateId"><circle :cx="point.x" :cy="point.y" r="3" class="chart-dot"><title>{{formatMedicationDate(point.at)}} · {{point.value}}℃</title></circle><text v-if="points.length<=8||point.updateId===points[points.length - 1]?.updateId||point.value===highest" :x="point.x" :y="index>0&&point.x-points[index-1].x<28?point.y+15:point.y-7" text-anchor="middle">{{point.value}}</text></g>
+   <text x="34" y="149">{{formatMedicationDate(points[0].at)}}</text><text v-if="points.length>1" x="326" y="149" text-anchor="end">{{formatMedicationDate(points[points.length - 1]!.at)}}</text>
   </svg>
  </figure>
 </template>

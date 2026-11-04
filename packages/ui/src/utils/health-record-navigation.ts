@@ -6,7 +6,7 @@ export const healthRecordTitles: Record<HealthFeedEntry['kind'], string> = {
 };
 
 export function isHealthRecordKind(value: unknown): value is HealthFeedEntry['kind'] {
-  return typeof value === 'string' && Object.hasOwn(healthRecordTitles, value);
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(healthRecordTitles, value);
 }
 
 export function healthRecordPath(kind: HealthFeedEntry['kind'], id: string) {

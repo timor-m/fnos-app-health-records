@@ -110,3 +110,15 @@ it('keeps category labels separate from complete zero and multi-digit counts, in
  for(const [category,label,count] of expected){const card=wrapper.get(`.overview-type[data-category="${category}"]`);expect(card.get('.overview-type-label').text()).toBe(label);expect(card.get('.overview-type-count').text()).toBe(count);expect(card.get('img').attributes('data-health-category')).toBe(category);}
  expect(wrapper.get('.overview-type[data-category="imaging"]').attributes('disabled')).toBeDefined();
 });
+
+it('opens a pending document over the overview and retains its history entry',async()=>{
+ const value=sample();value.pending.documents=[{...feedEntry('report','report'),memberId:'member'}];
+ mocks.request.mockResolvedValue(value);mocks.touch.value=true;
+ const wrapper=render();await flushPromises();
+ await wrapper.get('.overview-pending-list .health-timeline-card').trigger('click');await flushPromises();
+ expect(mocks.push).toHaveBeenCalledOnce();
+ const target=mocks.push.mock.calls[0][0];
+ expect(target.query).toMatchObject({recordKind:'report',recordId:value.pending.documents[0].resourceId});
+ route.query=target.query;history.state=target.state;await flushPromises();
+ expect(wrapper.get('[role="dialog"]').text()).toContain('report:');
+});

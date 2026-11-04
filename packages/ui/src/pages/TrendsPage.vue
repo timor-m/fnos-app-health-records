@@ -330,7 +330,7 @@ function pointNumberText(item: TrendSeries, point: TrendPoint) {
 }
 
 function latestNumberText(item: TrendSeries) {
-  const point = item.points.at(-1);
+  const point = item.points[item.points.length - 1];
   return point && pointComparator(point) ? pointNumberText(item, point) : formatSeriesNumber(item, item.latestValue);
 }
 
@@ -585,7 +585,7 @@ function trendChartPolylines(item: TrendSeries) {
   const segments: string[][] = [[]];
   for (const point of trendChartPoints(item)) {
     if (pointComparator(point.point)) segments.push([]);
-    else segments.at(-1)!.push(`${point.x.toFixed(1)},${point.y.toFixed(1)}`);
+    else segments[segments.length - 1]!.push(`${point.x.toFixed(1)},${point.y.toFixed(1)}`);
   }
   return segments.filter(segment => segment.length > 1).map(segment => segment.join(' '));
 }
@@ -972,8 +972,8 @@ onDeactivated(() => {
           <div class="trend-main">
             <div class="trend-latest">
               <span>最新值</span>
-              <strong>{{ item.points.at(-1)?.examinationConflict ? '结果冲突' : item.points.at(-1)?.timeOrderAmbiguous ? '同日多次检查' : latestNumberText(item) }}<small v-if="item.unit && !item.points.at(-1)?.examinationConflict && !item.points.at(-1)?.timeOrderAmbiguous">{{ item.unit }}</small></strong>
-              <small v-if="item.points.at(-1) && pointComparator(item.points.at(-1)!)">限值记录，不参与精确变化计算</small>
+              <strong>{{ item.points[item.points.length - 1]?.examinationConflict ? '结果冲突' : item.points[item.points.length - 1]?.timeOrderAmbiguous ? '同日多次检查' : latestNumberText(item) }}<small v-if="item.unit && !item.points[item.points.length - 1]?.examinationConflict && !item.points[item.points.length - 1]?.timeOrderAmbiguous">{{ item.unit }}</small></strong>
+              <small v-if="item.points[item.points.length - 1] && pointComparator(item.points[item.points.length - 1]!)">限值记录，不参与精确变化计算</small>
               <p>{{ formatDate(item.lastDate) }}<template v-if="item.pointCount === 1"> · 目前只有一次记录</template></p>
               <small v-if="showTrendChangeSummary(item)" class="trend-change-summary" :class="item.trendStatus">
                 {{ trendStatusLabel(item) }}<template v-if="item.latestIntervalDays !== null"> · {{ intervalLabel(item.latestIntervalDays) }}</template>

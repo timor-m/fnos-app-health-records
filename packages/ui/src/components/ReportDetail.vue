@@ -3411,7 +3411,7 @@ onActivated(() => {
 <style scoped>
 .observation-editor-host { display: contents; }
 .observation-editor-host.observation-add-backdrop { position: fixed; inset: 0; z-index: 131; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--overlay); }
-.observation-edit-panel.observation-add-modal { grid-area: auto; position: relative; inset: auto; z-index: auto; width: min(1600px, 100%); height: calc(100dvh - 32px); max-height: none; display: flex; padding: 16px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow-l); animation: none; }
+.observation-edit-panel.observation-add-modal { grid-area: auto; position: relative; inset: auto; z-index: auto; width: min(1600px, 100%); height: calc(100vh - 32px); height: calc(100dvh - 32px); max-height: none; display: flex; padding: 16px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow-l); animation: none; }
 .observation-add-modal > .observation-edit-grabber { display: none; }
 .observation-add-modal > header { flex-shrink: 0; min-height: 32px; align-items: center; margin-bottom: 8px; }
 .observation-add-modal > header h4 { margin: 0; }
@@ -3424,11 +3424,11 @@ onActivated(() => {
 .observation-add-source :deep(.source-region-tools) { flex-shrink: 0; }
 .observation-add-source :deep(.source-region-scroll) { flex: 1; min-height: 0; height: auto; max-height: none; }
 .observation-source-placeholder { grid-column: 1; grid-row: 1 / span 9; align-self: start; min-width: 0; }
-.observation-add-modal :deep(.source-region-scroll) { height: calc(100dvh - 148px); max-height: calc(100dvh - 148px); }
+.observation-add-modal :deep(.source-region-scroll) { height: calc(100vh - 148px); height: calc(100dvh - 148px); max-height: calc(100vh - 148px); max-height: calc(100dvh - 148px); }
 .observation-source-placeholder { display: grid; place-items: center; min-height: 300px; padding: 24px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); text-align: center; }
 @media (max-width: 760px) {
   .observation-editor-host.observation-add-backdrop { padding: 8px; }
-  .observation-edit-panel.observation-add-modal { width: 100%; height: calc(100dvh - 16px); padding: 16px; border-radius: 14px; }
+  .observation-edit-panel.observation-add-modal { width: 100%; height: calc(100vh - 16px); height: calc(100dvh - 16px); padding: 16px; border-radius: 14px; }
   .observation-add-modal .observation-editor-form { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(160px, 1fr) minmax(120px, 1fr) auto; }
   .observation-add-source { grid-column: 1; grid-row: 1; }
   .observation-add-modal .observation-editor-fields { grid-column: 1; grid-row: 2; }

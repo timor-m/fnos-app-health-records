@@ -41,7 +41,7 @@ onBeforeUnmount(() => {
 });
 function trapFocus(event: KeyboardEvent) {
   const buttons = Array.from(panel.value?.querySelectorAll<HTMLElement>('button:not(:disabled), textarea:not(:disabled)') || []);
-  const first = buttons[0], last = buttons.at(-1);
+  const first = buttons[0], last = buttons[buttons.length - 1];
   if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.value)) { event.preventDefault(); last?.focus(); }
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
 }

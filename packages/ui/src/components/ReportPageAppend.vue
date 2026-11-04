@@ -108,7 +108,7 @@ function drawerKeydown(event: KeyboardEvent) {
       ) || [],
     );
     const first = elements[0],
-      last = elements.at(-1);
+      last = elements[elements.length - 1];
     if (!first) {
       event.preventDefault();
       return;
@@ -1080,7 +1080,9 @@ async function importNas() {
 }
 .append-panel {
   width: min(680px, 100%);
+  height: 100vh;
   height: 100dvh;
+  max-height: 100vh;
   max-height: 100dvh;
   border-radius: 20px 0 0 20px;
   display: flex;
@@ -1129,7 +1131,9 @@ async function importNas() {
   }
   .append-panel {
     width: 100%;
+    height: 94vh;
     height: 94dvh;
+    max-height: 94vh;
     max-height: 94dvh;
     border-radius: 20px 20px 0 0;
   }

@@ -6,6 +6,6 @@ export function healthRecordFilters(query:Record<string,unknown>) {
   let subtype=text('subtype');
   if(!category&&subtype)category=healthCategories.find(type=>healthSubtypeOptions[type].some(([value])=>value===subtype))||'';
   if(!category||!healthSubtypeOptions[category].some(([value])=>value===subtype))subtype='';
-  const status=Object.hasOwn(healthRecordStatusLabels,text('status'))?text('status'):'';
+  const status=Object.prototype.hasOwnProperty.call(healthRecordStatusLabels,text('status'))?text('status'):'';
   return {category,subtype,status,search:text('q').trim().slice(0,200)};
 }

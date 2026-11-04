@@ -90,7 +90,7 @@ async function mutate(path:string,method:string,body:unknown) {
   const payload = method==='POST' ? {...body as Record<string,unknown>,requestKey:submissionKey.forRequest(path,body)} : body;
   try { await request(path,{method,body:JSON.stringify(payload)});
     app.notifyDataChanged();
-    if(operation===generation&&current(id,memberId)){mode.value=null;leave.reset();emit('updated',method==='DELETE'&&!path.includes('/updates/')?decodeURIComponent(path.split('/').at(-1)!):undefined);void nextTick(()=>opener?.focus({preventScroll:true}));}
+    if(operation===generation&&current(id,memberId)){mode.value=null;leave.reset();emit('updated',method==='DELETE'&&!path.includes('/updates/')?decodeURIComponent(path.split('/').slice(-1)[0]!):undefined);void nextTick(()=>opener?.focus({preventScroll:true}));}
   } catch(cause) { if(operation===generation&&current(id,memberId))error.value=cause instanceof Error?cause.message:'保存失败，请重试'; }
   finally {busy.value=false;}
 }
@@ -118,7 +118,7 @@ function onKey(event:KeyboardEvent) {
   if(event.key==='Escape'){event.preventDefault();close();return;}
   if(event.key!=='Tab'||!panel.value)return;
   const controls=Array.from(panel.value.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),[tabindex="0"]'));
-  const first=controls[0],last=controls.at(-1);
+  const first=controls[0],last=controls[controls.length - 1];
   if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}
   else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
 }
@@ -284,7 +284,7 @@ onBeforeUnmount(()=>{disposed=true;++generation;document.removeEventListener('po
 .symptom-menu .is-danger { color: var(--danger); }
 .symptom-more > summary:focus-visible, .process-symptom button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .symptom-sheet-backdrop { z-index: 140; display: flex; align-items: flex-end; justify-content: center; }
-.symptom-sheet { width: min(100%,580px); max-height: 90dvh; background: var(--surface); color: var(--ink); border-radius: 18px 18px 0 0; }
+.symptom-sheet { width: min(100%,580px); max-height: 90vh; max-height: 90dvh; background: var(--surface); color: var(--ink); border-radius: 18px 18px 0 0; }
 .symptom-sheet > header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); gap: 8px; }
 .symptom-sheet h3 { margin: 0; font-size: 16px; }
 .symptom-sheet header button { position: relative; display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0; background: none; border: 0; border-radius: 8px; color: var(--ink); }
@@ -318,6 +318,6 @@ onBeforeUnmount(()=>{disposed=true;++generation;document.removeEventListener('po
   .symptom-record-add::after, .symptom-edit::after, .symptom-history-toggle::after, .symptom-change button::after { content: ''; position: absolute; inset: -6px 0; }
   .symptom-more > summary::after { content: ''; position: absolute; inset: -8px; }
   .symptom-menu button { min-height: 44px; }
-  .symptom-sheet { max-height: 94dvh; padding-bottom: env(safe-area-inset-bottom); }
+  .symptom-sheet { max-height: 94vh; max-height: 94dvh; padding-bottom: env(safe-area-inset-bottom); }
 }
 </style>
