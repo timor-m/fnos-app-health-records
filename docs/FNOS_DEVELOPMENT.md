@@ -60,7 +60,7 @@ package/
 
 脚本应可重复执行。失败前把简短、可操作的信息写入 `TRIM_TEMP_LOGFILE`。
 
-健康档案把 PID、日志和业务数据保存在 `TRIM_PKGVAR`，Socket 保存在 `TRIM_APPDEST`。启动后会检查进程和 Socket；生产启动器同时提供统一网关 Unix Socket 与安装向导配置的 HTTP 服务端口。停止时先发送 `TERM`，超时后再发送 `KILL`。
+健康档案把 PID、日志和业务数据保存在 `TRIM_PKGVAR`，Socket 保存在 `TRIM_APPDEST`。启动后会检查进程和 Socket；生产启动器仅提供统一网关 Unix Socket，不监听 TCP 端口。停止时先发送 `TERM`，超时后再发送 `KILL`。
 
 ## 4. Manifest
 
@@ -96,12 +96,11 @@ disable_authorization_path=false
 | 统一网关 | 常驻服务、API、WebSocket、NAS 登录态 | 服务需监听 Unix Socket 并适配前缀 |
 | 独立端口 | 与 NAS 登录态无关的独立服务 | 应用自行处理认证与端口暴露 |
 
-健康档案默认使用统一网关，并同时启动一个安装向导配置的 HTTP 服务端口：
+健康档案仅通过统一网关访问，不开放独立 HTTP 端口：
 
 ```text
 gatewayPrefix=/app/fnos-app-health-records
 gatewaySocket=app.sock
-servicePort=3334
 ```
 
 服务监听 `${TRIM_APPDEST}/app.sock`。网关校验 NAS 会话后转发请求，并提供：
@@ -112,7 +111,7 @@ servicePort=3334
 
 网关只证明用户已登录。应用仍需执行数据归属、管理员操作、文件路径和高风险操作的业务鉴权。不要信任客户端请求体或 WebSocket 消息里的用户 ID。
 
-HTTP 服务端口默认 `3334`，只由安装/配置向导设置端口号，不提供应用自有账号体系。应用身份以 fnOS 网关用户为准，fnOS 系统管理员即应用管理员。非网关访问不会信任客户端伪造的 `X-Trim-*` 请求头；端口配置会在生命周期回调中校验并在失败时保留上一份有效配置。
+fnOS 安装包仅监听上述 Unix Socket；未配置 Socket 时拒绝启动，不回退到 TCP。安装包强制生产环境与 fnOS 鉴权，忽略继承的开发代理配置。旧配置中的 `servicePort`、`directPort` 及 `SERVICE_PORT` 不再启用端口，无需删除用户数据。安装与配置向导不提供端口输入。应用身份以 fnOS 网关用户为准，fnOS 系统管理员即应用管理员；非网关请求不会信任客户端伪造的 `X-Trim-*` 请求头。Docker 继续使用独立的本地账号与端口入口。
 
 ## 6. 权限与资源
 
@@ -144,10 +143,7 @@ HTTP 服务端口默认 `3334`，只由安装/配置向导设置端口号，不�
 
 只有无法安全自动检测或默认处理的必需配置才使用向导。字段会作为同名环境变量传给生命周期脚本，使用前必须再次校验。
 
-健康档案安装/配置向导提供：
-
-- 服务端口，默认 `3334`；
-- 配置变更时的端口冲突校验和失败回滚。
+健康档案安装/配置向导仅说明通过飞牛应用入口访问，不配置服务端口；生命周期回调继续同步应用目录授权。
 
 卸载数据处理向导提供：
 
@@ -240,3 +236,11 @@ appcenter-cli stop fnos-app-health-records
 - [Native 应用案例](https://developer.fnnas.com/docs/examples/native/)
 - [fnpack](https://developer.fnnas.com/docs/cli/fnpack/)
 - [appcenter-cli](https://developer.fnnas.com/docs/cli/appcentercli/)
+
+## Socket 隔离验收
+
+- 新安装与旧版升级后，用 `ss -lntp` 确认应用进程无 TCP 监听，用 `ss -lxnp` 确认仅有应用 Unix Socket（权限 0660）。
+- 旧 `runtime.json` 及 `SERVICE_PORT` 不得恢复监听；缺少 `FNOS_SOCKET_PATH` 的安装包启动必须失败。
+- 通过 NAS 应用入口验证登录、成员权限与原件访问；退出 NAS 登录后不可访问受保护数据。
+- Docker 的本地 HTTP 登录入口及未登录 API 拒绝行为继续回归。
+- 本地回归：`npx tsx --test packages/server/tests/runtime-config.test.ts packages/server/tests/gateway-user.test.ts packages/server/tests/direct-session.test.ts`；构建后执行 `npm run prepare:package`、`bash scripts/pack-app.sh` 与 `npm run validate:package`。本地 Socket 测试不替代真实 NAS 网关及升级安装验收。

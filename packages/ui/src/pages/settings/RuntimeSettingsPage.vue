@@ -57,7 +57,7 @@ type DatabaseStatus = {
   rowCounts: Record<string, number>;
 };
 type SystemSummary = {
-  servicePort: number;
+  servicePort: number | null;
   database: DatabaseStatus;
   storage: {
     storageDir: string;
@@ -246,7 +246,7 @@ onActivated(syncStatusPolling);
             <span v-for="row in databaseSummaryRows" :key="row.label">{{ row.label }} {{ row.value }}</span>
           </div>
         </div>
-        <div><span>服务端口</span><strong>{{ system?.servicePort || "检查中" }}</strong></div>
+        <div><span>{{ system?.servicePort === null ? "访问方式" : "服务端口" }}</span><strong>{{ system?.servicePort === null ? "飞牛统一网关" : system?.servicePort || "检查中" }}</strong></div>
         <div><span>OCR 运行环境</span><strong>{{ ocr?.available ? "可用" : ocr?.installing ? "安装中" : "未安装" }}</strong></div>
         <div><span>处理队列</span><strong>待处理 {{ ocr?.runner?.queued || 0 }} · 运行中 {{ ocr?.runner?.processing || 0 }} · 失败 {{ ocr?.runner?.failed || 0 }}</strong></div>
       </div>

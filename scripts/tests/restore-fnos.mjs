@@ -18,7 +18,7 @@ async function start(name) {
   const socket = join(temporary, `${name}.sock`);
   const child = spawn(process.execPath, [launcher], { cwd: root, env: {
     ...process.env, NODE_ENV: 'production', AUTH_MODE: 'fnos', FNOS_SOCKET_PATH: socket,
-    STORAGE_DIR: join(temporary, name), SERVICE_PORT: '0', GATEWAY_PREFIX: '/',
+    STORAGE_DIR: join(temporary, name), GATEWAY_PREFIX: '/',
     COPYFILE_DISABLE: '1', DISABLE_JOB_RUNNER: 'true',
   }, stdio: ['ignore', 'pipe', 'pipe'] });
   children.push(child);

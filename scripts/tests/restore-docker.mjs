@@ -57,7 +57,7 @@ try {
   docker(['info', '--format', '{{.ServerVersion}}']);
   docker(['image','inspect',baseImage]);
   console.log('Starting packaged fnOS gateway adapter with synthetic accounts');
-  source = spawn(process.execPath, [launcher], { cwd: root, env: { ...process.env, COPYFILE_DISABLE: '1', NODE_ENV: 'production', AUTH_MODE: 'fnos', FNOS_SOCKET_PATH: socket, STORAGE_DIR: join(temporary, 'source'), SERVICE_PORT: '0', GATEWAY_PREFIX: '/', DISABLE_JOB_RUNNER: 'true' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  source = spawn(process.execPath, [launcher], { cwd: root, env: { ...process.env, COPYFILE_DISABLE: '1', NODE_ENV: 'production', AUTH_MODE: 'fnos', FNOS_SOCKET_PATH: socket, STORAGE_DIR: join(temporary, 'source'), GATEWAY_PREFIX: '/', DISABLE_JOB_RUNNER: 'true' }, stdio: ['ignore', 'pipe', 'pipe'] });
   source.stdout.on('data', chunk => { sourceLog += chunk; }); source.stderr.on('data', chunk => { sourceLog += chunk; });
   await waitFor(async () => (await gateway('session')).ok);
   const first = await data(await gateway('members', jsonBody({ displayName: 'synthetic-one', createSelf: true })));

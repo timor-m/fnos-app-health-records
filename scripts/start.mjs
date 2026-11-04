@@ -8,7 +8,14 @@ import templateConfig from "../template.config.json" with { type: "json" };
 const socketPath = process.env.FNOS_SOCKET_PATH || "";
 const port = Number(process.env.PORT || process.env.NITRO_PORT || templateConfig.localDevPort);
 const host = process.env.HOST || process.env.NITRO_HOST || "127.0.0.1";
-const server = createServer(middleware);
+if (process.env.AUTH_MODE?.trim().toLowerCase() === "fnos" && !socketPath) {
+  console.error("FNOS_SOCKET_PATH is required for fnOS gateway authentication.");
+  process.exit(1);
+}
+const server = createServer((request, response) => {
+  if (socketPath) request.healthAccessMode = "gateway";
+  middleware(request, response);
+});
 
 if (!socketPath && !process.env.AUTH_MODE && process.env.NODE_ENV !== "development") {
   console.error("AUTH_MODE is required for direct HTTP deployment; set AUTH_MODE=local for Docker.");

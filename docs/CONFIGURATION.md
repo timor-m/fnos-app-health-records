@@ -9,6 +9,7 @@
 | 身份认证 | fnOS 网关账号 | 本地账号，首次登录默认 `admin/admin` |
 | 数据目录 | 应用私有目录 | `/data` 或 `DATA_HOST_PATH` |
 | 导入目录 | 当前用户个人授权；兼容管理员应用设置共享授权 | `REPORTS_HOST_PATH` 只读挂载到 `/reports` |
+| 网络监听 | 仅 Unix Socket，无独立 TCP 端口 | HTTP 端口 |
 | 访问前缀 | `/app/fnos-app-health-records` | `/` |
 | 反向代理 | 通常由 fnOS 网关处理 | 用户自行配置，可信代理需设置 `TRUST_PROXY=1` |
 

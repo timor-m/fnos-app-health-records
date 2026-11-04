@@ -1026,5 +1026,71 @@ class MicroscopyIntervalTest(unittest.TestCase):
             self.assertEqual(result,lines)
 
 
+class PdfRadicalTextTest(unittest.TestCase):
+    def test_only_kangxi_radicals_are_folded_and_units_are_preserved(self):
+        import unicodedata
+        for code in range(0x2F00, 0x2FE0):
+            char = chr(code)
+            self.assertEqual(worker.normalized_pdf_text(char), unicodedata.normalize("NFKC", char))
+        text = "  体检⽇期 ⼼ ⾎ ⽩ ⾼ ⼈ ⼀ ⽆ ⼤ 10⁹/L mm³ μmol/L µg/mL ① ㎎ Ａ ≤ ≥ −  　"
+        expected = "体检日期 心 血 白 高 人 一 无 大 10⁹/L mm³ μmol/L µg/mL ① ㎎ Ａ ≤ ≥ −"
+        self.assertEqual(worker.normalized_pdf_text(text), expected)
+        self.assertEqual(worker.normalized_pdf_text(expected), expected)
+        self.assertEqual(worker.normalized_pdf_text(""), "")
+
+    def test_pdf_text_fast_and_render_merge_paths_fold_radicals_without_changing_geometry(self):
+        try:
+            import fitz
+            import PIL
+        except ImportError:
+            self.skipTest("PyMuPDF/Pillow runtime is unavailable")
+        import tempfile, os
+        from unittest.mock import patch
+        lines_text = ["体检日期：2099-01-02 Synthetic date label for regression"] + [
+            "白细胞 合成项目 %d 结果 12.5 单位 10^9/L 参考范围 0-99 Synthetic regression" % n
+            for n in range(1, 9)
+        ]
+        mapping = {"日": "⽇", "白": "⽩"}
+        chars = sorted(set("".join(lines_text)))
+        cmap = ("/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+                "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+                "/CMapName /Synthetic def\n/CMapType 2 def\n"
+                "1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n"
+                + str(len(chars)) + " beginbfchar\n"
+                + "\n".join("<%04X> <%04X>" % (ord(c), ord(mapping.get(c,c))) for c in chars)
+                + "\nendbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend")
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {"OCR_TABLE_ENHANCEMENT":"off"}):
+            for use_radicals in (False, True):
+                path = Path(root) / ("radicals.pdf" if use_radicals else "standard.pdf")
+                with fitz.open() as document:
+                    page = document.new_page(width=800, height=1000)
+                    for n, text in enumerate(lines_text):
+                        page.insert_text((25, 60 + n*50), text, fontname="china-s", fontsize=10)
+                    if use_radicals:
+                        xref = document.get_new_xref()
+                        document.update_object(xref, "<< >>")
+                        document.update_stream(xref, cmap.encode("ascii"))
+                        document.xref_set_key(page.get_fonts()[0][0], "ToUnicode", "%d 0 R" % xref)
+                    document.save(path)
+                with fitz.open(path) as document:
+                    raw = [line for block in document[0].get_text("dict")["blocks"] if block["type"]==0 for line in block["lines"]]
+                self.assertEqual(any("⽇" in span["text"] for line in raw for span in line["spans"]), use_radicals)
+                def no_ocr(_):
+                    self.fail("Complete text PDF should not trigger raster OCR")
+                lines, meta, coord = worker.recognize_input(no_ocr, path, None, 1)
+                self.assertEqual(meta["source"], "pdf_text")
+                self.assertEqual([line["text"] for line in lines], lines_text)
+                self.assertEqual([list(line["box"]) for line in lines], [list(line["bbox"]) for line in raw])
+                self.assertEqual([line["id"] for line in lines], ["line_%d" % n for n in range(1,10)])
+                self.assertTrue(all(line["variant"]=="pdf_text" and line["confidence"]==1 for line in lines))
+                self.assertEqual(coord, {"coordWidth":800., "coordHeight":1000.})
+                def empty_ocr(_):
+                    return [], None
+                with patch.object(worker, "should_ocr_pdf_page", return_value=True):
+                    merged, merge_meta, _ = worker.recognize_input(empty_ocr, path, None, 1)
+                self.assertEqual(merge_meta["source"], "pdf_text_plus_render")
+                self.assertEqual([line["text"] for line in merged], lines_text)
+
+
 if __name__ == "__main__":
     unittest.main()

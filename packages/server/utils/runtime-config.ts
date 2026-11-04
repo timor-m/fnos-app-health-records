@@ -21,7 +21,7 @@ export type AppRuntimeConfig = {
   runtimeDir: string;
   storageRelocated: boolean;
   storageError: string | null;
-  servicePort: number;
+  servicePort: number | null;
   ocrPythonBin: string;
   ocrWorkerScript: string;
   ocrSetupScript: string;
@@ -97,7 +97,7 @@ export function getAppConfig(): AppRuntimeConfig {
     runtimeDir,
     storageRelocated: location.relocated,
     storageError: location.error,
-    servicePort: Number(process.env.SERVICE_PORT || stored.servicePort || stored.directPort || templateConfig.localDevPort),
+    servicePort: authMode === "fnos" ? null : Number(process.env.SERVICE_PORT || stored.servicePort || stored.directPort || templateConfig.localDevPort),
     ocrPythonBin: process.env.OCR_PYTHON_BIN || join(runtimeDir, "ocr-venv", "bin", "python"),
     ocrWorkerScript: process.env.OCR_WORKER_SCRIPT || join(ocrRoot, "worker.py"),
     ocrSetupScript: process.env.OCR_SETUP_SCRIPT || join(ocrRoot, "setup-runtime.sh")

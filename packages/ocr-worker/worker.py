@@ -1101,6 +1101,14 @@ def baseline_height(rect: tuple[float, float, float, float], slope: float) -> fl
     return max(8.0, rect[3] - rect[1] - abs(slope) * (rect[2] - rect[0]))
 
 
+def normalized_pdf_text(value: str) -> str:
+    # Fold only Kangxi radicals; full NFKC would alter unit exponents and signs.
+    return "".join(
+        unicodedata.normalize("NFKC", char) if "\u2f00" <= char <= "\u2fdf" else char
+        for char in value
+    ).strip()
+
+
 def normalized_ocr_text(value: Any) -> str:
     return unicodedata.normalize("NFKC", str(value or "")).strip()
 
@@ -2289,7 +2297,7 @@ def recognize_input(
             if block.get("type") != 0:
                 continue
             for line in block.get("lines", []):
-                text = "".join(span.get("text", "") for span in line.get("spans", [])).strip()
+                text = normalized_pdf_text("".join(span.get("text", "") for span in line.get("spans", [])))
                 if text:
                     box = line.get("bbox", [])
                     if page.rotation % 360:

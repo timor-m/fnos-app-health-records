@@ -54,21 +54,18 @@ const appServer = join(appRoot, "server");
 const appUi = join(appRoot, "ui");
 const appUiImages = join(appUi, "images");
 const appOcrWorker = join(appRoot, "ocr-worker");
-const appTools = join(appRoot, "tools");
 const cmdDir = join(packageDir, "cmd");
 const configDir = join(packageDir, "config");
 const wizardDir = join(packageDir, "wizard");
 
-for (const dir of [appServer, appUiImages, appOcrWorker, appTools, cmdDir, configDir, wizardDir]) {
+for (const dir of [appServer, appUiImages, appOcrWorker, cmdDir, configDir, wizardDir]) {
   mkdirSync(dir, { recursive: true });
 }
 
 cpSync(outputDir, appServer, { recursive: true });
 cpSync(join(rootDir, "packages", "ocr-worker"), appOcrWorker, { recursive: true });
-copyFileSync(join(rootDir, "scripts", "write-runtime-config.mjs"), join(appTools, "write-runtime-config.mjs"));
 chmodSync(join(appOcrWorker, "worker.py"), 0o755);
 chmodSync(join(appOcrWorker, "setup-runtime.sh"), 0o755);
-chmodSync(join(appTools, "write-runtime-config.mjs"), 0o755);
 
 const iconsDir = join(rootDir, "packages", "assets", "icons");
 const generatedIconsDir = join(iconsDir, "generated");
@@ -156,72 +153,36 @@ const uiConfig = {
 
 const serverLauncher = `#!/usr/bin/env node
 
-import { chmodSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
-import { join } from "node:path";
-import { handleUpgrade, middleware } from "./server/index.mjs";
 
 const socketPath = process.env.FNOS_SOCKET_PATH || "";
-const storageDir = process.env.STORAGE_DIR || ".";
-const runtimePath = join(storageDir, "config", "runtime.json");
-const runtime = existsSync(runtimePath) ? JSON.parse(readFileSync(runtimePath, "utf8")) : {};
-const servicePort = Number(runtime.servicePort || runtime.directPort || process.env.SERVICE_PORT || ${template.localDevPort});
-const gatewayPrefix = process.env.GATEWAY_PREFIX || ${JSON.stringify(template.gatewayPrefix)};
-const servers = [];
-
-function handler(accessMode) {
-  return (request, response) => {
-    request.healthAccessMode = accessMode;
-    if (accessMode === "port" && request.url === "/") {
-      response.writeHead(302, { location: gatewayPrefix });
-      response.end();
-      return;
-    }
-    middleware(request, response);
-  };
+if (!socketPath) {
+  console.error("FNOS_SOCKET_PATH is required; the fnOS package does not expose an HTTP port.");
+  process.exit(1);
 }
-
-function cleanupSocket() {
-  if (socketPath) rmSync(socketPath, { force: true });
-}
-
+process.env.NODE_ENV = "production";
+process.env.AUTH_MODE = "fnos";
+delete process.env.VITE_DEV_SERVER_URL;
+const { handleUpgrade, middleware } = await import("./server/index.mjs");
+const server = createServer((request, response) => {
+  request.healthAccessMode = "gateway";
+  middleware(request, response);
+});
+if (handleUpgrade) server.on("upgrade", handleUpgrade);
+function cleanupSocket() { rmSync(socketPath, { force: true }); }
 function shutdown() {
-  let remaining = servers.length;
-  if (!remaining) process.exit(0);
-  for (const server of servers) {
-    server.close(() => {
-      remaining -= 1;
-      if (remaining === 0) {
-        cleanupSocket();
-        process.exit(0);
-      }
-    });
-  }
+  server.close(() => { cleanupSocket(); process.exit(0); });
   setTimeout(() => process.exit(0), 3000).unref();
 }
-
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
-
-if (socketPath) {
-  cleanupSocket();
-  const gatewayServer = createServer(handler("gateway"));
-  if (handleUpgrade) gatewayServer.on("upgrade", handleUpgrade);
-  gatewayServer.on("error", (error) => { console.error(error); process.exitCode = 1; });
-  gatewayServer.listen(socketPath, () => {
-    chmodSync(socketPath, 0o660);
-    console.log(\`fnOS gateway socket listening at \${socketPath}\`);
-  });
-  servers.push(gatewayServer);
-}
-
-const portServer = createServer(handler("port"));
-if (handleUpgrade) portServer.on("upgrade", handleUpgrade);
-portServer.on("error", (error) => { console.error(error); process.exitCode = 1; });
-portServer.listen(servicePort, "0.0.0.0", () => {
-  console.log(\`HTTP service listening at http://0.0.0.0:\${servicePort}\`);
+server.on("error", (error) => { console.error(error); process.exit(1); });
+cleanupSocket();
+server.listen(socketPath, () => {
+  chmodSync(socketPath, 0o660);
+  console.log("fnOS gateway socket listening at " + socketPath);
 });
-servers.push(portServer);
 `;
 
 const appNameShell = shellQuote(template.appName);
@@ -317,6 +278,7 @@ start_app() {
 
     APP_NAME=${appNameShell} \\
     APP_TITLE=${appTitleShell} \\
+    NODE_ENV=production \\
     AUTH_MODE=fnos \\
     GATEWAY_PREFIX=${gatewayPrefixShell} \\
     FNOS_SOCKET_PATH="\${SOCKET_PATH}" \\
@@ -421,37 +383,17 @@ const uninstallWizard = [
   }
 ];
 
-const serviceSettingsItems = [
-  {
-    type: "text",
-    field: "wizard_service_port",
-    label: "服务端口",
-    initValue: String(template.localDevPort),
-    rules: [
-      { required: true, message: "请输入服务端口" },
-      { pattern: "^[0-9]+$", message: "服务端口只能包含数字" }
-    ]
-  }
-];
+const serviceSettingsItems = [{
+  type: "tips",
+  helpText: "通过飞牛应用入口访问健康档案，由飞牛网关验证登录身份。应用不开放独立 HTTP 端口。"
+}];
+const installWizard = [{ stepTitle: "访问方式", items: serviceSettingsItems }];
+const configWizard = [{ stepTitle: "访问方式", items: serviceSettingsItems }];
 
-const installWizard = [
-  {
-    stepTitle: "服务设置",
-    items: serviceSettingsItems
-  }
-];
-
-const configWizard = [{ stepTitle: "服务设置", items: serviceSettingsItems }];
-
-const runtimeConfigCallback = (mode) => `#!/bin/bash
+const authorizedPathsCallback = () => `#!/bin/bash
 set -u
 
 export PATH=${runtimeBinShell}:"\${PATH}"
-
-ERROR_LOG="\${TRIM_TEMP_LOGFILE:-\${TRIM_PKGVAR:-/tmp}/health-records-${mode}-error.log}"
-DETAIL_LOG="\${ERROR_LOG}.detail"
-
-mkdir -p "$(dirname "\${ERROR_LOG}")"
 
 if [ "\${TRIM_DATA_ACCESSIBLE_PATHS+x}" = "x" ]; then
     AUTHORIZED_PATHS_FILE="\${TRIM_PKGVAR}/data/config/fnos-authorized-paths"
@@ -465,24 +407,12 @@ if [ "\${TRIM_DATA_ACCESSIBLE_PATHS+x}" = "x" ]; then
     fi
 fi
 
-node "\${TRIM_APPDEST}/tools/write-runtime-config.mjs" "\${TRIM_PKGVAR}/data" ${mode} > "\${DETAIL_LOG}" 2>&1
-status=$?
-if [ "\${status}" -ne 0 ]; then
-    {
-        echo "健康档案${mode === "install" ? "安装" : "配置"}失败：服务端口配置未保存。"
-        echo "请确认端口未被占用，并确认 nodejs_v22 运行环境可用。"
-        cat "\${DETAIL_LOG}"
-    } > "\${ERROR_LOG}"
-    exit "\${status}"
-fi
-
-cat "\${DETAIL_LOG}"
 exit 0
 `;
 
 const callbackScripts = {
   install_init: "#!/bin/bash\nexit 0\n",
-  install_callback: runtimeConfigCallback("install"),
+  install_callback: authorizedPathsCallback(),
   upgrade_init: "#!/bin/bash\nexit 0\n",
   upgrade_callback: "#!/bin/bash\nexit 0\n",
   uninstall_init: "#!/bin/bash\nexit 0\n",
@@ -495,7 +425,7 @@ fi
 exit 0
 	`,
   config_init: "#!/bin/bash\nexit 0\n",
-  config_callback: runtimeConfigCallback("config")
+  config_callback: authorizedPathsCallback()
 };
 
 writeFileSync(join(packageDir, "manifest"), manifest, "utf8");

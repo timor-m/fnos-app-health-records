@@ -4,7 +4,7 @@
 
 ## 当前版本关系
 
-下一迭代计划为 **0.2.17（未发布）**，包含 B0009 飞牛跨 NAS 完整备份的显式管理员接管修复，schema 保持 v19，无新增结构或迁移。变更记录归入 `0.2.17 - Unreleased`；应用版本和发布产物在获得正式发布授权后统一同步。
+**0.2.17 已封版**，包含飞牛端口关闭、跨 NAS 备份恢复和 PDF 文字兼容修复。schema 保持 v19，无新增结构或迁移。该版本已提交飞牛应用上架审核，审核通过和远端发布状态以平台实际结果为准；版本内容冻结于 `0.2.17`，后续开发记入无编号 `Unreleased`，不自动升级下一版本。
 
 **发布授权前提：**只有用户明确说“开始发版”或明确授权本次发布，才执行版本递增、schema 编号整理、冻结、版本提交、tag 和发布。开发、构建、安装测试不等于发布；正式发布后也不自动递增下一版本。开发阶段维护迁移草案，未发布改动在发布准备时统一收口；已落库测试数据不允许直接降级或删除。
 
@@ -15,10 +15,10 @@
 | 项 | 当前值 | 来源 |
 | --- | --- | --- |
 | 应用 ID | `fnos-app-health-records` | `template.config.json` |
-| 应用版本 | `0.2.16` | `package.json` |
-| fnOS manifest 版本 | `0.2.16` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
-| fnOS sub_version | `0.2.16.0` | `scripts/prepare-package.mjs` 生成 |
-| Docker 镜像版本 | 本轮目标 `0.2.16`，发布后稳定版另提供 `latest` | GitHub Tag 工作流从 `package.json` 生成 |
+| 应用版本 | `0.2.17` | `package.json` |
+| fnOS manifest 版本 | `0.2.17` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
+| fnOS sub_version | `0.2.17.0` | `scripts/prepare-package.mjs` 生成 |
+| Docker 镜像版本 | 本轮目标 `0.2.17`，发布后稳定版另提供 `latest` | GitHub Tag 工作流从 `package.json` 生成 |
 | Docker 镜像仓库 | `docker.io/timorm/fnos-app-health-records` | Docker Hub，可通过 `DOCKERHUB_IMAGE` 覆盖 |
 | 数据库 schema | `v19` | `packages/server/database/migrations.ts` 最后一个迁移版本 |
 | 数据库记录表 | `schema_migrations`、`app_upgrade_history` | 服务端首次启动时初始化或迁移 |
@@ -44,7 +44,7 @@
 
 用户设备落库记录在服务端首次启动时建立：
 
-- fnOS 安装向导只保存服务端口，不执行数据库迁移。
+- fnOS 安装向导说明统一网关访问方式，不配置独立端口，也不执行数据库迁移。
 - fnOS 升级回调目前不执行数据库迁移。
 - 应用服务启动后，`packages/server/middleware/01-database.ts` 调用 `getDatabase()`。
 - `getDatabase()` 打开 SQLite，检查当前 schema 版本，并在业务 API 和后台任务可用前完成初始化或迁移。
@@ -219,7 +219,7 @@ npm run release:ci
 - `.fnos-build/package/manifest` 中 `version` 与 `package.json` 一致。
 - `.fnos-build/package/manifest` 中 `sub_version` 符合预期。
 - `ICON.PNG`、`ICON_256.PNG`、`ICON_512.PNG` 尺寸正确。
-- 安装向导只包含服务端口配置。
+- 安装与配置向导不含端口输入，安装包仅监听 Unix Socket。
 - 升级回调不误删数据。
 
 数据库专项验证：

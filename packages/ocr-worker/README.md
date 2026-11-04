@@ -12,6 +12,18 @@ the filename extension, including page-append files stored with a `.bin` suffix.
 Declared MIME types and recognized filename extensions must still match the
 file content. Existing staged append files can be retried without renaming them.
 
+PDF embedded text folds only Kangxi radical codepoints (`U+2F00`–`U+2FDF`)
+to their ordinary ideographs before line matching and text/render merging. This
+keeps dates and labels consistent without applying full NFKC to the original
+line: unit superscripts, micro signs, comparison signs and other characters
+remain unchanged. Line IDs, confidence and coordinates are retained. Historical
+OCR output is not rewritten; reprocess the report to regenerate it. This adds
+no OCR/AI retry or additional model request.
+
+The synthetic PDF regression uses an explicit ToUnicode map, since a font may
+otherwise silently emit ordinary ideographs. Run the Python worker tests with
+`.data/ocr-venv/bin/python -m unittest discover -s packages/ocr-worker`.
+
 Development setup:
 
 ```bash

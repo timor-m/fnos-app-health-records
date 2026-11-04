@@ -62,7 +62,6 @@ for (const relativePath of [
   "app/server/serve.mjs",
   "app/server/server/trend-snapshot-worker.mjs",
   "app/ocr-worker/worker.py",
-  "app/tools/write-runtime-config.mjs",
   "wizard/install",
   "wizard/config"
 ]) {
@@ -149,10 +148,16 @@ for (const scriptName of [
 
 if (existsSync(join(packageDir, "cmd/main"))) {
   const mainScript = readFileSync(join(packageDir, "cmd/main"), "utf8");
+  check(mainScript.includes("NODE_ENV=production") && mainScript.includes("AUTH_MODE=fnos"), "fnOS lifecycle must enforce production gateway authentication");
   check(mainScript.includes("fnos-authorized-paths"), "cmd/main must persist fnOS authorized paths");
   check(mainScript.includes("TRIM_DATA_ACCESSIBLE_PATHS"), "cmd/main must consume fnOS authorized paths");
   check(mainScript.includes("TRIM_API_TOKEN"), "cmd/main must pass the fnOS Open API token to the service");
 }
+
+const launcher = readFileSync(join(packageDir, "app/server/serve.mjs"), "utf8");
+check(launcher.includes('server.listen(socketPath,'), "fnOS launcher must listen on the gateway socket");
+check(!/servicePort|portServer|0\.0\.0\.0|SERVICE_PORT/.test(launcher), "fnOS launcher must not expose a TCP listener");
+check(!existsSync(join(packageDir, "app/tools/write-runtime-config.mjs")), "obsolete port configuration must not be packaged");
 
 check(!existsSync(join(packageDir, "app/ui/index.cgi")), "gateway template must not include index.cgi");
 const installWizard = readJson("wizard/install");
@@ -160,8 +165,8 @@ const configWizard = readJson("wizard/config");
 const wizardFields = (wizard) => Array.isArray(wizard)
   ? wizard.flatMap((step) => Array.isArray(step.items) ? step.items.map((item) => item.field).filter(Boolean) : [])
   : [];
-check(JSON.stringify(wizardFields(installWizard)) === JSON.stringify(["wizard_service_port"]), "install wizard must only configure service port");
-check(JSON.stringify(wizardFields(configWizard)) === JSON.stringify(["wizard_service_port"]), "config wizard must only configure service port");
+check(JSON.stringify(wizardFields(installWizard)) === JSON.stringify([]), "install wizard must not configure a TCP port");
+check(JSON.stringify(wizardFields(configWizard)) === JSON.stringify([]), "config wizard must not configure a TCP port");
 
 const appArchivePath = join(rootDir, "dist", "app.tgz");
 check(existsSync(appArchivePath), "Missing dist/app.tgz");
