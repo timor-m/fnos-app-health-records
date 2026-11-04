@@ -2866,6 +2866,21 @@ test('completed quality review with no usable first result stops without automat
   });
 });
 
+test('empty dispensing extraction stops once without an automatic AI retry',async()=>{
+  await withDatabase(async()=>{
+    saveAiSettings({enabled:true,baseUrl:'https://ai.example.test/v1',textModel:'synthetic',apiKey:'test-secret'});
+    const upload=createUpload(manager,'runner-member',[{originalName:'synthetic-dispensing.png',data:pngBytes()}]);
+    const worker:WorkerExecutor=async request=>request.action==='thumbnail'?{ok:true,width:240,height:320}:
+      {ok:true,engine:'synthetic',lines:['药材调剂单（代煎）','剂数：3','合成药甲 8g'].map((text,index)=>({id:`source-${index}`,text,confidence:.99,box:[0,index*30,400,index*30+20]}))};
+    await processNextJob(worker);await processNextJob(worker);
+    const ai:AiExecutor=async()=>({...normalizeAiExtraction({reportType:'prescription'}),provider:'synthetic',model:'synthetic',promptVersion:'synthetic',rawResponseJson:'{}',promptTokens:1,completionTokens:1,elapsedMs:1});
+    await assert.rejects(processNextJob(worker,ai),{code:'AI_NO_VERIFIED_MEDICATIONS'});
+    const job=getDatabase().prepare("SELECT status,attempts,next_retry_at FROM processing_jobs WHERE report_id=? AND job_type='ai_extract'").get(upload.reportId);
+    assert.equal(job?.status,'failed');assert.equal(job?.attempts,1);assert.equal(job?.next_retry_at,null);
+    assert.equal(await processNextJob(worker,ai),false);
+  });
+});
+
 test('failed supplemental calls preserve old results and stop instead of repeating the whole task',async()=>{
   await withDatabase(async()=>{
     saveAiSettings({enabled:true,baseUrl:'https://ai.example.test/v1',textModel:'synthetic',apiKey:'test-secret'});

@@ -89,6 +89,63 @@ function page(pageNumber: number, lines: string[]) {
   };
 }
 
+test("dispensing quantities reach medication extraction without scalar candidates at either depth", () => {
+  const rows = ["药材调剂单（代煎）", "剂数：3", "合成药甲 8g 合成药乙 12g", "合成药丙 6克"];
+  const pages = rebuildOcrPages([page(1, rows), page(2, rows)]);
+  for (const rebuilt of pages) {
+    const drugs = rebuilt.lines.filter(line => /合成药/.test(line.text));
+    assert.ok(drugs.length >= 2);
+    assert.ok(drugs.every(line => !line.candidate && !localObservationsForLine(line).length));
+    assert.ok(drugs.every(line => line.role === "narrative" && line.sourceLineIds.length));
+  }
+  for (const depth of ["overview", "detailed"] as const) {
+    const plan = planRebuiltOcrPages("synthetic-dispensing", pages, depth);
+    const units = plan.units.filter(unit => unit.route === "narrative" && unit.includesMedicationContent);
+    assert.deepEqual([...new Set(units.flatMap(unit => unit.pageNumbers))], [1, 2]);
+    assert.match(units.map(unit => unit.text).join("\n"), /合成药甲 8g/);
+    assert.equal(plan.candidateRowCount, 0);
+  }
+});
+
+test("dispensing exclusion preserves laboratory ratios and explicit result tables", () => {
+  const [mixed] = rebuildOcrPages([page(1, ["药材调剂单（代煎）", "剂数：3", "合成药甲 8g",
+    "检验报告", "项目 | 结果 | 单位 | 参考范围", "血红蛋白 | 120 | g/L | 115-150",
+    "合成检验项 | 3 | g | 1-5"]) ]);
+  const laboratory = mixed.lines.filter(line => /血红蛋白|合成检验项/.test(line.text));
+  assert.equal(laboratory.length, 2);
+  assert.ok(laboratory.every(line => line.candidate));
+  const [ordinary] = rebuildOcrPages([page(1, ["检验报告", "合成检验项 3g"]) ]);
+  assert.ok(ordinary.lines.find(line => /合成检验项/.test(line.text))?.candidate);
+});
+
+test("sideways dispensing cells retain drug-dose rows and original source coordinates", () => {
+  const cells = [
+    {text:"药材调剂单（代煎）",box:[0,0,360,15]},
+    {text:"剂数：3",box:[0,20,80,35]},
+    ...["合成药甲", "合成药乙", "合成药丙"].flatMap((text,index) => [
+      {text,box:[0,60+index*30,70,75+index*30]},
+      {text:`${index+6}g`,box:[100,60+index*30,140,75+index*30]},
+      {text:`${(index+6)*3}g`,box:[170,60+index*30,210,75+index*30]},
+    ]),
+  ];
+  for (const angle of [90,270]) {
+    const raw=cells.map((cell,index)=>({id:`side-${index}`,text:cell.text,confidence:.99,
+      box:angle===90 ? [200-cell.box[3],cell.box[0],200-cell.box[1],cell.box[2]]
+        : [cell.box[1],400-cell.box[2],cell.box[3],400-cell.box[0]]}));
+    const [rebuilt]=rebuildOcrPages([{pageId:"sideways",pageNumber:1,linesJson:JSON.stringify(raw)}]);
+    for (const name of ["合成药甲","合成药乙","合成药丙"]) {
+      const line=rebuilt.lines.find(line=>line.text.includes(name));
+      assert.ok(line, `${angle}: ${name}`);
+      assert.match(line.text,/\d+g/);
+      assert.equal(line.candidate,false);
+      assert.ok(line.sourceLineIds.length >= 3);
+      const sources=raw.filter(source=>line.sourceLineIds.includes(source.id));
+      assert.deepEqual(line.box,[Math.min(...sources.map(s=>s.box[0])),Math.min(...sources.map(s=>s.box[1])),
+        Math.max(...sources.map(s=>s.box[2])),Math.max(...sources.map(s=>s.box[3]))]);
+    }
+  }
+});
+
 test("table structure restores cells that OCR never emitted without fabricating evidence", () => {
   const rows = [
     ["项目名称", "缩写", "结果", "单位", "异常", "参考范围"],

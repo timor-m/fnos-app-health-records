@@ -41,7 +41,7 @@ import type {
 } from "./ai-input-planner.service";
 import { writeAiInputDebugLog, writeAiOutputDebugLog } from "../utils/ai-input-debug-log";
 import { isTrackableMorphologyFinding } from "../utils/morphology-rules";
-import type { ReportContentType } from "./report-content-classifier.service";
+import { hasDispensingMedicationContent, type ReportContentType } from "./report-content-classifier.service";
 import {
   reportStructuredSectionKeys,
   type ReportStructuredSectionKey,
@@ -1582,6 +1582,7 @@ function narrativeContract(input: AiExtractionInput) {
     );
   }
   if (types.has("prescription")) parts.push(`处方只输出 medications。用药可出现在门诊病历、住院记录、出院带药或独立用药清单中，不要求有“处方”标题。
+调剂单、配药单、发药单和代煎单属于处方资料：逐味提取药名及原文明示用量，context=prescription。每味克数不是检验指标。中药调剂表的“剂量”通常是投料量，不等于每次服用剂量；未明确为每次服用剂量时 dose、doseUnit 留空，将原文每剂用量、小计、剂数、袋数及煎煮或代煎说明保存在 instructions，不推算频次、疗程或总量，也不表示已经服用。不要将每味投料小计写成包装数量 quantity；quantity 和 dose 若使用则只填数值，单位单独填写，不能重复带单位。药名原样保留，不纠正或猜测 OCR 药名；同一处方重复扫描的相同药名、用量和用法可合并并保留各页证据，原文有冲突则分别保留待核对。
 编号列表、表格、药名与用法分行、多栏和跨页续表均按同一药品条目关联；只有相同编号、明确表格列或连续上下文能证明归属时才合并，不能把相邻栏或下一药品的剂量拼给上一药品。跨页证据分别保留页码；同编号明确续表的同一药品只输出一条，规格与用法分别保留各页证据，不再输出缺少规格的重复条目；不同规格或无明确续表对应关系不能合并。证据不足的规格、剂量、频次留空。
 药品规格不是每次剂量，数量不是疗程；保留盐型、剂型及不同规格，不根据商品名推断通用名。频次缩写及即刻、必要时等原样保留，不换算或补全。处方 context=prescription、门诊用药 context=outpatient、住院用药 context=inpatient、出院带药 context=discharge；按条目所在章节判断。
 停用、暂停、调整或既往用药只能按原文明示保留在 instructions，不能改成当前正在使用；单纯过敏史、药品说明书中的示例及收费明细不作为用药事实。不得添加任何用药建议。`);
@@ -3656,6 +3657,12 @@ export function persistAiExtraction(
     throw Object.assign(new Error('自动补救后仍未取得可核实结果，请核对原件清晰度或配置可用的视觉增强'), {code:'AI_NO_VERIFIED_OBSERVATIONS'});
   }
   const examinationPagesForOverrides=examinationSourcePages(reportId);
+  if (!fields.medications.length && examinationPagesForOverrides.some(page => {
+    const text = page.lines.map(line => line.text).join("\n");
+    return hasDispensingMedicationContent(text) && /\d+(?:\.\d+)?\s*(?:mg|g|克|毫克)(?![A-Za-z/／])/i.test(text);
+  })) {
+    throw Object.assign(new Error("调剂单尚未提取到可核实的药品明细，请核对原件与识别文字后重试"), { code: "AI_NO_VERIFIED_MEDICATIONS" });
+  }
   const observationsWithOverrides = applyObservationFieldOverrides(
     reportId,
     fields.observations.map(observation=>{

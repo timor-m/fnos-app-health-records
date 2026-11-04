@@ -282,7 +282,7 @@ function addReason(
 
 function failureReasonCode(code: string | null) {
   if (!code) return "AI_CALL_FAILED" as const;
-  if (["AI_INVALID_JSON", "AI_EMPTY_RESPONSE", "AI_EMPTY_RESULT", "AI_NO_VERIFIED_OBSERVATIONS"].includes(code)) return "AI_INVALID_OUTPUT" as const;
+  if (["AI_INVALID_JSON", "AI_EMPTY_RESPONSE", "AI_EMPTY_RESULT", "AI_NO_VERIFIED_OBSERVATIONS", "AI_NO_VERIFIED_MEDICATIONS"].includes(code)) return "AI_INVALID_OUTPUT" as const;
   if (code === "AI_OUTPUT_TRUNCATED") return "AI_TRUNCATED_OUTPUT" as const;
   return "AI_CALL_FAILED" as const;
 }

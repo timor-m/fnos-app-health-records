@@ -11,6 +11,17 @@ import {
 } from "../services/ai-extraction.service.ts";
 import { medicationLayouts, nonMedicationLayouts } from "./fixtures/medication-layouts.ts";
 
+test("dispensing headings require medication context and tolerate OCR spacing", () => {
+  for (const heading of ["药材调剂单（代煎）", "调 剂 单", "配药单", "发药单"]) {
+    const text = `${heading}\n剂数：3\n合成药甲 8g`;
+    assert.equal(hasMedicationContent(text), true);
+    assert.equal(classifyReportContent(text).primaryType, "prescription");
+  }
+  for (const text of ["医疗收费票据 中药调剂服务费 10元", "调剂单号：123 剂数：3", "调剂单 业务统计", "药品说明书 调剂单 代煎"]) {
+    assert.equal(hasMedicationContent(text), false, text);
+  }
+});
+
 test("recognizes medication layouts while preserving clinical document types", () => {
   for (const layout of medicationLayouts) {
     assert.equal(hasMedicationContent(layout.pages[0].join("\n")), true, layout.name);
@@ -28,7 +39,7 @@ test("medication contract handles layout boundaries and original treatment statu
   const prompt = promptForInput({ reportId: "report", text: "当前用药", inputCharacters: 4,
     pageCount: 1, route: "narrative", includesMedicationContent: true,
     primaryContentType: "checkup", documentContentType: "checkup" });
-  for (const rule of ["medications", "多栏", "跨页证据分别保留页码", "规格不是每次剂量", "停用", "过敏史", "context=discharge"]) {
+  for (const rule of ["medications", "调剂单", "每味克数不是检验指标", "不推算频次", "多栏", "跨页证据分别保留页码", "规格不是每次剂量", "停用", "过敏史", "context=discharge"]) {
     assert.ok(prompt.includes(rule), rule);
   }
 });

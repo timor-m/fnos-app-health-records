@@ -12,7 +12,7 @@ export const reportContentTypes = [
   "other"
 ] as const;
 
-export const reportContentClassifierVersion = "local-content-router-v2-medications";
+export const reportContentClassifierVersion = "local-content-router-v3-dispensing";
 
 const medicationHeading = /处方笺|处方信息|(?:普通|电子|门诊|住院)处方|用药清单|药物清单|用药记录|出院用药|出院带药|用药医嘱|长期医嘱|临时医嘱|当前用药/;
 const medicationUsage = /用法(?:用量)?|每次剂量|给药途径|(?:口服|静滴|静注|外用|皮下注射|肌内注射|局部封闭).{0,30}(?:每日|每次|即刻|\b(?:qd|bid|tid|qid|prn|stat)\b)/i;
@@ -23,10 +23,18 @@ function medicationText(value: string) {
   return value.normalize("NFKC").replace(/(?<=[\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g, "").replace(/\s+/g, " ");
 }
 
+export function hasDispensingMedicationContent(value: string) {
+  const text = medicationText(value);
+  return !nonMedicationDocument.test(text) &&
+    /(?:调剂|配药|发药)单(?!号)/.test(text) &&
+    /药材|饮片|代煎|处方|剂数/.test(text);
+}
+
 /** Routing signals only: never infer a drug, a dose, or a treatment from them. */
 export function hasMedicationContent(value: string) {
   const text = medicationText(value);
   if (nonMedicationDocument.test(text)) return false;
+  if (hasDispensingMedicationContent(text)) return true;
   if (medicationHeading.test(text)) return true;
   const usage = medicationUsage.test(text);
   // Purchasing a drug does not establish a prescription or administration.

@@ -2830,6 +2830,29 @@ test(`routes and persists prescription facts in ${extractionDepth} without a sep
 });
 }
 
+test("dispensing persists individual drugs and rejects empty or unverified medication results", async () => {
+  const rows=["药材调剂单（代煎）", "剂数：3", "合成药甲 8g", "合成药乙 12g"];
+  for (const mode of ["valid", "empty", "unverified"] as const) {
+    await withReport(1,async({reportId,jobId})=>{
+      const executor: AiExecutor=async input=>({provider:"test",model:"test",promptVersion:"test",
+        ...normalizeAiExtraction({reportType:"prescription", medications:input.route==="narrative" && mode!=="empty"
+          ? ["合成药甲","合成药乙"].map((medicationName,index)=>({medicationName:mode==="unverified"?"虚构药品":medicationName,context:"prescription",
+            instructions:mode==="unverified"?null:`原文用量：${index===0?8:12}g`,p:1,q:mode==="unverified"?"不存在的原文":rows[index+2]})) : []}),
+        rawResponseJson:"{}",promptTokens:0,completionTokens:0,elapsedMs:1});
+      const execution=await executeAiExtractionPlan(jobId,reportId,executor);
+      if(mode!=="valid") {
+        assert.throws(()=>persistAiExtraction(reportId,jobId,execution.result,execution.inputCharacters),
+          {code:"AI_NO_VERIFIED_MEDICATIONS"});
+        assert.equal(getDatabase().prepare("SELECT count(*) n FROM report_medications").get()?.n,0);
+        return;
+      }
+      persistAiExtraction(reportId,jobId,execution.result,execution.inputCharacters);
+      assert.equal(getDatabase().prepare("SELECT count(*) n FROM report_medications WHERE medication_context='prescription'").get()?.n,2);
+      assert.equal(getDatabase().prepare("SELECT count(*) n FROM observations").get()?.n,0);
+    },()=>rows);
+  }
+});
+
 test("extracts and persists synthetic medication layouts in overview and detailed modes", async () => {
   for (const layout of medicationLayouts) {
     for (const extractionDepth of ["overview", "detailed"] as const) {

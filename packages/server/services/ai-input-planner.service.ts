@@ -27,6 +27,7 @@ import {
 } from "./observation-reference.service";
 import {
   classifyReportContent,
+  hasDispensingMedicationContent,
   hasMedicationContent,
   hasVaccinationContent,
   hasMedicationContinuation,
@@ -6326,11 +6327,14 @@ export function rebuildOcrPages(
     // only when an apparent table has almost no usable rows. An explicit header
     // and a material gain in verified rows are required to replace the baseline.
     const hasHeadings = rawCoverageLines.filter(line => /项目|名称|结果|参考范围/.test(String(line.text || ''))).length >= 2;
-    if (rects.length >= 6 && hasHeadings && (tall >= rects.length * .6 || scalarCount(annotated.lines) < 3)) {
+    const dispensing = hasDispensingMedicationContent(rawCoverageLines.map(line => line.text || "").join("\n"));
+    const sidewaysDispensing = dispensing && tall >= rects.length * .6;
+    if (rects.length >= 6 && ((hasHeadings && (tall >= rects.length * .6 || scalarCount(annotated.lines) < 3)) || sidewaysDispensing)) {
       const width = Math.max(...rects.map(rect => rect.right));
       const height = Math.max(...rects.map(rect => rect.bottom));
-      const score = (lines: PlannedOcrLine[]) => scalarCount(lines)
-        + lines.reduce((sum, line) => sum + localObservationsForLine(line).length * 4, 0);
+      const score = (lines: PlannedOcrLine[]) => sidewaysDispensing
+        ? lines.reduce((sum, line) => sum + [...line.text.matchAll(/[\u3400-\u9fff]{2,}(?:\s*[|｜]\s*|\s+)\d+(?:\.\d+)?\s*(?:mg|g|克)(?![A-Za-z/／])/gi)].length, 0)
+        : scalarCount(lines) + lines.reduce((sum, line) => sum + localObservationsForLine(line).length * 4, 0);
       const baselineScore = score(annotated.lines);
       for (const angle of tall >= rects.length * .6 ? [90, 270] : [180]) {
         const oriented = rawCoverageLines.map(line => {
@@ -6342,8 +6346,8 @@ export function rebuildOcrPages(
           return { ...line, box };
         });
         const candidate = rebuild(oriented);
-        if (!candidate.lines.some(line => line.boundary === 'table_header')
-          || scalarCount(candidate.lines) < 2 || score(candidate.lines) < baselineScore + 2
+        if ((!sidewaysDispensing && (!candidate.lines.some(line => line.boundary === 'table_header') || scalarCount(candidate.lines) < 2))
+          || score(candidate.lines) < baselineScore + 2
           || score(candidate.lines) <= score(annotated.lines)) continue;
         annotated = candidate;
         layoutRotated = true;
@@ -6401,6 +6405,24 @@ export function rebuildOcrPages(
           .flatMap(raw => { const rect = boxRect(raw.box); return rect ? [rect] : []; });
         return source.length ? { ...line, box: [Math.min(...source.map(r => r.left)), Math.min(...source.map(r => r.top)),
           Math.max(...source.map(r => r.right)), Math.max(...source.map(r => r.bottom))] } : line;
+      });
+    }
+    if (hasDispensingMedicationContent(lines.map(line => line.text).join("\n"))) {
+      lines = lines.map(line => {
+        // Only standalone dispensing quantities: retain laboratory ratios and
+        // explicit result/reference tables in mixed documents.
+        const laboratoryContext = /检验|化验|参考|结果/.test(
+          `${line.reportSectionName || ""} ${line.sectionName || ""} ${line.tableHeaderText || ""} ${line.text}`,
+        );
+        const dose = /\d+(?:\.\d+)?\s*(?:mg|g|ml|μg|ug|毫克|克|毫升)(?![A-Za-zμ/／])/i.test(line.text) ||
+          /(?:剂数|袋数|付数)\s*[:：|]?\s*\d+/.test(line.text);
+        const metadata = line.candidateKind === "scalar" && !line.dictionaryFacts.length &&
+          /处方|单号|日期|\d+\s*岁/.test(line.text);
+        if (laboratoryContext || (!dose && !metadata)) return line;
+        return { ...line, candidate: false, candidateKind: null,
+          dictionaryFacts: [], role: "narrative" as const, contentRole: "narrative" as const,
+          candidateResolutionReason: null, localObservation: null, localObservations: [],
+          localObservationCandidates: [], expectedLocalObservationCount: 0 };
       });
     }
     const text = renderCompletePage({ pageNumber: row.pageNumber, lines });
