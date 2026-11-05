@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 24,
+  "revision": 25,
   "indicators": [
     {
       "canonicalKey": "lipid_ldl_hdl_ratio",
@@ -4703,6 +4703,708 @@
         "mg/mmol"
       ],
       "explanation": "原报告给出的尿白蛋白与尿肌酐比值，与单独的尿白蛋白浓度、尿总蛋白/肌酐比值及定时尿排泄量分别比较；不同单位分别形成趋势，不自行换算或由其他指标计算。"
+    },
+    {
+      "canonicalKey": "trace_whole_blood_fe",
+      "displayName": "全血铁",
+      "categoryKey": "laboratory_other",
+      "order": 90,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "全血铁",
+        "全血铁测定(Fe)",
+        "全血铁测定"
+      ],
+      "allowedUnits": [
+        "mmol/L"
+      ],
+      "sectionHints": [
+        "全血微量元素",
+        "微量元素"
+      ],
+      "explanation": "全血标本中铁的测量值，不与血清、血浆或其他标本的同名元素合并；保留原报告单位和参考范围。"
+    },
+    {
+      "canonicalKey": "trace_whole_blood_zn",
+      "displayName": "全血锌",
+      "categoryKey": "laboratory_other",
+      "order": 91,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "μmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "全血锌",
+        "全血锌测定(Zn)",
+        "全血锌测定"
+      ],
+      "allowedUnits": [
+        "μmol/L"
+      ],
+      "sectionHints": [
+        "全血微量元素",
+        "微量元素"
+      ],
+      "explanation": "全血标本中锌的测量值，不与血清、血浆或其他标本的同名元素合并；保留原报告单位和参考范围。"
+    },
+    {
+      "canonicalKey": "trace_whole_blood_cu",
+      "displayName": "全血铜",
+      "categoryKey": "laboratory_other",
+      "order": 92,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "μmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "全血铜",
+        "全血铜测定(Cu)",
+        "全血铜测定"
+      ],
+      "allowedUnits": [
+        "μmol/L"
+      ],
+      "sectionHints": [
+        "全血微量元素",
+        "微量元素"
+      ],
+      "explanation": "全血标本中铜的测量值，不与血清、血浆或其他标本的同名元素合并；保留原报告单位和参考范围。"
+    },
+    {
+      "canonicalKey": "inflammation_mpo_mass",
+      "displayName": "髓过氧化物酶浓度",
+      "categoryKey": "laboratory_other",
+      "order": 93,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "ng/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "髓过氧化物酶浓度",
+        "髓过氧化物酶",
+        "髓过氧化物酶(MPO)",
+        "MPO"
+      ],
+      "allowedUnits": [
+        "ng/mL",
+        "μg/L"
+      ],
+      "sectionHints": [
+        "心血管",
+        "心肌标志物",
+        "生化"
+      ],
+      "explanation": "血液髓过氧化物酶本体的质量浓度，不与抗髓过氧化物酶抗体、酶活性或 MPO-DNA 合并。"
+    },
+    {
+      "canonicalKey": "lipid_lp_pla2_mass",
+      "displayName": "脂蛋白相关磷脂酶A2质量浓度",
+      "categoryKey": "laboratory_other",
+      "order": 94,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "ng/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "脂蛋白相关磷脂酶A2质量浓度",
+        "脂蛋白相关磷脂酶A2",
+        "脂蛋白磷脂酶A2",
+        "Lp-PLA2"
+      ],
+      "allowedUnits": [
+        "ng/mL",
+        "μg/L"
+      ],
+      "sectionHints": [
+        "心血管",
+        "血脂",
+        "生化"
+      ],
+      "explanation": "脂蛋白相关磷脂酶 A2 的质量浓度；浓度与活性分别保存，缺少单位时不凭通用名称确定检测口径。"
+    },
+    {
+      "canonicalKey": "lipid_lp_pla2_activity",
+      "displayName": "脂蛋白相关磷脂酶A2活性",
+      "categoryKey": "laboratory_other",
+      "order": 95,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/L",
+      "unitDimension": "enzyme_activity",
+      "aliases": [
+        "脂蛋白相关磷脂酶A2活性",
+        "脂蛋白相关磷脂酶A2",
+        "脂蛋白磷脂酶A2",
+        "Lp-PLA2"
+      ],
+      "allowedUnits": [
+        "U/L"
+      ],
+      "sectionHints": [
+        "心血管",
+        "血脂",
+        "生化"
+      ],
+      "explanation": "脂蛋白相关磷脂酶 A2 的活性；浓度与活性分别保存，缺少单位时不凭通用名称确定检测口径。"
+    },
+    {
+      "canonicalKey": "metabolic_adiponectin",
+      "displayName": "脂联素",
+      "categoryKey": "laboratory_other",
+      "order": 96,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "μg/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "脂联素",
+        "脂联素检测(ADPN)",
+        "脂联素检测",
+        "ADPN",
+        "Adiponectin"
+      ],
+      "allowedUnits": [
+        "μg/mL",
+        "mg/L"
+      ],
+      "sectionHints": [
+        "脂联素",
+        "糖代谢",
+        "生化"
+      ],
+      "explanation": "血液脂联素浓度，不与高分子量脂联素或脂联素比值合并；解释以原报告为准。"
+    },
+    {
+      "canonicalKey": "infectious_h_pylori_14c_urea_breath_test_dpm",
+      "displayName": "14C 尿素呼气试验 DPM 值",
+      "categoryKey": "infection_immunity",
+      "order": 83,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "DPM",
+      "unitDimension": "other",
+      "aliases": [
+        "14C 尿素呼气试验 DPM 值",
+        "碳14呼气试验检测数值",
+        "14C呼气试验DPM值",
+        "碳14呼气试验DPM值"
+      ],
+      "allowedUnits": [
+        "DPM"
+      ],
+      "sectionHints": [
+        "碳14呼气试验",
+        "14C呼气试验",
+        "尿素呼气试验",
+        "幽门螺杆菌"
+      ],
+      "explanation": "14C 尿素呼气试验的 DPM 数值；DPM、CPM、13C DOB 及阴阳性结果分别保存，不自行换算或推导诊断。"
+    },
+    {
+      "canonicalKey": "infectious_h_pylori_14c_urea_breath_test_cpm",
+      "displayName": "14C 尿素呼气试验 CPM 值",
+      "categoryKey": "infection_immunity",
+      "order": 84,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "CPM",
+      "unitDimension": "other",
+      "aliases": [
+        "14C 尿素呼气试验 CPM 值",
+        "碳14呼气试验检测数值",
+        "14C呼气试验CPM值",
+        "碳14呼气试验CPM值"
+      ],
+      "allowedUnits": [
+        "CPM"
+      ],
+      "sectionHints": [
+        "碳14呼气试验",
+        "14C呼气试验",
+        "尿素呼气试验",
+        "幽门螺杆菌"
+      ],
+      "explanation": "14C 尿素呼气试验的 CPM 数值；DPM、CPM、13C DOB 及阴阳性结果分别保存，不自行换算或推导诊断。"
+    },
+    {
+      "canonicalKey": "immunology_cd3_percentage",
+      "displayName": "CD3+ T淋巴细胞百分比",
+      "categoryKey": "infection_immunity",
+      "order": 85,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "CD3+ T淋巴细胞百分比",
+        "T淋巴细胞CD3",
+        "CD3+T细胞",
+        "T淋巴细胞CD3%",
+        "CD3+T细胞%"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "淋巴细胞亚群",
+        "淋巴亚群",
+        "免疫分型"
+      ],
+      "explanation": "外周血CD3+ T淋巴细胞的百分比；百分比与绝对计数分开，通用名称需由原报告单位消歧。保留原值及单位，不换算或自行计算亚群数量。"
+    },
+    {
+      "canonicalKey": "immunology_cd3_count",
+      "displayName": "CD3+ T淋巴细胞绝对计数",
+      "categoryKey": "infection_immunity",
+      "order": 86,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "个/μL",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "CD3+ T淋巴细胞绝对计数",
+        "T淋巴细胞CD3",
+        "CD3+T细胞",
+        "T淋巴细胞CD3绝对计数",
+        "CD3+T细胞绝对计数"
+      ],
+      "allowedUnits": [
+        "个/μL",
+        "/μL",
+        "cells/μL",
+        "10^9/L",
+        "10^3/μL"
+      ],
+      "sectionHints": [
+        "淋巴细胞亚群",
+        "淋巴亚群",
+        "免疫分型"
+      ],
+      "explanation": "外周血CD3+ T淋巴细胞的绝对计数；百分比与绝对计数分开，通用名称需由原报告单位消歧。保留原值及单位，不换算或自行计算亚群数量。"
+    },
+    {
+      "canonicalKey": "immunology_cd4_percentage",
+      "displayName": "CD4+ T淋巴细胞百分比",
+      "categoryKey": "infection_immunity",
+      "order": 87,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "CD4+ T淋巴细胞百分比",
+        "CD4+T细胞",
+        "CD4+T细胞%"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "淋巴细胞亚群",
+        "淋巴亚群",
+        "免疫分型"
+      ],
+      "explanation": "外周血CD4+ T淋巴细胞的百分比；百分比与绝对计数分开，通用名称需由原报告单位消歧。保留原值及单位，不换算或自行计算亚群数量。"
+    },
+    {
+      "canonicalKey": "immunology_cd4_count",
+      "displayName": "CD4+ T淋巴细胞绝对计数",
+      "categoryKey": "infection_immunity",
+      "order": 88,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "个/μL",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "CD4+ T淋巴细胞绝对计数",
+        "CD4+T细胞",
+        "CD4+T细胞绝对计数"
+      ],
+      "allowedUnits": [
+        "个/μL",
+        "/μL",
+        "cells/μL",
+        "10^9/L",
+        "10^3/μL"
+      ],
+      "sectionHints": [
+        "淋巴细胞亚群",
+        "淋巴亚群",
+        "免疫分型"
+      ],
+      "explanation": "外周血CD4+ T淋巴细胞的绝对计数；百分比与绝对计数分开，通用名称需由原报告单位消歧。保留原值及单位，不换算或自行计算亚群数量。"
+    },
+    {
+      "canonicalKey": "immunology_cd8_percentage",
+      "displayName": "CD8+ T淋巴细胞百分比",
+      "categoryKey": "infection_immunity",
+      "order": 89,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "CD8+ T淋巴细胞百分比",
+        "CD8+T细胞",
+        "CD8+T细胞%"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "淋巴细胞亚群",
+        "淋巴亚群",
+        "免疫分型"
+      ],
+      "explanation": "外周血CD8+ T淋巴细胞的百分比；百分比与绝对计数分开，通用名称需由原报告单位消歧。保留原值及单位，不换算或自行计算亚群数量。"
+    },
+    {
+      "canonicalKey": "immunology_cd8_count",
+      "displayName": "CD8+ T淋巴细胞绝对计数",
+      "categoryKey": "infection_immunity",
+      "order": 90,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "个/μL",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "CD8+ T淋巴细胞绝对计数",
+        "CD8+T细胞",
+        "CD8+T细胞绝对计数"
+      ],
+      "allowedUnits": [
+        "个/μL",
+        "/μL",
+        "cells/μL",
+        "10^9/L",
+        "10^3/μL"
+      ],
+      "sectionHints": [
+        "淋巴细胞亚群",
+        "淋巴亚群",
+        "免疫分型"
+      ],
+      "explanation": "外周血CD8+ T淋巴细胞的绝对计数；百分比与绝对计数分开，通用名称需由原报告单位消歧。保留原值及单位，不换算或自行计算亚群数量。"
+    },
+    {
+      "canonicalKey": "immunology_cd19_percentage",
+      "displayName": "CD19+ B淋巴细胞百分比",
+      "categoryKey": "infection_immunity",
+      "order": 91,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "CD19+ B淋巴细胞百分比",
+        "B淋巴细胞CD19",
+        "CD19+B细胞",
+        "B淋巴细胞CD19%",
+        "CD19+B细胞%"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "淋巴细胞亚群",
+        "淋巴亚群",
+        "免疫分型"
+      ],
+      "explanation": "外周血CD19+ B淋巴细胞的百分比；百分比与绝对计数分开，通用名称需由原报告单位消歧。保留原值及单位，不换算或自行计算亚群数量。"
+    },
+    {
+      "canonicalKey": "immunology_cd19_count",
+      "displayName": "CD19+ B淋巴细胞绝对计数",
+      "categoryKey": "infection_immunity",
+      "order": 92,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "个/μL",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "CD19+ B淋巴细胞绝对计数",
+        "B淋巴细胞CD19",
+        "CD19+B细胞",
+        "B淋巴细胞CD19绝对计数",
+        "CD19+B细胞绝对计数"
+      ],
+      "allowedUnits": [
+        "个/μL",
+        "/μL",
+        "cells/μL",
+        "10^9/L",
+        "10^3/μL"
+      ],
+      "sectionHints": [
+        "淋巴细胞亚群",
+        "淋巴亚群",
+        "免疫分型"
+      ],
+      "explanation": "外周血CD19+ B淋巴细胞的绝对计数；百分比与绝对计数分开，通用名称需由原报告单位消歧。保留原值及单位，不换算或自行计算亚群数量。"
+    },
+    {
+      "canonicalKey": "immunology_nk_percentage",
+      "displayName": "CD16+56 NK细胞百分比",
+      "categoryKey": "infection_immunity",
+      "order": 93,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "CD16+56 NK细胞百分比",
+        "自然杀伤细胞CD16+56",
+        "CD16+56 NK细胞",
+        "自然杀伤细胞CD16+56%",
+        "CD16+56 NK细胞%"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "淋巴细胞亚群",
+        "淋巴亚群",
+        "免疫分型"
+      ],
+      "explanation": "外周血CD16+56 NK细胞的百分比；百分比与绝对计数分开，通用名称需由原报告单位消歧。保留原值及单位，不换算或自行计算亚群数量。"
+    },
+    {
+      "canonicalKey": "immunology_nk_count",
+      "displayName": "CD16+56 NK细胞绝对计数",
+      "categoryKey": "infection_immunity",
+      "order": 94,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "个/μL",
+      "unitDimension": "count_concentration",
+      "aliases": [
+        "CD16+56 NK细胞绝对计数",
+        "自然杀伤细胞CD16+56",
+        "CD16+56 NK细胞",
+        "自然杀伤细胞CD16+56绝对计数"
+      ],
+      "allowedUnits": [
+        "个/μL",
+        "/μL",
+        "cells/μL",
+        "10^9/L",
+        "10^3/μL"
+      ],
+      "sectionHints": [
+        "淋巴细胞亚群",
+        "淋巴亚群",
+        "免疫分型"
+      ],
+      "explanation": "外周血CD16+56 NK细胞的绝对计数；百分比与绝对计数分开，通用名称需由原报告单位消歧。保留原值及单位，不换算或自行计算亚群数量。"
+    },
+    {
+      "canonicalKey": "immunology_igm",
+      "displayName": "免疫球蛋白M",
+      "categoryKey": "infection_immunity",
+      "order": 95,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "g/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "免疫球蛋白M",
+        "IgM免疫球蛋白",
+        "IgM",
+        "血清免疫球蛋白M"
+      ],
+      "allowedUnits": [
+        "g/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "体液免疫",
+        "免疫球蛋白",
+        "免疫功能"
+      ],
+      "explanation": "血清免疫球蛋白M的质量浓度，不与特定病原体抗体、免疫球蛋白亚类或补体活性合并；以原报告参考范围为准。"
+    },
+    {
+      "canonicalKey": "immunology_iga",
+      "displayName": "免疫球蛋白A",
+      "categoryKey": "infection_immunity",
+      "order": 96,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "g/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "免疫球蛋白A",
+        "IgA免疫球蛋白",
+        "IgA",
+        "血清免疫球蛋白A"
+      ],
+      "allowedUnits": [
+        "g/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "体液免疫",
+        "免疫球蛋白",
+        "免疫功能"
+      ],
+      "explanation": "血清免疫球蛋白A的质量浓度，不与特定病原体抗体、免疫球蛋白亚类或补体活性合并；以原报告参考范围为准。"
+    },
+    {
+      "canonicalKey": "immunology_igg",
+      "displayName": "免疫球蛋白G",
+      "categoryKey": "infection_immunity",
+      "order": 97,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "g/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "免疫球蛋白G",
+        "IgG免疫球蛋白",
+        "IgG",
+        "血清免疫球蛋白G"
+      ],
+      "allowedUnits": [
+        "g/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "体液免疫",
+        "免疫球蛋白",
+        "免疫功能"
+      ],
+      "explanation": "血清免疫球蛋白G的质量浓度，不与特定病原体抗体、免疫球蛋白亚类或补体活性合并；以原报告参考范围为准。"
+    },
+    {
+      "canonicalKey": "immunology_c3",
+      "displayName": "补体C3",
+      "categoryKey": "infection_immunity",
+      "order": 98,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "g/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "补体C3",
+        "C3",
+        "补体3",
+        "血清补体C3"
+      ],
+      "allowedUnits": [
+        "g/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "体液免疫",
+        "免疫球蛋白",
+        "免疫功能"
+      ],
+      "explanation": "血清补体C3的质量浓度，不与特定病原体抗体、免疫球蛋白亚类或补体活性合并；以原报告参考范围为准。"
+    },
+    {
+      "canonicalKey": "immunology_c4",
+      "displayName": "补体C4",
+      "categoryKey": "infection_immunity",
+      "order": 99,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "g/L",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "补体C4",
+        "C4",
+        "补体4",
+        "血清补体C4"
+      ],
+      "allowedUnits": [
+        "g/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "体液免疫",
+        "免疫球蛋白",
+        "免疫功能"
+      ],
+      "explanation": "血清补体C4的质量浓度，不与特定病原体抗体、免疫球蛋白亚类或补体活性合并；以原报告参考范围为准。"
+    },
+    {
+      "canonicalKey": "urine_prostatic_exosomal_protein",
+      "displayName": "尿前列腺小体外泄蛋白",
+      "categoryKey": "urinalysis",
+      "order": 85,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "urine",
+      "defaultUnit": "ng/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "尿前列腺小体外泄蛋白",
+        "尿液前列腺小体外泄蛋白",
+        "尿前列腺小体外泄蛋白测定"
+      ],
+      "allowedUnits": [
+        "ng/mL",
+        "μg/L"
+      ],
+      "sectionHints": [
+        "尿液",
+        "尿检",
+        "泌尿"
+      ],
+      "explanation": "尿液标本中的前列腺小体外泄蛋白浓度，与 PSA 及精液中同名蛋白分别保存；不把未明确标本的通用名称作为全局别名。"
+    },
+    {
+      "canonicalKey": "immunology_cd4_cd8_ratio",
+      "displayName": "CD4/CD8比值",
+      "categoryKey": "infection_immunity",
+      "order": 100,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": null,
+      "unitDimension": "ratio",
+      "aliases": [
+        "CD4/CD8比值",
+        "CD4/CD8",
+        "CD4+T细胞/CD8+T细胞比值",
+        "CD4+T淋巴细胞/CD8+T淋巴细胞比值"
+      ],
+      "allowedUnits": [
+        ""
+      ],
+      "sectionHints": [
+        "淋巴细胞亚群",
+        "淋巴亚群",
+        "免疫分型"
+      ],
+      "explanation": "原报告给出的 CD4 与 CD8 T淋巴细胞比值，不与单项百分比、绝对计数或 CD8/CD4 反向比值合并，不由系统自行计算。"
     }
   ],
   "extensions": [
