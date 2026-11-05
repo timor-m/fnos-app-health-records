@@ -2,7 +2,7 @@ import { createError } from "h3";
 import { runInTransaction, getDatabase } from "../database/client";
 import { createId } from "../utils/identifier";
 import type { RequestUser } from "../domain/request-user";
-import { patientSexFromOcrText } from "./ai-input-planner.service";
+import { patientIdentityTexts, patientSexFromOcrText } from "./ai-input-planner.service";
 import { assertMemberManage, createMember } from "./member.service";
 
 /*
@@ -156,8 +156,9 @@ export function patientNameFromOcrText(
     } catch {
       continue;
     }
-    for (let index = 0; index < lines.length; index++) {
-      const text = String(lines[index].text || "").normalize("NFKC").trim();
+    const texts = patientIdentityTexts(lines);
+    for (let index = 0; index < texts.length; index++) {
+      const text = texts[index];
       if (!text) continue;
       const label = text.match(/(?:患\s*者\s*姓\s*名|病\s*人\s*姓\s*名|姓\s*名|用\s*药\s*人(?:\s*姓\s*名)?|患\s*者\s*名)\s*[:：|｜]/);
       if (!label) continue;
@@ -165,7 +166,7 @@ export function patientNameFromOcrText(
       // A standalone label followed by one value is a common OCR cell split.
       // Never cross another labelled field or accept an unlabelled name alone.
       const value = text.slice(label.index! + label[0].length).trim() ||
-        String(lines[index + 1]?.text || "").normalize("NFKC").trim();
+        texts[index + 1] || "";
       const match = value.match(/^([^\s，,；;、|｜:：]{2,15})(?=$|[\s，,；;、|｜:：])/);
       if (!match) continue;
       const name = match[1].trim();

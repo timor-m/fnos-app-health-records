@@ -1503,18 +1503,22 @@ async function openDiagnosticReview(item: ProcessingDiagnosticReviewItem) {
 }
 
 async function confirmReady() {
-  if (duplicateCandidatesPending.value) return;
+  if (duplicateCandidatesPending.value || memberIdentityBusy.value || !canManageReport.value) return;
+  const reportId = props.reportId;
+  const context = reportContextSeq;
   confirming.value = true;
   jobsError.value = "";
   try {
-    await request(`reports/${encodeURIComponent(props.reportId)}/confirm`, { method: "POST" });
-    await loadDetail(props.reportId);
+    await request(`reports/${encodeURIComponent(reportId)}/confirm`, { method: "POST" });
+    if (!detailActive || context !== reportContextSeq) return;
+    await loadDetail(reportId);
+    if (!detailActive || context !== reportContextSeq) return;
     emit("updated");
     toast.show("已确认归档");
   } catch (cause) {
-    failJobsAction(cause, "确认归档失败");
+    if (detailActive && context === reportContextSeq) failJobsAction(cause, "确认归档失败");
   } finally {
-    confirming.value = false;
+    if (context === reportContextSeq) confirming.value = false;
   }
 }
 
@@ -1639,6 +1643,14 @@ const dismissingMismatch = ref(false);
 const memberCreateOpen = ref(false);
 const memberCreateSaving = ref(false);
 const memberCreateError = ref("");
+const memberIdentityBusy = computed(() => assigningMember.value || memberCreateSaving.value || dismissingMismatch.value || confirming.value);
+const memberPickerOpen = ref(false);
+const memberPickerId = ref("");
+const assignableMembers = computed(() => app.allMembers.value.filter(member =>
+  member.permission === "manager" && member.id !== currentDetail.value?.memberId));
+const memberPickerOptions = computed(() => [{ value: "", label: "请选择成员" }, ...assignableMembers.value.map(member => ({
+  value: member.id, label: `${member.displayName}（${mismatchRelationshipLabels[member.relationship] || "其他"}）`
+}))]);
 const memberCreateForm = ref({ displayName: "", relationship: "other", sex: "", birthDate: "" });
 const memberCreateMaxYear = new Date().getFullYear();
 const memberCreateRelationshipOptions = computed(() =>
@@ -1651,36 +1663,76 @@ const memberCreateSexOptions = [
 ];
 
 async function postMemberAssignment(body: Record<string, unknown>, successMessage: string) {
-  await request(`reports/${encodeURIComponent(props.reportId)}/assign-member`, {
+  const reportId = props.reportId;
+  const context = reportContextSeq;
+  await request(`reports/${encodeURIComponent(reportId)}/assign-member`, {
     method: "POST",
     body: JSON.stringify(body)
   });
-  await loadDetail(props.reportId, true);
-  emit("updated");
-  toast.show(successMessage);
+  app.notifyDataChanged();
+  toast.show(`${successMessage}，切换到该成员即可查看`);
+  // The report has left this member's scope; never reload it under the old scope.
+  if (detailActive && props.reportId === reportId && context === reportContextSeq) {
+    ++reportContextSeq;
+    ++detailSeq;
+    memberMismatch.value = true;
+    clearReportViews();
+    emit("close");
+    emit("updated");
+  }
+  if (body.newMember) {
+    try { await app.refreshMembers(); }
+    catch { toast.show("归属已完成，成员列表刷新失败，请刷新页面后查看"); }
+  }
 }
 
 function assignToCandidate(candidate: { id: string; displayName: string }) {
-  if (assigningMember.value) return;
+  if (memberIdentityBusy.value || !canManageReport.value) return;
+  const reportId = props.reportId;
+  const context = reportContextSeq;
   const title = source.value?.title || "当前报告";
   confirmDialog.ask({
     title: "归属报告",
     message: `确认把「${title}」归属到成员「${candidate.displayName}」？\n\n报告的指标、趋势和形态发现会一并转移到该成员的档案下。`,
     confirmText: "确认归属",
     run: async () => {
+      if (memberIdentityBusy.value) return;
+      if (!detailActive || context !== reportContextSeq || props.reportId !== reportId || !canManageReport.value
+        || !assignableMembers.value.some(member => member.id === candidate.id)) {
+        toast.show("报告或管理权限已变化，请重新选择成员");
+        return;
+      }
       assigningMember.value = true;
       try {
         await postMemberAssignment({ memberId: candidate.id }, `已归属到「${candidate.displayName}」`);
       } catch (cause) {
-        failJobsAction(cause, "归属失败");
+        if (detailActive && context === reportContextSeq) failJobsAction(cause, "归属失败");
       } finally {
-        assigningMember.value = false;
+        if (context === reportContextSeq) assigningMember.value = false;
       }
     }
   });
 }
 
+function openMemberPicker() {
+  if (memberIdentityBusy.value || !canManageReport.value) return;
+  memberPickerId.value = "";
+  memberCreateOpen.value = false;
+  memberPickerOpen.value = true;
+}
+
+function confirmMemberPicker() {
+  const member = assignableMembers.value.find(member => member.id === memberPickerId.value);
+  if (!member) {
+    toast.show("请选择有管理权限的成员");
+    return;
+  }
+  assignToCandidate(member);
+}
+
 function openMemberCreate() {
+  if (memberIdentityBusy.value || !canManageReport.value) return;
+  memberPickerOpen.value = false;
   const assessment = memberIdentityAssessment.value;
   memberCreateForm.value = {
     displayName: assessment?.patientName || "",
@@ -1693,7 +1745,8 @@ function openMemberCreate() {
 }
 
 async function submitMemberCreate() {
-  if (memberCreateSaving.value) return;
+  if (memberIdentityBusy.value || !canManageReport.value) return;
+  const context = reportContextSeq;
   const displayName = memberCreateForm.value.displayName.trim();
   if (!displayName) {
     memberCreateError.value = "请填写成员姓名";
@@ -1713,25 +1766,28 @@ async function submitMemberCreate() {
       },
       `已创建成员「${displayName}」并完成归属`
     );
-    memberCreateOpen.value = false;
+    if (context === reportContextSeq) memberCreateOpen.value = false;
   } catch (cause) {
-    memberCreateError.value = cause instanceof Error ? cause.message : "创建成员失败";
+    if (detailActive && context === reportContextSeq) memberCreateError.value = cause instanceof Error ? cause.message : "创建成员失败";
   } finally {
-    memberCreateSaving.value = false;
+    if (context === reportContextSeq) memberCreateSaving.value = false;
   }
 }
 
 async function dismissMemberMismatch() {
-  if (dismissingMismatch.value) return;
+  if (memberIdentityBusy.value || !canManageReport.value) return;
+  const reportId = props.reportId;
+  const context = reportContextSeq;
   dismissingMismatch.value = true;
   try {
-    await request(`reports/${encodeURIComponent(props.reportId)}/dismiss-member-mismatch`, { method: "POST" });
-    await loadDetail(props.reportId, true);
-    toast.show("已忽略这份报告的成员提醒");
+    await request(`reports/${encodeURIComponent(reportId)}/dismiss-member-mismatch`, { method: "POST" });
+    if (!detailActive || context !== reportContextSeq) return;
+    await loadDetail(reportId, true);
+    if (detailActive && context === reportContextSeq) toast.show("已忽略这份报告的成员提醒");
   } catch (cause) {
-    failJobsAction(cause, "操作失败");
+    if (detailActive && context === reportContextSeq) failJobsAction(cause, "操作失败");
   } finally {
-    dismissingMismatch.value = false;
+    if (context === reportContextSeq) dismissingMismatch.value = false;
   }
 }
 
@@ -1906,6 +1962,11 @@ async function refreshJobs(silent = false) {
 }
 
 function clearReportViews() {
+  confirming.value = false;
+  assigningMember.value = false;
+  memberCreateSaving.value = false;
+  dismissingMismatch.value = false;
+  memberCreateError.value = "";
   duplicateCandidatesError.value = "";
   detail.value = null;
   jobsSnapshotLoaded = false;
@@ -1925,6 +1986,9 @@ function clearReportViews() {
   observationEditorOpen.value = false;
   morphologyEditItem.value = null;
   clinicalFactEditor.value = null;
+  memberPickerOpen.value = false;
+  memberPickerId.value = "";
+  memberCreateOpen.value = false;
   structuredSectionEditor.value = null;reportEditLeave.reset();observationLeave.reset();
   closeJobEvents();
   stopOriginalExportStatusPolling();
@@ -2191,7 +2255,7 @@ onActivated(() => {
       </dl>
       <div v-if="detailLoading" class="mini-loading"><LoaderCircle class="spin-icon" :size="16" />{{ currentDetail ? "正在更新报告内容" : "正在读取档案详情" }}</div>
       <div class="report-action-row">
-        <button v-if="canManageReport && (source.status === 'needs_review')" class="primary-button compact-primary" type="button" :disabled="confirming || duplicateCandidatesPending" @click="confirmReady">
+        <button v-if="canManageReport && (source.status === 'needs_review')" class="primary-button compact-primary" type="button" :disabled="memberIdentityBusy || duplicateCandidatesPending" @click="confirmReady">
           <LoaderCircle v-if="confirming" class="spin-icon" :size="17" />
           <CheckCircle2 v-else :size="17" />
           {{ confirming ? "确认中" : "确认归档" }}
@@ -2257,7 +2321,7 @@ onActivated(() => {
             <span>{{ candidate.reason }} · {{ candidate.matchedFields.join("、") }}</span>
           </button>
           <div v-if="source.status === 'needs_review'" class="duplicate-actions">
-            <button v-if="canManageReport" class="duplicate-confirm-button" type="button" :disabled="confirming || duplicateCandidatesPending" @click="confirmReady">
+            <button v-if="canManageReport" class="duplicate-confirm-button" type="button" :disabled="memberIdentityBusy || duplicateCandidatesPending" @click="confirmReady">
               <CheckCircle2 :size="15" />仍然确认归档
             </button>
           </div>
@@ -2270,32 +2334,41 @@ onActivated(() => {
           <p v-if="memberIdentityAssessment.verificationIncomplete">已识别到患者信息（{{ memberPatientInfo }}），但未能可靠识别姓名，当前成员资料也不足以完成身份比对，请对照原件核对归属。</p>
           <p v-else>报告患者信息（{{ memberPatientInfo }}）与当前成员资料的{{ memberMismatchFieldLabels }}不一致，请核对是否选对成员；成员使用昵称或亲属称呼时，也可以确认属于当前成员。核对后可以一键归属，或创建新成员并归属。</p>
           <div class="duplicate-actions member-mismatch-actions">
+            <button v-if="canManageReport" class="duplicate-confirm-button" type="button" :disabled="memberIdentityBusy" @click="openMemberPicker">选择已有成员</button>
             <button v-if="canManageReport"
               v-for="candidate in memberIdentityAssessment.candidates"
               :key="candidate.id"
               class="duplicate-confirm-button"
               type="button"
-              :disabled="assigningMember"
+              :disabled="memberIdentityBusy"
               @click="assignToCandidate(candidate)"
             >
               <LoaderCircle v-if="assigningMember" class="spin-icon" :size="15" />
               <CheckCircle2 v-else :size="15" />
               归属到「{{ candidate.displayName }}」（{{ mismatchRelationshipLabels[candidate.relationship] || "其他" }}）
             </button>
-            <button v-if="canManageReport" class="duplicate-confirm-button" type="button" :disabled="assigningMember" @click="openMemberCreate">
+            <button v-if="canManageReport" class="duplicate-confirm-button" type="button" :disabled="memberIdentityBusy" @click="openMemberCreate">
               <Plus :size="15" />创建新成员并归属
             </button>
-            <button v-if="canManageReport" class="soft-action-button" type="button" :disabled="dismissingMismatch" @click="dismissMemberMismatch">
+            <button v-if="canManageReport" class="soft-action-button" type="button" :disabled="memberIdentityBusy" @click="dismissMemberMismatch">
               {{ dismissingMismatch ? "处理中" : "确认属于当前成员" }}
             </button>
           </div>
+          <form v-if="memberPickerOpen && canManageReport" class="member-create-form" @submit.prevent="confirmMemberPicker">
+            <template v-if="assignableMembers.length">
+              <FormSelect v-model="memberPickerId" :options="memberPickerOptions" :disabled="memberIdentityBusy" aria-label="归属到已有成员" />
+              <button type="submit" class="duplicate-confirm-button" :disabled="memberIdentityBusy || !memberPickerId">核对并归属</button>
+            </template>
+            <p v-else>暂无其他可管理的成员，可创建新成员，或由成员管理员授予管理权限后再归属。</p>
+            <button type="button" class="soft-action-button" :disabled="memberIdentityBusy" @click="memberPickerOpen=false">取消</button>
+          </form>
           <form v-if="memberCreateOpen" class="member-create-form" @submit.prevent="submitMemberCreate">
             <input v-model="memberCreateForm.displayName" type="text" maxlength="40" placeholder="成员姓名（必填）" required />
             <FormSelect v-model="memberCreateForm.relationship" :options="memberCreateRelationshipOptions" aria-label="家庭关系" />
             <FormSelect v-model="memberCreateForm.sex" :options="memberCreateSexOptions" aria-label="性别" />
             <DateTimePicker v-model="memberCreateForm.birthDate" :min-year="1900" :max-year="memberCreateMaxYear" aria-label="出生日期" />
             <p v-if="!memberIdentityAssessment.patientBirthDate && memberIdentityAssessment.patientApproxBirthDate" class="member-create-hint">出生日期按报告年龄推算，请核对后再保存</p>
-            <button type="submit" class="duplicate-confirm-button" :disabled="memberCreateSaving">
+            <button type="submit" class="duplicate-confirm-button" :disabled="memberIdentityBusy">
               {{ memberCreateSaving ? "创建中" : "创建并归属" }}
             </button>
             <button type="button" class="soft-action-button" @click="memberCreateOpen = false">取消</button>

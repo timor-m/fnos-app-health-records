@@ -2830,6 +2830,39 @@ function inlineNumericValuePattern(unitPattern: RegExp) {
 
 type PatientSex = "male" | "female";
 
+/** Rejoin explicit identity labels only; never infer a name from nearby text. */
+export function patientIdentityTexts(lines: Array<{ text?: unknown; box?: unknown }>) {
+  const textOf = (index: number) => String(lines[index]?.text || "").normalize("NFKC").trim()
+    .replace(/姓\s+名/g, "姓名").replace(/性\s+别/g, "性别");
+  const sameField = (first: number, second: number) => {
+    const a = boxRect(lines[first]?.box), b = boxRect(lines[second]?.box);
+    if (!a || !b) return lines[first]?.box == null && lines[second]?.box == null;
+    const horizontal = b.right - b.left >= rectHeight(b);
+    const overlap = horizontal ? Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+      : Math.min(a.right, b.right) - Math.max(a.left, b.left);
+    const crossSize = horizontal ? Math.min(rectHeight(a), rectHeight(b)) : Math.min(a.right-a.left, b.right-b.left);
+    const gap = horizontal ? Math.max(0, Math.max(a.left,b.left)-Math.min(a.right,b.right))
+      : Math.max(0, Math.max(a.top,b.top)-Math.min(a.bottom,b.bottom));
+    const glyph = Math.max(Math.min(a.right-a.left,rectHeight(a)), Math.min(b.right-b.left,rectHeight(b)));
+    return overlap >= crossSize*.5 && gap <= glyph*6;
+  };
+  const texts: string[] = [];
+  for (let index=0; index<lines.length; index++) {
+    let text = textOf(index);
+    const suffix = text === "姓" ? /^名\s*[:：|｜]/ : text === "性" ? /^别\s*[:：|｜]/ : null;
+    const staffLabel = /(?:医师|医生|药师|审核人|发药人|调剂人|联系人|家属|监护人)[:：]?$/.test(textOf(index-1).replace(/\s+/g,""));
+    if (suffix?.test(textOf(index+1)) && sameField(index,index+1)
+      && !(staffLabel && sameField(index-1,index+1))) {
+      text += textOf(++index);
+    }
+    if (/^性别\s*[:：|｜]?$/.test(text) && /^[男女]$/.test(textOf(index+1)) && sameField(index,index+1)) {
+      text += textOf(++index);
+    }
+    texts.push(text);
+  }
+  return texts;
+}
+
 /*
  * 成员档案未填性别时，从报告前两页 OCR 文本推断：
  * 显式“性别：男”，或性别单元格（独立行或表格行内的 男/女 格）+
@@ -2846,9 +2879,7 @@ export function patientSexFromOcrText(
     } catch {
       continue;
     }
-    const texts = lines
-      .map((line) => String(line.text || "").trim())
-      .filter(Boolean);
+    const texts = patientIdentityTexts(lines).filter(Boolean);
     const explicit = texts
       .map((text) => text.match(/性别\s*[:：|｜]?\s*(男|女)/))
       .find((match): match is RegExpMatchArray => Boolean(match));

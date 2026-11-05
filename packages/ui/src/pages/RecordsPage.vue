@@ -427,6 +427,7 @@ useRefreshOnActivate(() => { void reloadList(); });
           :summary="selected"
           variant="panel"
           @updated="reloadList"
+          @close="selectedId = ''"
           @open-candidate="openDuplicateCandidate"
         />
         <EmptyState v-else title="选择一份报告" description="报告信息、处理进度和关联原件将在这里显示。" />
