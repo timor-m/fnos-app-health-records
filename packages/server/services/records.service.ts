@@ -7349,6 +7349,21 @@ function copyDirectoryForBackup(
   } else {
     mkdirSync(target, { recursive: true });
   }
+  normalizeBackupCopyPermissions(target);
+}
+
+function normalizeBackupCopyPermissions(path: string) {
+  const stats = lstatSync(path);
+  // Source ACLs may permit reading files whose owner mode does not. The copy
+  // belongs to this process and needs private owner access for checksums/tar.
+  // Never change source permissions or follow copied links outside staging.
+  if (stats.isSymbolicLink()) return;
+  if (stats.isDirectory()) {
+    chmodSync(path, 0o700);
+    for (const name of readdirSync(path)) normalizeBackupCopyPermissions(join(path, name));
+  } else if (stats.isFile()) {
+    chmodSync(path, 0o600);
+  }
 }
 
 function normalizeArchiveRelativePath(path: string) {

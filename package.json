@@ -1,6 +1,6 @@
 {
   "name": "fnos-app-health-records",
-  "version": "0.2.17",
+  "version": "0.2.18",
   "description": "Family health report archive and AI-assisted record management for fnOS",
   "type": "module",
   "author": {

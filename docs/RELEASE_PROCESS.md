@@ -4,6 +4,8 @@
 
 ## 当前版本关系
 
+当前开发版本为 **0.2.18（Unreleased）**，包含备份权限与成员归属核对修复，schema 保持 v19。版本号已按用户要求同步，尚未冻结、打 tag 或正式发布。
+
 **0.2.17 已封版**，包含飞牛端口关闭、跨 NAS 备份恢复和 PDF 文字兼容修复。schema 保持 v19，无新增结构或迁移。该版本已提交飞牛应用上架审核，审核通过和远端发布状态以平台实际结果为准；版本内容冻结于 `0.2.17`，后续开发记入无编号 `Unreleased`，不自动升级下一版本。
 
 **发布授权前提：**只有用户明确说“开始发版”或明确授权本次发布，才执行版本递增、schema 编号整理、冻结、版本提交、tag 和发布。开发、构建、安装测试不等于发布；正式发布后也不自动递增下一版本。开发阶段维护迁移草案，未发布改动在发布准备时统一收口；已落库测试数据不允许直接降级或删除。
@@ -15,10 +17,10 @@
 | 项 | 当前值 | 来源 |
 | --- | --- | --- |
 | 应用 ID | `fnos-app-health-records` | `template.config.json` |
-| 应用版本 | `0.2.17` | `package.json` |
-| fnOS manifest 版本 | `0.2.17` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
-| fnOS sub_version | `0.2.17.0` | `scripts/prepare-package.mjs` 生成 |
-| Docker 镜像版本 | 本轮目标 `0.2.17`，发布后稳定版另提供 `latest` | GitHub Tag 工作流从 `package.json` 生成 |
+| 应用版本 | `0.2.18` | `package.json` |
+| fnOS manifest 版本 | `0.2.18` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
+| fnOS sub_version | `0.2.18.0` | `scripts/prepare-package.mjs` 生成 |
+| Docker 镜像版本 | 本轮目标 `0.2.18`，发布后稳定版另提供 `latest` | GitHub Tag 工作流从 `package.json` 生成 |
 | Docker 镜像仓库 | `docker.io/timorm/fnos-app-health-records` | Docker Hub，可通过 `DOCKERHUB_IMAGE` 覆盖 |
 | 数据库 schema | `v19` | `packages/server/database/migrations.ts` 最后一个迁移版本 |
 | 数据库记录表 | `schema_migrations`、`app_upgrade_history` | 服务端首次启动时初始化或迁移 |
