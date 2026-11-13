@@ -66,6 +66,14 @@
 
 名称及标本依据：[北京药监局 mALB 定量检测试剂信息](https://xxcx.yjj.beijing.gov.cn/eportal/ui?exampleId=f832a05abb7e4fe7adc7982c73bce6d8&pageId=723916)、[新竹台大医院尿微量白蛋白项目](https://www.hch.gov.tw/?aid=642&iid=2343&page_name=detail&pid=0)、[义大医院尿液微白蛋白/肌酸酐比值](https://exdep.edah.org.tw/cp/index.php/zh-tw/2017-06-26-08-19-55/2017-06-28-09-06-14/290-acr)。单位边界另参考 [义大医院生化项目单位公告](https://exdep.edah.org.tw/cp/images/see_pdf/201911_anno.pdf)和 [NHS 尿白蛋白/肌酐比值项目](https://www.nwlpathology.nhs.uk/test/albumincreatinine-ratio-urine/)。这些资料用于确认字典语义和单位，不提供统一诊断阈值或参考范围。
 
+### 游离人绒毛膜促性腺激素 β 亚单位
+
+远程 revision 26 新增 `hormone_free_beta_hcg`，标准名称为“游离人绒毛膜促性腺激素β亚单位”，归入其他检验，类型为定量。核心及 revision 25 均未收录；兼容“人绒毛膜促性腺激素游离β亚基”、完整名称后的机构代码和 free β-hCG 等明确写法。支持 `ng/mL`、`μg/L`，保留原报告单位，不做单位换算，不设置统一参考范围。
+
+不将残缺的“亚基(T-12)”、未注明游离的 β-hCG、总 hCG 或 α 亚单位设为别名；MoM、IU/L 等非本次支持的单位沿用低置信及趋势排除规则。只剩“亚基”的历史记录无法靠字典还原，需先核对原文补全名称。完整名称的历史指标安装更新后可本地回填，无需 OCR 或 AI。
+
+名称、标本和跨机构含义依据：[香港中文大学产科筛查实验室项目说明](https://www.obg.cuhk.edu.hk/wp-content/uploads/2024/02/General-Information-on-Down-Syndrome-Screening_20240220.pdf)、[西门子游离 β-hCG 试剂说明书](https://doclib.siemens-healthineers.com/rest/v1/view?document-id=967729)。仅用于确认项目语义及单位，不用于提供诊断或通用参考范围。
+
 字段按功能保守保留：
 
 - `canonicalKey`、`displayName`：稳定标识与用户可见名称。

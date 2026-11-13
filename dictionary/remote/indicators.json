@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 25,
+  "revision": 26,
   "indicators": [
     {
       "canonicalKey": "lipid_ldl_hdl_ratio",
@@ -5405,6 +5405,38 @@
         "免疫分型"
       ],
       "explanation": "原报告给出的 CD4 与 CD8 T淋巴细胞比值，不与单项百分比、绝对计数或 CD8/CD4 反向比值合并，不由系统自行计算。"
+    },
+    {
+      "canonicalKey": "hormone_free_beta_hcg",
+      "displayName": "游离人绒毛膜促性腺激素β亚单位",
+      "categoryKey": "laboratory_other",
+      "order": 97,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "ng/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "游离人绒毛膜促性腺激素β亚单位",
+        "人绒毛膜促性腺激素游离β亚基",
+        "人绒毛膜促性腺激素游离β亚单位",
+        "游离人绒毛膜促性腺激素β亚基",
+        "游离β人绒毛膜促性腺激素",
+        "游离β-HCG",
+        "free β-hCG",
+        "free beta hCG",
+        "fβ-HCG"
+      ],
+      "allowedUnits": [
+        "ng/mL",
+        "μg/L"
+      ],
+      "sectionHints": [
+        "激素",
+        "肿瘤标志物",
+        "产前筛查"
+      ],
+      "explanation": "血清游离人绒毛膜促性腺激素β亚单位质量浓度；不与完整或总 hCG、未注明游离的β-hCG、α亚单位或 MoM 合并。保留原报告单位和参考范围，不由系统换算或推断检测含义。"
     }
   ],
   "extensions": [
