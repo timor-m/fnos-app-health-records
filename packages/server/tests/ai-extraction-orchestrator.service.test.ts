@@ -514,6 +514,39 @@ test("keeps document title and type anchored to the first scalar unit", async ()
   ]);
 });
 
+test("persists the full wrapped name even if AI returns its suffix and a footer has no coordinates", async () => {
+  await withReport(1, async ({reportId,jobId}) => {
+    const cells=[
+      {id:'name-a',text:'合成检测项',confidence:.99,box:[10,30,110,40]},
+      {id:'name-b',text:'目甲',confidence:.99,box:[10,44,90,54]},
+      {id:'value',text:'3.25',confidence:.99,box:[150,37,180,47]},
+      {id:'unit',text:'ng/mL',confidence:.99,box:[210,37,255,47]},
+      {id:'footer',text:'Synthetic footer without coordinates',confidence:.99},
+    ];
+    getDatabase().prepare('UPDATE ocr_results SET lines_json=? WHERE page_id=?')
+      .run(JSON.stringify(cells),'page-1');
+    let calls=0;
+    const executor:AiExecutor=async input=>{
+      calls++;
+      assert.match(input.text,/合成检测项目甲/);
+      const normalized=normalizeAiExtraction({reportType:'laboratory',observations:[{
+        itemName:'目甲',resultText:'3.25',numericValue:3.25,unit:'ng/mL',
+        evidence:[{pageNumber:1,quote:'目甲 | 3.25 | ng/mL'}],
+      }]});
+      return {provider:'test',model:'test',promptVersion:'test',...normalized,
+        rawResponseJson:'{}',promptTokens:10,completionTokens:5,elapsedMs:1};
+    };
+    const execution=await executeAiExtractionPlan(jobId,reportId,executor);
+    assert.equal(calls,1);
+    assert.equal(execution.result.fields.observations.length,1);
+    assert.equal(execution.result.fields.observations[0].itemName,'合成检测项目甲');
+    persistAiExtraction(reportId,jobId,execution.result,execution.inputCharacters);
+    const rows=getDatabase().prepare('SELECT item_name AS name,numeric_value AS value,unit FROM observations WHERE report_id=?').all(reportId);
+    assert.equal(rows.length,1);
+    assert.deepEqual({...rows[0]},{name:'合成检测项目甲',value:3.25,unit:'ng/mL'});
+  });
+});
+
 test("fills business identifiers locally and persists a single checkup body part", async () => {
   await withReport(1, async ({ reportId, jobId }) => {
     const executor: AiExecutor = async () => {

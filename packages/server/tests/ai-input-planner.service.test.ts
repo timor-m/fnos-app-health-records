@@ -4949,6 +4949,31 @@ test("reconstructs two-line table names with one result and retains cell sources
   }
 });
 
+test("keeps positioned wrapped names complete when an unrelated OCR line has no coordinates", () => {
+  const cells = [
+    {id:'name-a',text:'合成检测项',box:[10,30,110,40]},
+    {id:'name-b',text:'目甲',box:[10,44,90,54]},
+    {id:'value',text:'3.25',box:[150,37,180,47]},
+    {id:'unit',text:'ng/mL',box:[210,37,255,47]},
+    {id:'next-name',text:'合成项目乙',box:[10,80,110,90]},
+    {id:'next-value',text:'5.75',box:[150,80,180,90]},
+    {id:'footer',text:'Synthetic footer without coordinates'},
+  ];
+  const [rebuilt] = rebuildOcrPages([{pageId:'mixed-coordinates',pageNumber:1,linesJson:JSON.stringify(cells)}]);
+  const row = rebuilt.lines.find(line=>line.text.startsWith('合成检测项目甲'));
+  assert.ok(row);
+  assert.equal(row.text,'合成检测项目甲 | 3.25 | ng/mL');
+  assert.equal(row.candidateKind,'scalar');
+  assert.deepEqual(row.sourceCells[0].sourceLineIds,['name-a','name-b']);
+  assert.ok(rebuilt.lines.some(line=>line.text==='合成项目乙 | 5.75'));
+  assert.ok(rebuilt.lines.some(line=>line.text==='Synthetic footer without coordinates'));
+  for (const depth of ['overview','detailed'] as const) {
+    const plan=planRebuiltOcrPages('mixed-coordinates',[rebuilt],depth);
+    assert.ok(plan.units.some(unit=>unit.text.includes(row.text)));
+    assert.ok(!plan.units.some(unit=>/^目甲\s*\|/m.test(unit.text)));
+  }
+});
+
 test("retains unfamiliar and alphanumeric wrapped names as candidates with original cell sources", () => {
   for (const [first, second] of [['合成检测项','目甲'], ['糖类抗原','19-9'], ['合成检测','(A2)']]) {
     const [rebuilt] = rebuildOcrPages([{pageId:'wrapped',pageNumber:1,linesJson:JSON.stringify([
@@ -4978,10 +5003,15 @@ test("leaves ambiguous or unsupported wrapped table names unchanged", () => {
     base.map((line) => line.id === "b" ? { ...line, box: [45, 44, 125, 54] } : line),
     base.map((line) => line.id === "b" ? { ...line, text: "请咨询医生" } : line),
     base.map((line) => line.id === "v" ? { ...line, box: [] } : line),
+    base.map((line) => line.id === "a" ? { ...line, box: [] } : line),
+    base.map((line) => line.id === "a" ? { ...line, text: "白细胞计数" }
+      : line.id === "b" ? { ...line, text: "红细胞计数" } : line),
     base.slice(0, 2),
     [base[0], { ...base[1], text: "参考范围" }, base[2]],
   ];
-  for (const [index, lines] of cases.entries()) {
+  for (const [index, lines] of cases.flatMap(lines => [lines,
+    [...lines, {id:'footer',text:'Synthetic footer without coordinates',box:[]}],
+  ]).entries()) {
     const rebuilt = rebuildOcrPages([{
       pageId: "ambiguous-table", pageNumber: 1, linesJson: JSON.stringify(lines),
     }]);

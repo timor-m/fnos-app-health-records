@@ -2126,9 +2126,9 @@ function reconstructPageLayout(
   aliases: PreparedDictionaryAliases,
   unitPattern: RegExp,
 ) {
-  if (lines.every((line) => boxRect(line.box))) {
-    lines = mergeWrappedTableNames(lines, aliases);
-  }
+  // The helper checks the name/result coordinates locally and retains lines
+  // without boxes. An unrelated unpositioned footer must not disable wrapping.
+  lines = mergeWrappedTableNames(lines, aliases);
   /* 每行坐标只解析一次；行包围盒随行合并增量维护，避免排序和行匹配里重复 boxRect。 */
   const rects = lines.map((line) => boxRect(line.box));
   const positioned = rects.filter((rect) => rect !== null);
