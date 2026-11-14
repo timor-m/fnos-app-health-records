@@ -75,7 +75,7 @@ function remove(group:ManagedTrendGroup){
             <label><span>复制内置分组</span><FormSelect v-model="templateKey" :options="templates.map(group=>({value:group.key,label:group.name}))" placeholder="选择内置组合" aria-label="复制内置分组" :disabled="busy || !!error" @change="copyTemplate" /></label>
           </div>
           <p class="manager-hint">仅当前账号可管理，切换有权查看的成员时可继续使用。</p>
-          <div class="manager-list">
+          <div class="manager-list" :class="{ 'manager-list-empty': !personal.length }">
             <p v-if="!personal.length" class="manager-empty">还没有个人分组，可以新建或复制内置组合。</p>
             <div v-for="group in personal" :key="group.key" class="manager-group"><div><strong>{{ group.name }}</strong><small>已选 {{ group.indicatorKeys.length }} 项</small></div><button class="soft-action-button" :disabled="busy" @click="edit(group)">编辑</button><button class="soft-action-button manager-delete" :disabled="busy" @click="remove(group)">删除</button></div>
           </div>
@@ -124,6 +124,10 @@ function remove(group:ManagedTrendGroup){
 .manager-error { margin: 0; color: var(--danger); white-space: pre-wrap; }
 .manager-error button { margin-left: 8px; }
 .manager-empty { color: var(--muted); padding: 20px 0; }
+@media (min-width: 761px) {
+  .manager-list-empty { display: flex; align-items: center; justify-content: center; padding-right: 0; text-align: center; }
+  .manager-list-empty .manager-empty { margin: 0; }
+}
 @media (max-width: 760px) {
   .trend-group-manager { width: 100vw; height: min(720px, 94vh); height: min(720px, 94dvh); max-height: 94dvh; border-radius: 8px 8px 0 0; align-self: end; }
 }

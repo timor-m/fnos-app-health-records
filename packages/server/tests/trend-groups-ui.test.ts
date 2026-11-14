@@ -17,7 +17,8 @@ function state() {
 }
 test('domain expands without selecting; selector uses one key and names the active choice', () => {
   const s = state();
-  assert.equal(s.expanded.value.size, 0);
+  assert.equal(s.expanded.value.has('my_groups'), true);
+  assert.equal(s.expanded.value.has('lab'), false);
   s.expand('lab'); assert.equal(s.expanded.value.has('lab'), true); assert.equal(s.props.modelValue, '');
   s.props.modelValue = 'three';
   assert.equal(s.options.value.find((o: any) => o.value === s.props.modelValue).label, '甲功三项');

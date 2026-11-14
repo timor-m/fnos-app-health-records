@@ -8,10 +8,10 @@ const props = defineProps<{ groups: TrendGroupNode[]; modelValue: string }>();
 const emit = defineEmits<{ 'update:modelValue': [value: string]; manage: [] }>();
 const search = ref('');
 const showAll = ref(false);
-const expanded = ref(new Set<string>());
+const expanded = ref(new Set<string>(['my_groups']));
 const keyword = computed(() => search.value.trim().toLocaleLowerCase());
 const matches = (node: TrendGroupNode) => !keyword.value || node.searchText.includes(keyword.value);
-const roots = computed(() => props.groups.filter(node => (showAll.value || node.indicatorCount > 0) && (matches(node) || node.children.some(matches))));
+const roots = computed(() => props.groups.filter(node => (showAll.value || node.indicatorCount > 0 || node.key === 'my_groups') && (matches(node) || node.children.some(matches))));
 const options = computed(() => [{ value: '', label: '全部指标' }, ...flattenTrendGroups(props.groups).map(option)]);
 function option(node: TrendGroupNode) {
   return { value: node.key, label: node.name, disabled: !node.indicatorCount };
@@ -38,7 +38,7 @@ function expand(key: string) {
           <button v-else type="button" class="form-select-option" :class="{ selected: modelValue === node.key }" role="option" :aria-selected="modelValue === node.key" :disabled="!node.indicatorCount" @click="pick(option(node))"><span>{{ node.name }}</span><small>{{ node.indicatorCount }} / {{ node.configuredIndicatorCount }}</small><Check v-if="modelValue === node.key" :size="16" /></button>
           <div v-if="node.children.length && (expanded.has(node.key) || keyword)" class="trend-group-children">
             <button type="button" class="form-select-option" :class="{ selected: modelValue === node.key }" role="option" :aria-selected="modelValue === node.key" :disabled="!node.indicatorCount" @click="pick(option(node))"><span>全部</span><Check v-if="modelValue === node.key" :size="16" /></button>
-            <button v-for="child in node.children.filter(c => (showAll || c.indicatorCount > 0) && (matches(c) || node.name.toLocaleLowerCase().includes(keyword)))" :key="child.key" type="button" class="form-select-option" :class="{ selected: modelValue === child.key }" role="option" :aria-selected="modelValue === child.key" :disabled="!child.indicatorCount" @click="pick(option(child))"><span>{{ child.name }}</span><small>{{ child.indicatorCount }} / {{ child.configuredIndicatorCount }}</small><Check v-if="modelValue === child.key" :size="16" /></button>
+            <button v-for="child in node.children.filter(c => (node.key === 'my_groups' || showAll || c.indicatorCount > 0) && (matches(c) || node.name.toLocaleLowerCase().includes(keyword)))" :key="child.key" type="button" class="form-select-option" :class="{ selected: modelValue === child.key }" role="option" :aria-selected="modelValue === child.key" :disabled="!child.indicatorCount" @click="pick(option(child))"><span>{{ child.name }}</span><small>{{ child.indicatorCount }} / {{ child.configuredIndicatorCount }}</small><Check v-if="modelValue === child.key" :size="16" /></button>
           </div>
         </div>
         <div class="trend-group-actions">

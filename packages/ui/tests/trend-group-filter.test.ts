@@ -1,0 +1,20 @@
+import {mount,flushPromises,type VueWrapper} from '@vue/test-utils';
+import {afterEach,expect,it} from 'vitest';
+import Filter from '../src/components/TrendGroupFilter.vue';
+import type {TrendGroupNode} from '../../shared/trend-groups';
+const node=(key:string,name:string,count:number):TrendGroupNode=>({key,name,indicatorCount:count,configuredIndicatorCount:1,indicatorKeys:[],searchText:name,children:[]});
+let wrapper:VueWrapper;
+afterEach(()=>wrapper?.unmount());
+it('expands all created personal groups by default even without member data, keeping empty choices disabled',async()=>{
+ const personal={...node('my_groups','我的分组',1),children:[node('mine','已有组合',1),node('empty-mine','尚无数据组合',0)]};
+ const builtin={...node('lab','检验检查',1),children:[node('blood','血常规',1),node('empty-builtin','空内置组合',0)]};
+ wrapper=mount(Filter,{props:{modelValue:'',groups:[personal,builtin]},global:{stubs:{Teleport:true}}});
+ await wrapper.get('button').trigger('click');await flushPromises();
+ const personalButton=wrapper.findAll('button').find(b=>b.text().includes('我的分组')&&!b.text().includes('管理'))!;
+ expect(personalButton.attributes('aria-expanded')).toBe('true');
+ const empty=wrapper.findAll('button').find(b=>b.text().includes('尚无数据组合'))!;expect(empty.attributes('disabled')).toBeDefined();
+ expect(wrapper.text()).toContain('已有组合');expect(wrapper.text()).not.toContain('空内置组合');
+ await personalButton.trigger('click');expect(wrapper.text()).not.toContain('尚无数据组合');await personalButton.trigger('click');expect(wrapper.text()).toContain('尚无数据组合');
+ await wrapper.setProps({groups:[{...personal,indicatorCount:0,children:[node('empty-mine','尚无数据组合',0)]}]});
+ expect(wrapper.text()).toContain('我的分组');expect(wrapper.text()).toContain('尚无数据组合');
+});
