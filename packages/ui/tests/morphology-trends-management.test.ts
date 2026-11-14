@@ -15,15 +15,15 @@ let w:VueWrapper;
 const render=()=>w=shallowMount(Page,{global:{stubs:{Teleport:true,RouterLink:true}}});
 beforeEach(()=>{context.app={selectedMemberId:ref('member'),selectedMember:ref({permission:'manager'}),dataVersion:ref(0),notifyDataChanged:vi.fn(),setTopbarSubtitle:vi.fn(),clearTopbarSubtitle:vi.fn(),setTopbarSearch:vi.fn(),clearTopbarSearch:vi.fn()};request.mockReset();request.mockResolvedValue(structuredClone(data));});
 afterEach(()=>{w?.unmount();useConfirm().cancel();});
-it('exposes creation and record deletion via shared editor and confirmation then refreshes the series',async()=>{
- render();await flushPromises();await w.findAll('button').find(b=>b.text()==='补充记录')!.trigger('click');
- const editor=w.findComponent({name:'MorphologyFindingEditor'});expect(editor.props('open')).toBe(true);expect(editor.props('memberId')).toBe('member');editor.vm.$emit('close');await flushPromises();
+it('keeps creation in report details and exposes correction and deletion of existing records',async()=>{
+ render();await flushPromises();expect(w.text()).not.toContain('补充记录');await w.findAll('button').find(b=>b.text()==='校对记录')!.trigger('click');
+ const editor=w.findComponent({name:'MorphologyFindingEditor'});expect(editor.props('open')).toBe(true);expect(editor.props('memberId')).toBe('member');expect(editor.props('finding').reportId).toBe('r');editor.vm.$emit('close');await flushPromises();
  await w.get('[title="删除形态记录"]').trigger('click');expect(request).toHaveBeenCalledTimes(1);expect(useConfirm().state.value?.message).toContain('原件不会删除');
  request.mockResolvedValueOnce({summary:{groups:0,findings:0,untracked:0},series:[],untracked:[]});
  await useConfirm().confirm();await flushPromises();expect(request).toHaveBeenCalledWith('morphology-findings/f/ignore',{method:'POST'});expect(w.find('[title="删除形态记录"]').exists()).toBe(false);
 });
 it('hides write actions for a viewer and closes the editor when switching members',async()=>{
- render();await flushPromises();await w.findAll('button').find(b=>b.text()==='补充记录')!.trigger('click');
+ render();await flushPromises();expect(w.text()).not.toContain('补充记录');await w.findAll('button').find(b=>b.text()==='校对记录')!.trigger('click');
  context.app.selectedMemberId.value='other';context.app.selectedMember.value={permission:'viewer'};await flushPromises();
  expect(w.findComponent({name:'MorphologyFindingEditor'}).props('open')).toBe(false);
  expect(w.find('[title="删除形态记录"]').exists()).toBe(false);expect(w.text()).not.toContain('校对记录');expect(w.text()).not.toContain('补充记录');

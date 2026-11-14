@@ -18,8 +18,12 @@ onBeforeUnmount(()=>{alive=false;});
 const personal=computed(()=>data.value.groups.filter(g=>g.source==='user'));
 const templates=computed(()=>data.value.groups.filter(g=>g.source==='builtin'));
 const normalize=(v:string)=>v.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g,'');
-const matches=computed(()=>{const q=normalize(search.value);return data.value.indicators.filter(i=>
-  (!q || normalize([i.name,i.category,...i.aliases].join(' ')).includes(q)) && (i.enabled || selected.value.includes(i.key)));});
+const matches=computed(()=>{
+  const q=normalize(search.value),chosen=new Set(selected.value);
+  return data.value.indicators.filter(i=>
+    (!q || normalize([i.name,i.category,...i.aliases].join(' ')).includes(q)) && (i.enabled || chosen.has(i.key)))
+    .sort((a,b)=>Number(chosen.has(b.key))-Number(chosen.has(a.key)));
+});
 async function load(){
   loading.value=true;error.value='';
   try{const next=await request<TrendGroupManagement>('trends/groups/manage');if(alive)data.value=next;}

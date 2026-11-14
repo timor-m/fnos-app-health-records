@@ -14,6 +14,7 @@ const props = defineProps<{
   emptyText?: string;
   hint?: string;
   panelMinWidth?: number;
+  panelMaxHeight?: string;
 }>();
 const emit = defineEmits<{ "update:modelValue": [value: string]; change: [value: string] }>();
 
@@ -22,6 +23,11 @@ const root = ref<HTMLElement | null>(null);
 const layer = ref<HTMLElement | null>(null);
 const panel = ref<HTMLElement | null>(null);
 const panelStyle = ref<Record<string, string>>({});
+const panelHeightStyle = computed(() => props.panelMaxHeight ? {
+  maxHeight: panelStyle.value.top
+    ? `min(${props.panelMaxHeight}, calc(100vh - ${panelStyle.value.top} - 12px))`
+    : props.panelMaxHeight
+} : {});
 const lockScroll = ref(false);
 useScrollLock(computed(() => open.value && lockScroll.value));
 
@@ -111,7 +117,7 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <!-- 用 click 关闭遮罩：mousedown/touchstart 提前关闭会让后续 click 透穿到底层元素 -->
       <div v-if="open" ref="layer" class="form-select-layer" @click.self="open = false">
-        <div ref="panel" class="form-select-panel" :style="panelStyle" role="listbox" :aria-label="ariaLabel">
+        <div ref="panel" class="form-select-panel" :style="[panelStyle, panelHeightStyle]" role="listbox" :aria-label="ariaLabel">
           <span class="sheet-grabber" aria-hidden="true"></span>
           <slot name="panel" :pick="pick" :close="() => open = false">
           <p v-if="!options.length || hint" class="form-select-empty">{{ hint || emptyText || '暂无可选项' }}</p>

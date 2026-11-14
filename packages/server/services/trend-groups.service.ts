@@ -100,7 +100,7 @@ export function buildTrendGroupTree(available: AvailableIndicator[], userId: str
   const personal = groups.filter(g => !g.parent && g.owner === userId).map(g => build(g));
   if (personal.length) {
     const keys = [...new Set(personal.flatMap(g => g.indicatorKeys))];
-    tree.push({key:'my_groups',name:'我的分组',children:personal,indicatorKeys:keys,
+    tree.unshift({key:'my_groups',name:'我的分组',children:personal,indicatorKeys:keys,
       indicatorCount:keys.length,configuredIndicatorCount:new Set(personal.flatMap(g=>configuredByKey.get(g.key)||[])).size,
       searchText:['我的分组',...personal.map(g=>g.searchText)].join(' ')});
   }

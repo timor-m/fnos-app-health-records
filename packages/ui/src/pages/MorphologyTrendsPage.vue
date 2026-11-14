@@ -12,7 +12,6 @@ import {
   LoaderCircle,
   MoreHorizontal,
   Pencil,
-  Plus,
   Trash2,
   Ruler,
   ScanSearch,
@@ -56,7 +55,6 @@ const previewReportId = ref<string | null>(null);
 const sourcePreview = ref<{ point: MorphologyTrackingPoint; seriesName: string } | null>(null);
 const processingFinding = ref<UntrackedMorphologyFinding | null>(null);
 const editingFinding = ref<UntrackedMorphologyFinding | MorphologyTrackingPoint | null>(null);
-const addingFinding = ref(false);
 const canManage = computed(() => app.selectedMember.value?.permission === "manager");
 const mergeSeries = ref<MorphologyTrackingSeries | null>(null);
 const reminderSeries = ref<MorphologyTrackingSeries | null>(null);
@@ -160,7 +158,6 @@ const { pullDistance, refreshing } = usePullRefresh(root, async () => {
 });
 
 watch(() => app.selectedMemberId.value, (memberId) => {
-  addingFinding.value = false;
   editingFinding.value = null;
   processingFinding.value = null;
   mergeSeries.value = null;
@@ -447,13 +444,10 @@ async function editorSaved() {
       <div><h2>形态变化</h2><p>按部位与发现类型关联历次原报告记录</p></div>
       <span class="page-intro-badge"><ScanSearch :size="22" /></span>
     </div>
-    <div class="morphology-view-toolbar">
-      <nav class="trend-view-switch" aria-label="趋势视图">
-        <RouterLink to="/trends">指标趋势</RouterLink>
-        <RouterLink to="/trends/morphology" aria-current="page">形态变化</RouterLink>
-      </nav>
-      <button v-if="canManage" class="soft-action-button" type="button" @click="addingFinding = true"><Plus :size="16" />补充记录</button>
-    </div>
+    <nav class="trend-view-switch" aria-label="趋势视图">
+      <RouterLink to="/trends">指标趋势</RouterLink>
+      <RouterLink to="/trends/morphology" aria-current="page">形态变化</RouterLink>
+    </nav>
     <PullIndicator :distance="pullDistance" :refreshing="refreshing" />
 
     <div v-if="loading" class="loading-list"><span v-for="index in 3" :key="index"></span></div>
@@ -694,10 +688,10 @@ async function editorSaved() {
     </ImageViewer>
 
     <MorphologyFindingEditor
-      :open="addingFinding || Boolean(editingFinding)"
+      :open="Boolean(editingFinding)"
       :finding="editingFinding"
       :member-id="app.selectedMemberId.value"
-      @close="editingFinding = null; addingFinding = false"
+      @close="editingFinding = null"
       @saved="editorSaved"
     />
 

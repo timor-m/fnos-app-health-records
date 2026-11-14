@@ -71,3 +71,15 @@ it('allows removing an unavailable selected indicator, but prevents selecting a 
  await inputs()[0].setValue(false);expect(page.text()).not.toContain('当前字典不可用');expect(inputs()).toHaveLength(200);expect(inputs()[199].attributes('disabled')).toBeUndefined();
  await inputs()[199].setValue(true);expect(page.findAll('.manager-indicator input:checked')).toHaveLength(200);
 });
+
+it('pins selected indicators in catalog order and preserves search and deselection behavior',async()=>{
+ render();await flushPromises();await button('新建分组').trigger('click');
+ const row=(name:string)=>page.findAll('.manager-indicator').find(r=>r.text().startsWith(name))!;
+ const order=()=>page.findAll('.manager-indicator').map(r=>r.get('span').element.firstChild!.textContent);
+ await row('合成指标5').get('input').setValue(true);await row('合成指标2').get('input').setValue(true);
+ expect(order()).toEqual(['合成指标2','合成指标5','合成指标0','合成指标1','合成指标3','合成指标4','合成指标6']);
+ await page.get('[aria-label="搜索分组指标"]').setValue('alias5');expect(order()).toEqual(['合成指标5']);
+ await page.get('[aria-label="搜索分组指标"]').setValue('');expect(order().slice(0,2)).toEqual(['合成指标2','合成指标5']);
+ await row('合成指标2').get('input').setValue(false);expect(order()).toEqual(['合成指标5','合成指标0','合成指标1','合成指标2','合成指标3','合成指标4','合成指标6']);
+ await button('返回').trigger('click');await button('编辑').trigger('click');expect(order()[0]).toBe('合成指标0');
+});

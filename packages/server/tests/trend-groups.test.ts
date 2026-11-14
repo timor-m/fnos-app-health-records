@@ -139,7 +139,9 @@ test('personal groups are account-owned, reusable across member data and survive
   const tree=buildTrendGroupTree([{indicatorKey:'lipid_tc',name:'合成指标',searchAliases:[]}],user.id);
   const item=flattenTrendGroups(tree).find(g=>g.key===group.key)!;
   assert.equal(item.indicatorCount,1);assert.equal(item.configuredIndicatorCount,7);
-  assert.ok(tree.find(g=>g.key==='my_groups')?.children.some(g=>g.key===group.key));
+  assert.equal(tree[0].key,'my_groups');
+  assert.ok(tree[0].children.some(g=>g.key===group.key));
+  assert.ok(tree.slice(1).every(root=>!flattenTrendGroups([root]).some(node=>node.key===group.key||node.key==='my_groups')));
   assert.equal(flattenTrendGroups(buildTrendGroupTree([],user.id)).find(g=>g.key===group.key)?.configuredIndicatorCount,7);
   assert.equal(resolveTrendGroupKeys(buildTrendGroupTree(available,other.id),[group.key]).size,0);
   savePersonalTrendGroup(user,{name:'修改后的组合',indicatorKeys:['lipid_tc','lipid_tc']},group.key);
