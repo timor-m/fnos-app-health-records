@@ -9,7 +9,7 @@ import core from '../../../dictionary/core/indicators.json' with { type: 'json' 
 import remote from '../../../dictionary/remote/indicators.json' with { type: 'json' };
 import { closeDatabaseForTests, getDatabase } from '../database/client';
 import { ensureBuiltinIndicatorCatalog, normalizeReportObservations } from '../services/indicator-normalization.service';
-import { buildTrendGroupTree, filterTrendGroups, syncBuiltinTrendGroups } from '../services/trend-groups.service';
+import { buildTrendGroupTree, filterTrendGroups, syncBuiltinTrendGroups, listManagedTrendGroups, savePersonalTrendGroup, deletePersonalTrendGroup } from '../services/trend-groups.service';
 import { flattenTrendGroups, resolveTrendGroupKeys } from '../../shared/trend-groups';
 import { listTrendSeries } from '../services/records.service';
 import { trendFilterKeys } from '../utils/trend-filter-query';
@@ -124,3 +124,47 @@ test('query parser accepts repeated array keys, deduplicates and rejects malform
   assert.throws(() => trendFilterKeys({groupKeys: {}}, 'groupKeys'));
   assert.throws(() => trendFilterKeys({groupKeys: Array(201).fill('x')}, 'groupKeys'));
 });
+
+test('personal groups are account-owned, reusable across member data and survive built-in refresh',()=>fixture(db=>{
+  const catalog=listManagedTrendGroups(user);
+  const template=catalog.groups.find(g=>g.key==='lipid_panel')!;
+  assert.equal(template.source,'builtin');assert.equal(template.indicatorKeys.length,4);
+  const group=savePersonalTrendGroup(user,{name:'我的组合',indicatorKeys:[...template.indicatorKeys,'thyroid_tsh','thyroid_ft3','thyroid_ft4']});
+  assert.equal(group.indicatorKeys.length,7);
+  assert.ok(listManagedTrendGroups(user).groups.some(g=>g.key===group.key));
+  const other={...user,id:'other-user',isGatewayAdmin:true};
+  assert.ok(!listManagedTrendGroups(other).groups.some(g=>g.key===group.key));
+  for(const operation of [()=>savePersonalTrendGroup(other,{name:'越权',indicatorKeys:['lipid_tc']},group.key),()=>deletePersonalTrendGroup(other,group.key),()=>deletePersonalTrendGroup(user,'lipid_panel')])assert.throws(operation);
+  syncBuiltinTrendGroups(db);
+  const tree=buildTrendGroupTree([{indicatorKey:'lipid_tc',name:'合成指标',searchAliases:[]}],user.id);
+  const item=flattenTrendGroups(tree).find(g=>g.key===group.key)!;
+  assert.equal(item.indicatorCount,1);assert.equal(item.configuredIndicatorCount,7);
+  assert.ok(tree.find(g=>g.key==='my_groups')?.children.some(g=>g.key===group.key));
+  assert.equal(flattenTrendGroups(buildTrendGroupTree([],user.id)).find(g=>g.key===group.key)?.configuredIndicatorCount,7);
+  assert.equal(resolveTrendGroupKeys(buildTrendGroupTree(available,other.id),[group.key]).size,0);
+  savePersonalTrendGroup(user,{name:'修改后的组合',indicatorKeys:['lipid_tc','lipid_tc']},group.key);
+  assert.equal(listManagedTrendGroups(user).groups.find(g=>g.key===group.key)?.indicatorKeys.length,1);
+  deletePersonalTrendGroup(user,group.key);
+  assert.ok(!listManagedTrendGroups(user).groups.some(g=>g.key===group.key));
+  assert.equal(listManagedTrendGroups(user).groups.find(g=>g.key==='lipid_panel')?.indicatorKeys.length,4);
+}));
+
+test('personal group validation is atomic and cannot change ownership, built-ins or unknown indicators',()=>fixture(db=>{
+  const group=savePersonalTrendGroup(user,{name:'保留组合',indicatorKeys:['lipid_tc']});
+  for(const input of [null,[],{}, {name:'',indicatorKeys:['lipid_tc']},{name:'a'.repeat(41),indicatorKeys:['lipid_tc']},
+    {name:'合成',indicatorKeys:[]},{name:'合成',indicatorKeys:['not-a-canonical-key']},
+    {name:'合成',indicatorKeys:['lipid_tc'],createdBy:'other-user'},
+    {name:'合成',indicatorKeys:['lipid_tc'],source:'builtin'}])assert.throws(()=>savePersonalTrendGroup(user,input,group.key));
+  assert.throws(()=>savePersonalTrendGroup(user,{name:'保留组合',indicatorKeys:['lipid_tg']}));
+  assert.throws(()=>savePersonalTrendGroup(user,{name:'覆盖',indicatorKeys:['lipid_tc']},'lipid_panel'));
+  assert.throws(()=>listManagedTrendGroups({...user,authenticated:false}));
+  assert.equal(listManagedTrendGroups(user).groups.find(g=>g.key===group.key)?.name,'保留组合');
+  assert.deepEqual(listManagedTrendGroups(user).groups.find(g=>g.key===group.key)?.indicatorKeys,['lipid_tc']);
+  const row=db.prepare('SELECT id FROM indicator_catalog WHERE canonical_key=?').get('lipid_tc')!;
+  db.prepare('UPDATE indicator_catalog SET trend_enabled=0 WHERE id=?').run(row.id);
+  const catalog=listManagedTrendGroups(user);
+  assert.equal(catalog.indicators.find(i=>i.key==='lipid_tc')?.enabled,false);
+  savePersonalTrendGroup(user,{name:'仍保留组合',indicatorKeys:['lipid_tc']},group.key);
+  assert.throws(()=>savePersonalTrendGroup(user,{name:'不能新选不可用指标',indicatorKeys:['lipid_tc']}));
+  assert.equal(flattenTrendGroups(buildTrendGroupTree([],user.id)).find(g=>g.key===group.key)?.configuredIndicatorCount,1);
+}));

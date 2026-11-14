@@ -1,10 +1,16 @@
 import type { DatabaseSync } from 'node:sqlite';
 import config from '../../../dictionary/groups/builtin.json' with { type: 'json' };
-import { getDatabase } from '../database/client';
+import { getDatabase, runInTransaction } from '../database/client';
+import { createError } from 'h3';
+import { createId } from '../utils/identifier';
+import { requireAuthenticated } from './member.service';
+import { ensureCoreDictionaryMaterialized } from './indicator-dictionary.service';
+import type { RequestUser } from '../domain/request-user';
+import type { ManagedTrendGroup, TrendGroupManagement } from '../../shared/trend-groups';
 import { resolveTrendGroupKeys, type TrendGroupNode } from '../../shared/trend-groups';
 
 type CatalogRow = { id: string; key: string; name: string; category: string; domain: string | null; itemOrder: number };
-type GroupRow = { id: string; key: string; name: string; parent: string | null };
+type GroupRow = { id: string; key: string; name: string; parent: string | null; owner: string | null };
 type AvailableIndicator = { indicatorKey: string; name: string; searchAliases: string[] };
 const synced = new WeakMap<DatabaseSync, string>();
 
@@ -61,12 +67,12 @@ export function syncBuiltinTrendGroups(db: DatabaseSync) {
 // admitted indicators only, not raw observations or another member's counts.
 export function buildTrendGroupTree(available: AvailableIndicator[], userId: string, db = getDatabase(), synchronize = true): TrendGroupNode[] {
   if (synchronize) syncBuiltinTrendGroups(db);
-  const groups = db.prepare(`SELECT id, group_key AS key, display_name AS name, parent_id AS parent
+  const groups = db.prepare(`SELECT id, group_key AS key, display_name AS name, parent_id AS parent, created_by AS owner
     FROM indicator_groups WHERE enabled = 1 AND (created_by IS NULL AND source = 'builtin' OR created_by = ?)
     ORDER BY sort_order, display_name, group_key`).all(userId) as GroupRow[];
   const memberships = db.prepare(`SELECT m.group_id AS groupId, c.canonical_key AS key
     FROM indicator_group_members m JOIN indicator_catalog c ON c.id = m.indicator_id
-    WHERE c.trend_enabled = 1 ORDER BY m.sort_order, c.item_order, c.display_name, c.canonical_key`).all() as {groupId: string; key: string}[];
+    WHERE (c.trend_enabled = 1 OR m.source = 'user') ORDER BY m.sort_order, c.item_order, c.display_name, c.canonical_key`).all() as {groupId: string; key: string}[];
   const byGroup = new Map<string, string[]>();
   for (const m of memberships) byGroup.set(m.groupId, [...(byGroup.get(m.groupId) || []), m.key]);
   const availableByKey = new Map(available.map(item => [item.indicatorKey, item]));
@@ -90,7 +96,14 @@ export function buildTrendGroupTree(available: AvailableIndicator[], userId: str
     };
   };
   const configuredByKey = new Map<string, string[]>();
-  const tree = groups.filter(g => !g.parent).map(g => build(g));
+  const tree = groups.filter(g => !g.parent && !g.owner).map(g => build(g));
+  const personal = groups.filter(g => !g.parent && g.owner === userId).map(g => build(g));
+  if (personal.length) {
+    const keys = [...new Set(personal.flatMap(g => g.indicatorKeys))];
+    tree.push({key:'my_groups',name:'我的分组',children:personal,indicatorKeys:keys,
+      indicatorCount:keys.length,configuredIndicatorCount:new Set(personal.flatMap(g=>configuredByKey.get(g.key)||[])).size,
+      searchText:['我的分组',...personal.map(g=>g.searchText)].join(' ')});
+  }
   const grouped = new Set(tree.flatMap(g => g.indicatorKeys));
   const ungrouped = [...availableByKey.keys()].filter(key => !grouped.has(key));
   if (ungrouped.length) tree.push({ key: 'ungrouped', name: '未分组指标', indicatorKeys: ungrouped,
@@ -106,4 +119,74 @@ export function filterTrendGroups<T extends AvailableIndicator>(series: T[], tre
   const rank = grouped ? new Map([...grouped].map((key, index) => [key, index])) : null;
   return series.filter(item => (!grouped || grouped.has(item.indicatorKey)) && (!individual || individual.has(item.indicatorKey)))
     .sort((a, b) => rank ? (rank.get(a.indicatorKey) ?? 9999) - (rank.get(b.indicatorKey) ?? 9999) : 0);
+}
+
+// Management contains catalog definitions only, never member data or counts.
+export function listManagedTrendGroups(user: RequestUser): TrendGroupManagement {
+  requireAuthenticated(user);
+  ensureCoreDictionaryMaterialized();
+  const db=getDatabase();
+  syncBuiltinTrendGroups(db);
+  const groups=db.prepare(`SELECT id,group_key AS key,display_name AS name,source FROM indicator_groups
+    WHERE enabled=1 AND (source='builtin' AND created_by IS NULL OR source='user' AND created_by=?)
+    ORDER BY source DESC,sort_order,display_name,group_key`).all(user.id) as Array<{id:string;key:string;name:string;source:'builtin'|'user'}>;
+  const members=db.prepare(`SELECT m.group_id AS groupId,c.canonical_key AS key FROM indicator_group_members m
+    JOIN indicator_catalog c ON c.id=m.indicator_id ORDER BY m.sort_order,c.canonical_key`).all() as Array<{groupId:string;key:string}>;
+  const indicators=db.prepare(`SELECT c.canonical_key AS key,c.display_name AS name,
+    COALESCE(t.name,'其他检验') AS category,c.trend_enabled AS enabled FROM indicator_catalog c
+    LEFT JOIN indicator_taxonomy_categories t ON t.category_key=c.category_key
+    WHERE c.trend_enabled=1 OR c.id IN (SELECT m.indicator_id FROM indicator_group_members m
+      JOIN indicator_groups g ON g.id=m.group_id WHERE g.source='user' AND g.created_by=?)
+    ORDER BY t.item_order,t.category_key,c.item_order,c.display_name,c.canonical_key`).all(user.id) as Array<{key:string;name:string;category:string;enabled:number}>;
+  const aliases=db.prepare("SELECT c.canonical_key AS key,a.alias_name AS alias FROM indicator_aliases a JOIN indicator_catalog c ON c.id=a.indicator_id WHERE a.enabled=1 AND a.scope='global' AND a.source='builtin'").all() as Array<{key:string;alias:string}>;
+  return {groups:groups.map(g=>({key:g.key,name:g.name,source:g.source,indicatorKeys:members.filter(m=>m.groupId===g.id).map(m=>m.key)})),
+    indicators:indicators.map(i=>({...i,enabled:Boolean(i.enabled),aliases:aliases.filter(a=>a.key===i.key).map(a=>a.alias)}))};
+}
+
+function ownedGroup(user: RequestUser, key: string) {
+  requireAuthenticated(user);
+  const row=getDatabase().prepare("SELECT id FROM indicator_groups WHERE group_key=? AND source='user' AND created_by=? AND enabled=1").get(key,user.id) as {id:string}|undefined;
+  if(!row)throw createError({statusCode:404,statusMessage:'未找到可管理的个人分组'});
+  return row.id;
+}
+
+export function savePersonalTrendGroup(user: RequestUser, input: unknown, key?: string): ManagedTrendGroup {
+  requireAuthenticated(user);
+  ensureCoreDictionaryMaterialized();
+  const db=getDatabase();
+  return runInTransaction(db,()=>{
+    const id=key ? ownedGroup(user,key) : createId('group');
+    if(!input || typeof input!=='object' || Array.isArray(input) || Object.keys(input).some(k=>!['name','indicatorKeys'].includes(k))) {
+      throw createError({statusCode:400,statusMessage:'分组内容无效'});
+    }
+    const body=input as {name?:unknown;indicatorKeys?:unknown};
+    const name=typeof body.name==='string'?body.name.trim():'';
+    if(!name || name.length>40 || /[\u0000-\u001f\u007f]/.test(name))throw createError({statusCode:400,statusMessage:'分组名称需为 1 至 40 个字'});
+    if(!Array.isArray(body.indicatorKeys) || !body.indicatorKeys.length || body.indicatorKeys.length>200
+      || body.indicatorKeys.some(k=>typeof k!=='string' || !k || k.length>180))throw createError({statusCode:400,statusMessage:'请选择 1 至 200 个有效指标'});
+    const keys=[...new Set(body.indicatorKeys as string[])];
+    const catalog=db.prepare(`SELECT c.id,c.canonical_key AS key FROM indicator_catalog c WHERE c.trend_enabled=1
+      OR c.id IN (SELECT indicator_id FROM indicator_group_members WHERE group_id=?)`).all(key?id:'') as Array<{id:string;key:string}>;
+    if(keys.some(k=>!catalog.some(i=>i.key===k)))throw createError({statusCode:400,statusMessage:'部分指标已不可用，请重新选择'});
+    if(db.prepare("SELECT 1 FROM indicator_groups WHERE source='user' AND created_by=? AND enabled=1 AND display_name=? AND id<>?").get(user.id,name,id)) {
+      throw createError({statusCode:409,statusMessage:'已有同名个人分组，请使用其他名称'});
+    }
+    if(key)db.prepare('UPDATE indicator_groups SET display_name=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(name,id);
+    else db.prepare("INSERT INTO indicator_groups(id,group_key,display_name,source,created_by) VALUES(?,?,?,'user',?)").run(id,id,name,user.id);
+    db.prepare('DELETE FROM indicator_group_members WHERE group_id=?').run(id);
+    const add=db.prepare("INSERT INTO indicator_group_members(group_id,indicator_id,sort_order,source) VALUES(?,?,?,'user')");
+    keys.forEach((k,index)=>add.run(id,catalog.find(i=>i.key===k)!.id,index));
+    return {key:key||id,name,source:'user',indicatorKeys:keys};
+  });
+}
+
+export function deletePersonalTrendGroup(user: RequestUser, key: string) {
+  requireAuthenticated(user);
+  const db=getDatabase();
+  return runInTransaction(db,()=>{
+    const id=ownedGroup(user,key);
+    db.prepare('DELETE FROM indicator_group_members WHERE group_id=?').run(id);
+    db.prepare('DELETE FROM indicator_groups WHERE id=?').run(id);
+    return {deleted:true};
+  });
 }

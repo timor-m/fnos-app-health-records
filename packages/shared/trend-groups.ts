@@ -8,6 +8,12 @@ export type TrendGroupNode = {
   children: TrendGroupNode[];
 };
 
+export type ManagedTrendGroup = {key: string; name: string; indicatorKeys: string[]; source: 'builtin'|'user'};
+export type TrendGroupManagement = {
+  groups: ManagedTrendGroup[];
+  indicators: Array<{key: string; name: string; category: string; aliases: string[]; enabled: boolean}>;
+};
+
 export function flattenTrendGroups(nodes: TrendGroupNode[]): TrendGroupNode[] {
   return nodes.flatMap(node => [node, ...flattenTrendGroups(node.children)]);
 }

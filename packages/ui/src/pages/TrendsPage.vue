@@ -17,6 +17,7 @@ import BackToTop from "../components/BackToTop.vue";
 import EmptyState from "../components/EmptyState.vue";
 import FormSelect from "../components/FormSelect.vue";
 import TrendGroupFilter from '../components/TrendGroupFilter.vue';
+import TrendGroupManager from '../components/TrendGroupManager.vue';
 import { flattenTrendGroups } from '../../../shared/trend-groups';
 import IndicatorHint from "../components/IndicatorHint.vue";
 import ImageViewer, { type ImageViewerPage } from "../components/ImageViewer.vue";
@@ -44,6 +45,12 @@ const app = useAppContext();
 const route = useRoute();
 const query = ref("");
 const groupFilter = ref('');
+const groupManagerOpen = ref(false);
+async function personalGroupChanged(key: string, removed: boolean) {
+  const next=removed ? (groupFilter.value===key?'':groupFilter.value) : key;
+  if(next!==groupFilter.value)groupFilter.value=next;
+  else if(app.selectedMemberId.value)await load(app.selectedMemberId.value,true);
+}
 const attentionFilter = ref<"all" | "attention" | "abnormal" | "near_boundary" | "unflagged">("all");
 const snapshots = useTrendSnapshots(() => app.selectedMemberId.value, () => ({
   query: query.value, group: groupFilter.value, attention: attentionFilter.value
@@ -881,14 +888,14 @@ onDeactivated(() => {
       {{ loadError }}<button class="error-retry" type="button" @click="retryLoad">重试</button>
     </p>
     <p v-else-if="!snapshots.version.value" class="mini-loading trend-building" role="status">{{ snapshots.status.value === 'retrying' ? '趋势准备暂未完成，正在重试…' : '正在准备趋势数据…' }}<button class="soft-action-button" type="button" @click="retryLoad">刷新状态</button></p>
-    <EmptyState v-else-if="!snapshots.total.value && !hasActiveFilters" title="暂无可比较指标" description="AI 整理出结构化数值后，这里会展示单次基线值和多次趋势。" />
+    <EmptyState v-else-if="!snapshots.total.value && !hasActiveFilters" title="暂无可比较指标" description="AI 整理出结构化数值后，这里会展示单次基线值和多次趋势。"><button class="soft-action-button" @click="groupManagerOpen=true">管理我的分组</button></EmptyState>
     <template v-else>
       <div class="trend-filter-row" :class="{'trend-filter-pending':filterMaskVisible}">
         <label class="search-field trend-search-field page-search-field">
           <Search :size="18" />
           <input v-model="query" placeholder="搜索指标名" />
         </label>
-        <TrendGroupFilter v-model="groupFilter" :groups="groupTree" class="trend-group-select" />
+        <TrendGroupFilter v-model="groupFilter" :groups="groupTree" class="trend-group-select" @manage="groupManagerOpen=true" />
         <FormSelect v-model="attentionFilter" class="trend-status-select records-filter-select" :options="attentionOptions" aria-label="指标状态" />
       </div>
       <p v-if="loadError" class="inline-panel-error">{{ loadError }}<button class="error-retry" type="button" @click="retryLoad">重试</button></p>
@@ -1149,6 +1156,7 @@ onDeactivated(() => {
       </div>
     </Teleport>
     <BackToTop />
+    <TrendGroupManager v-if="groupManagerOpen" @close="groupManagerOpen=false" @changed="personalGroupChanged" />
   </section>
 </template>
 

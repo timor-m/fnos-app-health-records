@@ -5,7 +5,7 @@ import FormSelect from './FormSelect.vue';
 import { flattenTrendGroups, type TrendGroupNode } from '../../../shared/trend-groups';
 
 const props = defineProps<{ groups: TrendGroupNode[]; modelValue: string }>();
-const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
+const emit = defineEmits<{ 'update:modelValue': [value: string]; manage: [] }>();
 const search = ref('');
 const showAll = ref(false);
 const expanded = ref(new Set<string>());
@@ -42,6 +42,7 @@ function expand(key: string) {
           </div>
         </div>
         <label class="trend-group-show-all"><input v-model="showAll" type="checkbox" />显示全部项目</label>
+        <button type="button" class="form-select-option" @click="close();emit('manage')"><span>管理我的分组</span></button>
       </div>
     </template>
   </FormSelect>

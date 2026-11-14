@@ -14,7 +14,7 @@ import { H3 } from 'h3';
 import overviewHandler from '../routes/api/trends/snapshot.get';
 import chartHandler from '../routes/api/trends/snapshot/charts.post';
 import { queryTrendSnapshotSeries, readTrendSnapshotParts, readLegacyTrendSnapshot } from '../services/trend-snapshot-query.service';
-import { syncBuiltinTrendGroups } from '../services/trend-groups.service';
+import { syncBuiltinTrendGroups, savePersonalTrendGroup, deletePersonalTrendGroup } from '../services/trend-groups.service';
 import { trendSeriesKey } from '../services/trend-snapshot-types';
 
 async function fixture(action: (db: ReturnType<typeof getDatabase>) => Promise<void> | void) {
@@ -104,7 +104,7 @@ test('incremental publication removes obsolete keys and keeps unaffected series 
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM trend_snapshot_series').get()!.n, initialKeys.length);
 }));
 
-test('updates during computation cannot publish a stale revision and failed jobs remain retryable', () => fixture(async db => {
+test('updates during computation cannot publish a stale revision and failed jobs remain retryable', t => fixture(async db => {
   const job = claimTrendSnapshotJob(db)!;
   const result = await computeTrendSnapshotInWorker(job);
   db.exec("UPDATE observations SET numeric_value=6,result_text='6' WHERE id='wbc'");
@@ -112,6 +112,9 @@ test('updates during computation cannot publish a stale revision and failed jobs
   assert.equal(Number(state(db).active_revision), 0);
   const next = claimTrendSnapshotJob(db)!;
   assert.ok(next.revision > job.revision);
+  // Keep the backoff assertion independent of scheduling delays in full CI.
+  const now=Date.now();
+  t.mock.method(Date,'now',()=>now);
   failTrendSnapshot(next, db);
   assert.equal(state(db).lease_token, null);
   assert.equal(Number(state(db).attempts), 1);
@@ -373,4 +376,22 @@ test('dictionary changes and algorithm revisions rebuild snapshots without a rea
   assert.ok(Number(state(reopened).active_revision)>catalogVersion);
   assert.equal(Number(state(reopened).active_revision),Number(state(reopened).desired_revision));
   assert.equal(state(reopened).algorithm_version,'trend-analysis-1');
+}));
+
+test('personal group edits filter published data immediately without rebuilding snapshots or touching sources',()=>fixture(async db=>{
+  const job=claimTrendSnapshotJob(db)!;publishTrendSnapshot(job,await computeTrendSnapshotInWorker(job),db);
+  const before={...state(db)};const sources=JSON.stringify(db.prepare('SELECT * FROM observations').all());
+  const group=savePersonalTrendGroup(owner,{name:'合成分组',indicatorKeys:['cbc_wbc','cbc_hgb']});
+  const page=queryTrendSnapshotSeries(owner,'member',{group:group.key,limit:1});
+  assert.equal(page.total,2);assert.ok(page.nextCursor);
+  savePersonalTrendGroup(owner,{name:'更新分组',indicatorKeys:['cbc_wbc']},group.key);
+  assert.equal(queryTrendSnapshotSeries(owner,'member',{group:group.key}).total,1);
+  assert.throws(()=>queryTrendSnapshotSeries(owner,'member',{group:group.key,cursor:page.nextCursor!}));
+  db.exec("INSERT INTO users(id,display_name) VALUES('shared','Synthetic'); INSERT INTO member_permissions(member_id,user_id,permission,granted_by) VALUES('member','shared','viewer','owner')");
+  assert.equal(queryTrendSnapshotSeries({...owner,id:'shared'},'member',{group:group.key}).total,0);
+  assert.throws(()=>queryTrendSnapshotSeries({...owner,id:'stranger'},'member',{group:group.key}));
+  deletePersonalTrendGroup(owner,group.key);
+  assert.equal(queryTrendSnapshotSeries(owner,'member',{group:group.key}).total,0);
+  assert.equal(queryTrendSnapshotSeries(owner,'member').total,2);
+  assert.deepEqual({...state(db)},before);assert.equal(JSON.stringify(db.prepare('SELECT * FROM observations').all()),sources);
 }));
