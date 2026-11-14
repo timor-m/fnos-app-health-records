@@ -7,6 +7,8 @@ import { createId } from "../utils/identifier";
 import { isTrackableMorphologyFinding } from "../utils/morphology-rules";
 import { assertMemberManage } from "./member.service";
 
+import { examinationSourcePages, publishMorphologyExaminationAssignments } from "./report-examination-inference.service";
+
 const backfillSettingKey = "morphology.legacy_observation_backfill_v1";
 const trackingRuleSettingKey = "morphology.tracking_rule_version";
 const trackingRuleVersion = "morphology-tracking-v2";
@@ -1100,8 +1102,7 @@ function appendAudit(user: RequestUser, action: string, findingId: string | null
   `).run(createId("audit"), user.id, action, findingId, JSON.stringify(detail));
 }
 
-export function updateMorphologyFinding(user: RequestUser, findingId: string, input: EditableFindingInput) {
-  const finding = findingForManage(user, findingId);
+function findingEdits(input: EditableFindingInput, reportId: string) {
   const updates: string[] = [];
   const values: Array<string | number | null> = [];
   const changed = new Set<string>();
@@ -1129,7 +1130,70 @@ export function updateMorphologyFinding(user: RequestUser, findingId: string, in
           : key
     );
   }
+  if ("rawText" in input || "sourcePageNumber" in input) {
+    const rawText = textValue(input.rawText, 3000);
+    const pageNumber = Number(input.sourcePageNumber);
+    if (!rawText || !Number.isInteger(pageNumber) || pageNumber < 1 || !getDatabase().prepare(
+      "SELECT 1 FROM report_pages WHERE report_id = ? AND page_number = ?"
+    ).get(reportId, pageNumber)) {
+      throw createError({ statusCode: 400, statusMessage: "请选择有效来源页并填写原文" });
+    }
+    updates.push("raw_text = ?", "evidence_json = ?");
+    values.push(rawText, JSON.stringify([{ pageNumber, quote: rawText }]));
+    changed.add("rawText");
+    changed.add("evidence");
+  }
+  return { updates, values, changed };
+}
+
+function refreshFindingExamination(id: string, reportId: string, pages: ReturnType<typeof examinationSourcePages>) {
+  const db = getDatabase();
+  const row = db.prepare(`SELECT section_name AS sectionName, finding_name AS findingName,
+    raw_text AS rawText, evidence_json AS evidenceJson FROM morphology_findings WHERE id = ?`)
+    .get(id) as { sectionName: string | null; findingName: string; rawText: string; evidenceJson: string };
+  // Source changes invalidate automatic time assignments, but keep explicit user confirmations.
+  db.prepare(`DELETE FROM morphology_finding_examinations WHERE finding_id = ? AND assignment_source <> 'manual'
+    AND examination_id IN (SELECT id FROM report_examinations WHERE confirmation_status <> 'confirmed')`).run(id);
+  publishMorphologyExaminationAssignments(reportId, [{ id, finding: {
+    sectionName: row.sectionName, findingName: row.findingName, rawText: row.rawText, evidence: JSON.parse(row.evidenceJson)
+  } }], pages);
+}
+
+export function createMorphologyFinding(user: RequestUser, reportId: string, input: EditableFindingInput) {
+  const db = getDatabase();
+  const report = db.prepare("SELECT member_id AS memberId, status FROM reports WHERE id = ? AND status <> 'trashed'")
+    .get(reportId) as { memberId: string; status: string } | undefined;
+  if (!report) throw createError({ statusCode: 404, statusMessage: "报告不存在" });
+  assertMemberManage(user, report.memberId);
+  assertNoPageAppend(reportId);
+  if (!["ready", "needs_review"].includes(report.status)) throw createError({ statusCode: 409, statusMessage: "请等待报告整理完成后再补充" });
+  if (!textValue(input.organ) || !textValue(input.findingName) || !textValue(input.findingType)
+    || !("rawText" in input) || !("sourcePageNumber" in input)) {
+    throw createError({ statusCode: 400, statusMessage: "请填写部位、类型、名称及原文来源" });
+  }
+  const { updates, values, changed } = findingEdits(input, reportId);
+  const sourcePages = examinationSourcePages(reportId);
+  const id = createId("finding");
+  // Reuse the existing field-level protection; no new persistence model is needed.
+  const manualFields = [...changed, "created"];
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`INSERT INTO morphology_findings (id, report_id, ${updates.map(update => update.split(" =")[0]).join(", ")}, source, manual_fields_json)
+      VALUES (?, ?, ${values.map(() => "?").join(", ")}, 'manual', ?)`)
+      .run(id, reportId, ...values, JSON.stringify(manualFields));
+    refreshFindingExamination(id, reportId, sourcePages);
+    appendAudit(user, "morphology.create", id, { memberId: report.memberId });
+    db.exec("COMMIT");
+  } catch (error) { rollbackAfterError(db); throw error; }
+  rebuildMorphologyTrackingForMember(report.memberId);
+  return listMorphologyTracking(user, report.memberId);
+}
+
+export function updateMorphologyFinding(user: RequestUser, findingId: string, input: EditableFindingInput) {
+  const finding = findingForManage(user, findingId);
+  const { updates, values, changed } = findingEdits(input, finding.reportId);
   if (!updates.length) throw createError({ statusCode: 400, statusMessage: "没有需要保存的形态字段" });
+  const sourcePages = changed.has("evidence") ? examinationSourcePages(finding.reportId) : [];
   const manualFields = manualFieldSet(finding);
   for (const key of changed) manualFields.add(key);
   const db = getDatabase();
@@ -1138,6 +1202,7 @@ export function updateMorphologyFinding(user: RequestUser, findingId: string, in
     db.prepare(`UPDATE morphology_findings SET ${updates.join(", ")}, source = 'manual',
       manual_fields_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
       .run(...values, JSON.stringify([...manualFields]), findingId);
+    if (changed.has("evidence")) refreshFindingExamination(findingId, finding.reportId, sourcePages);
     appendAudit(user, "morphology.update", findingId, { memberId: finding.memberId, fields: [...changed] });
     db.exec("COMMIT");
   } catch (error) {

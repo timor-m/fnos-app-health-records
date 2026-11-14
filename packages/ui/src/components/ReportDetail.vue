@@ -111,6 +111,7 @@ const reprocessingReport = ref(false);
 const cancellingJobs = ref(false);
 const trashingReport = ref(false);
 const editOpen = ref(false);
+const morphologyAddOpen = ref(false);
 const morphologyEditItem = ref<ReportDetail["morphologyFindings"][number] | null>(null);
 const clinicalFactEditor = ref<{
   type: ClinicalFactType;
@@ -753,7 +754,7 @@ async function downloadPdfOriginal() {
 
 /* 弹层打开期间锁定背景滚动（页面缩放已全局禁用） */
 useScrollLock(computed(() =>
-  pdfViewerOpen.value || editOpen.value || Boolean(morphologyEditItem.value)
+  pdfViewerOpen.value || editOpen.value || (morphologyAddOpen.value || Boolean(morphologyEditItem.value))
   || Boolean(clinicalFactEditor.value) || ocrSheetOpen.value || eventSheetOpen.value
   || Boolean(structuredSectionEditor.value) || allObservationsOpen.value || observationEditorOpen.value
 ));
@@ -1155,6 +1156,18 @@ function morphologyEvidencePagesLine(item: ReportDetail["morphologyFindings"][nu
 function openMorphologyEvidencePage(pageNumber: number) {
   const index = detail.value?.pages.findIndex((page) => page.pageNumber === pageNumber) ?? -1;
   if (index >= 0) openOriginalViewer(index);
+}
+
+function removeMorphology(id: string) {
+  confirmDialog.ask({
+    title: "删除形态记录", message: "该记录将从报告和形态变化中移除，后续 AI 重跑会保留此处理结果，原件不会删除。",
+    confirmText: "确认删除", danger: true,
+    run: async () => {
+      await request(`morphology-findings/${encodeURIComponent(id)}/ignore`, { method: "POST" });
+      toast.show("形态记录已删除");
+      await morphologySaved();
+    }
+  });
 }
 
 async function morphologySaved() {
@@ -1960,6 +1973,7 @@ function closeJobEvents() {
 }
 
 watch(() => props.reportId, (reportId) => {
+  morphologyAddOpen.value = false; morphologyEditItem.value = null;
   stopJobsPolling();
   closeJobEvents();
   jobsSeq += 1;
@@ -2327,10 +2341,10 @@ onActivated(() => {
             </article>
           </div>
         </section>
-        <section v-if="detail?.morphologyFindings.length" class="morphology-panel">
+        <section v-if="detail && (detail.morphologyFindings.length || canManageReport)" class="morphology-panel">
           <header>
             <strong>形态学发现</strong>
-            <span>共 {{ detail.morphologyFindings.length }} 项</span>
+            <div class="morphology-heading-actions"><span>共 {{ detail.morphologyFindings.length }} 项</span><button v-if="canManageReport" class="soft-action-button" type="button" @click="morphologyAddOpen = true"><Plus :size="15" />补充</button></div>
           </header>
           <div class="morphology-list">
             <article v-for="item in detail.morphologyFindings" :key="item.id">
@@ -2344,6 +2358,7 @@ onActivated(() => {
                     {{ item.presence === "absent" ? "未见" : "待确认" }}
                   </em>
                   <button v-if="canManageReport" class="plain-icon-button" type="button" title="校对形态字段" @click="morphologyEditItem = item"><Pencil :size="16" /></button>
+                  <button v-if="canManageReport" class="plain-icon-button" type="button" title="删除形态记录" @click="removeMorphology(item.id)"><Trash2 :size="16" /></button>
                 </div>
               </div>
               <div v-if="morphologySizeLine(item) || morphologyClassificationLine(item)" class="morphology-facts">
@@ -2417,9 +2432,10 @@ onActivated(() => {
     </article>
 
     <MorphologyFindingEditor
-      :open="Boolean(morphologyEditItem)"
+      :open="morphologyAddOpen || Boolean(morphologyEditItem)"
       :finding="morphologyEditItem"
-      @close="morphologyEditItem = null"
+      :report-id="reportId"
+      @close="morphologyEditItem = null; morphologyAddOpen = false"
       @saved="morphologySaved"
     />
     <ClinicalFactEditor

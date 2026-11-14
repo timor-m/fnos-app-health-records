@@ -1,5 +1,6 @@
 import {mount,flushPromises,type VueWrapper} from '@vue/test-utils';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
+import FormSelect from '../src/components/FormSelect.vue';
 import Manager from '../src/components/TrendGroupManager.vue';
 import {useConfirm} from '../src/composables/useConfirm';
 const request=vi.hoisted(()=>vi.fn());
@@ -15,7 +16,7 @@ afterEach(()=>{page?.unmount();useConfirm().cancel();});
 it('copies an immutable built-in into a new personal group and keeps selections while searching aliases',async()=>{
  render();await flushPromises();
  expect(page.text()).toContain('已有个人组合');
- await page.get('[aria-label="复制内置分组"]').setValue('builtin');
+ page.findComponent(FormSelect).vm.$emit('update:modelValue','builtin');page.findComponent(FormSelect).vm.$emit('change','builtin');await flushPromises();
  expect(page.text()).toContain('已选 4 项');
  await page.get('[aria-label="分组名称"]').setValue('我的七项');
  await page.get('[aria-label="搜索分组指标"]').setValue('alias4');
@@ -59,4 +60,14 @@ it('retries management loading and does not offer editing before definitions arr
  request.mockRejectedValueOnce(new Error('合成读取失败'));render();await flushPromises();
  expect(page.get('[role="alert"]').text()).toContain('合成读取失败');expect(button('新建分组').attributes('disabled')).toBeDefined();
  await button('重试').trigger('click');await flushPromises();expect(page.find('[role="alert"]').exists()).toBe(false);
+});
+
+it('allows removing an unavailable selected indicator, but prevents selecting a 201st indicator',async()=>{
+ const many=Array.from({length:201},(_,i)=>({key:`k${i}`,name:`合成${i}`,category:'合成分类',aliases:[],enabled:i!==0}));
+ request.mockResolvedValueOnce({groups:[{key:'mine',name:'合成组合',source:'user',indicatorKeys:many.slice(0,200).map(i=>i.key)}],indicators:many});
+ render();await flushPromises();await button('编辑').trigger('click');
+ const inputs=()=>page.findAll('.manager-indicator input');
+ expect(inputs()[0].attributes('disabled')).toBeUndefined();expect(inputs()[200].attributes('disabled')).toBeDefined();
+ await inputs()[0].setValue(false);expect(page.text()).not.toContain('当前字典不可用');expect(inputs()).toHaveLength(200);expect(inputs()[199].attributes('disabled')).toBeUndefined();
+ await inputs()[199].setValue(true);expect(page.findAll('.manager-indicator input:checked')).toHaveLength(200);
 });

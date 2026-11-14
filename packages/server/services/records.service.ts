@@ -1453,7 +1453,7 @@ export function getReportDetail(
     FROM morphology_findings f
     LEFT JOIN morphology_finding_examinations l ON l.finding_id=f.id
     LEFT JOIN report_examinations e ON e.id=l.examination_id
-    WHERE f.report_id = ?
+    WHERE f.report_id = ? AND NOT EXISTS (SELECT 1 FROM json_each(f.manual_fields_json) WHERE value = 'ignored')
     ORDER BY f.section_name, f.organ, f.finding_type, f.id
     LIMIT 200
   `,

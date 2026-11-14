@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
-import { LoaderCircle, Pencil, X } from "@lucide/vue";
+import { LoaderCircle, Pencil, Plus, Search, X } from "@lucide/vue";
 import FormSelect from "./FormSelect.vue";
 import { useScrollLock } from "../composables/useScrollLock";
 import { useToast } from "../composables/useToast";
+import type { CursorPage, ReportDetail, ReportSummary } from "../types/api";
 import { request } from "../utils/api";
 
 type EditableFinding = {
   id?: string;
   findingId?: string;
+  reportId?: string;
   organ: string | null;
   region: string | null;
   laterality: "left" | "right" | "bilateral" | "midline" | "unspecified";
@@ -23,17 +25,67 @@ type EditableFinding = {
   manualFields?: string[];
 };
 
-const props = defineProps<{ open: boolean; finding: EditableFinding | null }>();
+const props = defineProps<{ open: boolean; finding: EditableFinding | null; memberId?: string; reportId?: string }>();
+const creating = computed(() => !props.finding);
 const emit = defineEmits<{ close: []; saved: [] }>();
 const toast = useToast();
 const saving = ref(false);
 const error = ref("");
+const sourceReportId = ref("");
+const sourceReport = ref<ReportDetail | null>(null);
+const reports = ref<ReportSummary[]>([]);
+const reportQuery = ref("");
+const nextCursor = ref<string | null>(null);
+const sourceLoading = ref(false);
+const reportsLoading = ref(false);
+const reportsError = ref("");
+const sourceError = ref("");
+let sourceRequest = 0;
+let reportsRequest = 0;
+const reportOptions = computed(() => {
+  const items = [...reports.value];
+  if (sourceReport.value && !items.some(item => item.id === sourceReport.value?.id)) items.unshift(sourceReport.value);
+  return items.map(item => ({ value: item.id, label: `${item.title} · ${item.reportIssuedAt || "日期待确认"}` }));
+});
+async function loadReports(more = false) {
+  const seq = ++reportsRequest;
+  reportsLoading.value = true;
+  reportsError.value = "";
+  try {
+    const query = new URLSearchParams({ memberId: props.memberId || "", q: reportQuery.value, limit: "30" });
+    if (more && nextCursor.value) query.set("cursor", nextCursor.value);
+    const page = await request<CursorPage<ReportSummary>>(`reports?${query}`);
+    if (seq !== reportsRequest || !props.open) return;
+    reports.value = more ? [...reports.value, ...page.items] : page.items;
+    nextCursor.value = reportQuery.value === query.get("q") ? page.nextCursor : null;
+  } catch (cause) {
+    if (seq === reportsRequest) reportsError.value = cause instanceof Error ? cause.message : "报告列表加载失败";
+  } finally { if (seq === reportsRequest) reportsLoading.value = false; }
+}
+async function loadSource() {
+  const seq = ++sourceRequest;
+  sourceReport.value = null;
+  sourceError.value = "";
+  if (!sourceReportId.value) { sourceLoading.value = false; return; }
+  sourceLoading.value = true;
+  try {
+    const report = await request<ReportDetail>(`reports/${encodeURIComponent(sourceReportId.value)}?includeDuplicateCandidates=false`);
+    if (seq !== sourceRequest || !props.open) return;
+    if (props.memberId && report.memberId !== props.memberId) throw new Error("来源报告不属于当前成员");
+    sourceReport.value = report;
+    const current = report.morphologyFindings.find(item => item.id === (props.finding?.id || props.finding?.findingId));
+    form.sourcePageNumber = String(current?.evidence[0]?.pageNumber || (creating.value ? report.pages[0]?.pageNumber : "") || "");
+    initialForm.value.sourcePageNumber = form.sourcePageNumber;
+  } catch (cause) {
+    if (seq === sourceRequest) sourceError.value = cause instanceof Error ? cause.message : "来源报告加载失败";
+  } finally { if (seq === sourceRequest) sourceLoading.value = false; }
+}
 const initialForm = ref<Record<string, string | number>>( {} );
 const form = reactive({
   organ: "", region: "", laterality: "unspecified", findingType: "", findingName: "",
   presence: "present", findingCount: "", sizeLength: "", sizeWidth: "", sizeHeight: "",
   sizeUnit: "", morphology: "", classificationSystem: "", classificationValue: "",
-  classificationText: ""
+  classificationText: "", rawText: "", sourcePageNumber: ""
 });
 
 const lateralityOptions = [
@@ -47,43 +99,58 @@ const presenceOptions = [
   { value: "uncertain", label: "待确认" }
 ];
 
-watch(() => [props.open, props.finding] as const, ([open, finding]) => {
-  if (!open || !finding) return;
+watch(() => [props.open, props.finding, props.memberId, props.reportId] as const, ([open, finding]) => {
+  ++sourceRequest; ++reportsRequest;
+  if (!open) return;
   Object.assign(form, {
-    organ: finding.organ || "", region: finding.region || "", laterality: finding.laterality,
-    findingType: finding.findingType || "", findingName: finding.findingName || "",
-    presence: finding.presence, findingCount: finding.findingCount ?? "",
-    sizeLength: finding.size.length ?? "", sizeWidth: finding.size.width ?? "",
-    sizeHeight: finding.size.height ?? "", sizeUnit: finding.size.unit || "",
-    morphology: finding.morphology || "", classificationSystem: finding.classification?.system || "",
-    classificationValue: finding.classification?.value || "", classificationText: finding.classification?.text || ""
+    organ: finding?.organ || "", region: finding?.region || "", laterality: finding?.laterality || "unspecified",
+    findingType: finding?.findingType || "", findingName: finding?.findingName || "",
+    presence: finding?.presence || "present", findingCount: finding?.findingCount ?? "",
+    sizeLength: finding?.size.length ?? "", sizeWidth: finding?.size.width ?? "",
+    sizeHeight: finding?.size.height ?? "", sizeUnit: finding?.size.unit || "",
+    morphology: finding?.morphology || "", classificationSystem: finding?.classification?.system || "",
+    classificationValue: finding?.classification?.value || "", classificationText: finding?.classification?.text || "",
+    rawText: finding?.rawText || "", sourcePageNumber: ""
   });
   initialForm.value = { ...form };
-  error.value = "";
+  error.value = ""; sourceError.value = ""; reportsError.value = ""; reports.value = []; reportQuery.value = ""; nextCursor.value = null;
+  sourceReportId.value = props.reportId || finding?.reportId || "";
+  void loadSource();
+  if (!finding && !props.reportId) void loadReports();
 }, { immediate: true });
+
+function changeSource() { void loadSource(); }
+function close() { if (!saving.value) emit("close"); }
 
 useScrollLock(computed(() => props.open));
 
 async function save() {
   const id = props.finding?.id || props.finding?.findingId;
-  if (!id) return;
+  if (saving.value || sourceLoading.value || (!creating.value && !id)) return;
+  if (creating.value && (!sourceReport.value || sourceLoading.value)) return;
+  const scope = sourceRequest;
   saving.value = true;
   error.value = "";
   try {
-    const body = Object.fromEntries(Object.entries(form).filter(([key, value]) => initialForm.value[key] !== value));
+    const body = Object.fromEntries(Object.entries(form).filter(([key, value]) => creating.value || initialForm.value[key] !== value));
+    if ("rawText" in body || "sourcePageNumber" in body) {
+      body.rawText = form.rawText;
+      body.sourcePageNumber = form.sourcePageNumber;
+    }
     if (!Object.keys(body).length) {
       emit("close");
       return;
     }
-    await request(`morphology-findings/${encodeURIComponent(id)}`, {
-      method: "PUT",
+    await request(creating.value ? `reports/${encodeURIComponent(sourceReportId.value)}/morphology-findings` : `morphology-findings/${encodeURIComponent(id!)}`, {
+      method: creating.value ? "POST" : "PUT",
       body: JSON.stringify(body)
     });
-    toast.show("形态校对已保存");
+    if (scope !== sourceRequest || !props.open) return;
+    toast.show(creating.value ? "形态记录已补充" : "形态校对已保存");
     emit("saved");
     emit("close");
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "保存失败";
+    if (scope === sourceRequest && props.open) error.value = cause instanceof Error ? cause.message : "保存失败";
   } finally {
     saving.value = false;
   }
@@ -92,13 +159,23 @@ async function save() {
 
 <template>
   <Teleport to="body">
-    <div v-if="open && finding" class="modal-backdrop morphology-editor-backdrop" @click.self="emit('close')">
-      <section class="modal-panel morphology-editor" role="dialog" aria-modal="true" aria-label="校对形态发现">
+    <div v-if="open" class="modal-backdrop morphology-editor-backdrop" @click.self="close">
+      <section class="modal-panel morphology-editor" role="dialog" aria-modal="true" :aria-label="creating ? '补充形态记录' : '校对形态发现'">
         <header>
-          <div><Pencil :size="19" /><span><strong>校对形态发现</strong><small>人工内容在后续 AI 重跑时保持优先</small></span></div>
-          <button class="plain-icon-button" type="button" title="关闭" @click="emit('close')"><X :size="18" /></button>
+          <div><Plus v-if="creating" :size="19" /><Pencil v-else :size="19" /><span><strong>{{ creating ? "补充形态记录" : "校对形态发现" }}</strong><small>人工内容在后续 AI 重跑时保持优先</small></span></div>
+          <button class="plain-icon-button" type="button" title="关闭" :disabled="saving" @click="close"><X :size="18" /></button>
         </header>
         <form class="settings-form morphology-editor-form" @submit.prevent="save">
+          <div v-if="creating && !reportId" class="morphology-source-picker">
+            <div class="search-bar"><input v-model="reportQuery" aria-label="搜索来源报告" @input="nextCursor = null" placeholder="搜索来源报告" @keydown.enter.prevent="loadReports()" /><button class="soft-action-button" type="button" :disabled="reportsLoading" @click="loadReports()"><Search :size="16" />搜索</button></div>
+            <label><span>来源报告</span><FormSelect v-model="sourceReportId" :options="reportOptions" placeholder="选择来源报告" aria-label="来源报告" :disabled="saving" @change="changeSource" /></label>
+            <button v-if="nextCursor" class="soft-action-button" type="button" :disabled="reportsLoading" @click="loadReports(true)">加载更多报告</button>
+            <small v-if="reportsLoading">正在读取报告…</small>
+            <p v-if="reportsError" class="inline-panel-error" role="alert">{{ reportsError }} <button class="error-retry" type="button" @click="loadReports()">重试</button></p>
+          </div>
+          <p v-if="sourceReport" class="muted-copy">来源：{{ sourceReport.title }}</p>
+          <p v-if="sourceLoading" role="status">正在读取来源页…</p>
+          <p v-if="sourceError" class="inline-panel-error" role="alert">{{ sourceError }} <button class="error-retry" type="button" @click="loadSource()">重试</button></p>
           <div class="form-grid">
             <label><span>器官/部位</span><input v-model="form.organ" required /></label>
             <label><span>具体区域</span><input v-model="form.region" placeholder="如左叶、上极" /></label>
@@ -116,12 +193,15 @@ async function save() {
             <label class="field-wide"><span>分级原文</span><input v-model="form.classificationText" /></label>
             <label class="field-wide"><span>关键形态描述</span><textarea v-model="form.morphology" rows="3"></textarea></label>
           </div>
-          <div class="morphology-editor-original"><span>原文备案</span><p>{{ finding.rawText || "原报告未提供原文证据" }}</p></div>
+          <div class="form-grid morphology-editor-original">
+            <label class="field-wide"><span>来源页</span><FormSelect v-model="form.sourcePageNumber" :options="(sourceReport?.pages || []).map(page => ({ value: String(page.pageNumber), label: `第 ${page.pageNumber} 页` }))" placeholder="选择原文所在页" aria-label="来源页" :disabled="sourceLoading || !sourceReport" /></label>
+            <label class="field-wide"><span>原文</span><textarea v-model="form.rawText" :required="creating" maxlength="3000" rows="3" placeholder="填写来源页中对应的原文" aria-label="形态原文"></textarea></label>
+          </div>
           <p v-if="error" class="inline-panel-error">{{ error }}</p>
           <footer class="form-actions morphology-editor-actions">
-            <button type="button" @click="emit('close')">取消</button>
-            <button class="primary-button" type="submit" :disabled="saving">
-              <LoaderCircle v-if="saving" class="spin-icon" :size="16" />{{ saving ? "保存中" : "保存校对" }}
+            <button type="button" :disabled="saving" @click="close">取消</button>
+            <button class="primary-button" type="submit" :disabled="saving || sourceLoading || (creating && (!sourceReport || !form.sourcePageNumber || !form.rawText.trim()))">
+              <LoaderCircle v-if="saving" class="spin-icon" :size="16" />{{ saving ? "保存中" : creating ? "保存记录" : "保存校对" }}
             </button>
           </footer>
         </form>

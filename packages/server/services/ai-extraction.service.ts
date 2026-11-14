@@ -1900,6 +1900,15 @@ function protectedMorphologyIdentityCompatible(
   finding: AiMorphologyFinding,
 ) {
   const manual = protectedMorphologyManualFields(row);
+  // A manually added finding can absorb only an exact source match for the same finding.
+  if (manual.has("created")) {
+    const sourceMatches = compactMorphologyMatch(row.rawText) === compactMorphologyMatch(finding.rawText)
+      || [...evidenceKeys(finding.evidence)].some(key => evidenceKeys(row.evidenceJson).has(key));
+    if (!sourceMatches || compactMorphologyMatch(row.findingType) !== compactMorphologyMatch(finding.findingType)
+      || (row.region && finding.region && compactMorphologyMatch(row.region) !== compactMorphologyMatch(finding.region))
+      || (row.organ && finding.organ && compactMorphologyMatch(row.organ) !== compactMorphologyMatch(finding.organ))
+      || (row.laterality !== "unspecified" && finding.laterality !== "unspecified" && row.laterality !== finding.laterality)) return false;
+  }
   const compatibleText = (
     field: string,
     oldValue: unknown,
@@ -2043,6 +2052,8 @@ function protectedFindingValues(
           text: old?.classificationText ?? null,
         }
       : finding.classification,
+    rawText: value("rawText", finding.rawText, old?.rawText ?? finding.rawText),
+    evidenceJson: value("evidence", JSON.stringify(finding.evidence), old?.evidenceJson ?? JSON.stringify(finding.evidence)),
     trackingGroupId: old?.trackingGroupId || null,
     matchConfidence: old?.matchConfidence ?? null,
     manualFieldsJson: old?.manualFieldsJson || "[]",
@@ -4155,8 +4166,8 @@ export function persistAiExtraction(
         protectedValue.classification?.value || null,
         protectedValue.classification?.text || null,
         finding.comparisonText,
-        finding.rawText,
-        JSON.stringify(finding.evidence),
+        protectedValue.rawText,
+        protectedValue.evidenceJson,
         finding.confidence,
         protectedValue.trackingGroupId,
         protectedValue.matchConfidence,

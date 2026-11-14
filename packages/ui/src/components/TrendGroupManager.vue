@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import {computed,onBeforeUnmount,onMounted,ref} from 'vue';
-import {X,Plus,Search,LoaderCircle} from '@lucide/vue';
+import {X,Plus,Search,LoaderCircle,ChartNoAxesCombined} from '@lucide/vue';
 import type {ManagedTrendGroup,TrendGroupManagement} from '../../../shared/trend-groups';
 import {request} from '../utils/api';
+import FormSelect from './FormSelect.vue';
 import {useScrollLock} from '../composables/useScrollLock';
 import {useConfirm} from '../composables/useConfirm';
 import {useToast} from '../composables/useToast';
@@ -61,12 +62,13 @@ function remove(group:ManagedTrendGroup){
   <Teleport to="body">
     <div class="modal-backdrop trend-group-backdrop" @click.self="close" @keydown.esc.stop="close">
       <section class="modal-panel trend-group-manager" role="dialog" aria-modal="true" aria-label="管理我的分组" :aria-busy="busy || loading">
-        <header><h3>{{ editing ? (editKey?'编辑个人分组':'新建个人分组') : '管理我的分组' }}</h3><button class="icon-button" aria-label="关闭分组管理" :disabled="busy" @click="close"><X :size="20" /></button></header>
+        <header><div><ChartNoAxesCombined :size="19" /><h3>{{ editing ? (editKey?'编辑个人分组':'新建个人分组') : '管理我的分组' }}</h3></div><button class="plain-icon-button" aria-label="关闭分组管理" :disabled="busy" @click="close"><X :size="20" /></button></header>
+        <div class="manager-body">
         <p v-if="error" class="manager-error" role="alert">{{ error }}<button v-if="!editing" :disabled="loading || busy" @click="load">重试</button></p>
         <div v-if="loading" class="manager-loading" role="status"><LoaderCircle class="spin-icon" :size="20" />正在读取分组…</div>
         <template v-else-if="!editing">
           <div class="manager-toolbar"><button class="primary-button" :disabled="busy || !!error" @click="edit()"><Plus :size="16" />新建分组</button>
-            <label>复制内置分组<select v-model="templateKey" aria-label="复制内置分组" :disabled="busy || !!error" @change="copyTemplate"><option value="">请选择组合</option><option v-for="group in templates" :key="group.key" :value="group.key">{{ group.name }}</option></select></label>
+            <label><span>复制内置分组</span><FormSelect v-model="templateKey" :options="templates.map(group=>({value:group.key,label:group.name}))" placeholder="选择内置组合" aria-label="复制内置分组" :disabled="busy || !!error" @change="copyTemplate" /></label>
           </div>
           <p class="manager-hint">仅当前账号可管理，切换有权查看的成员时可继续使用。</p>
           <div class="manager-list">
@@ -74,7 +76,7 @@ function remove(group:ManagedTrendGroup){
             <div v-for="group in personal" :key="group.key" class="manager-group"><div><strong>{{ group.name }}</strong><small>已选 {{ group.indicatorKeys.length }} 项</small></div><button class="soft-action-button" :disabled="busy" @click="edit(group)">编辑</button><button class="soft-action-button manager-delete" :disabled="busy" @click="remove(group)">删除</button></div>
           </div>
         </template>
-        <form v-else class="manager-form" @submit.prevent="save">
+        <form v-else class="settings-form manager-form" @submit.prevent="save">
           <label class="manager-name">分组名称<input v-model="name" aria-label="分组名称" maxlength="40" required :disabled="busy" placeholder="例如：血脂七项" /></label>
           <label class="manager-search"><Search :size="17" /><input v-model="search" aria-label="搜索分组指标" :disabled="busy" placeholder="搜索指标、别名或分类" /></label>
           <p class="manager-hint">已选 {{ selected.length }} 项（最多 200 项）；无数据的指标也可预先选择。</p>
@@ -84,19 +86,41 @@ function remove(group:ManagedTrendGroup){
           </div>
           <footer><button class="soft-action-button" type="button" :disabled="busy" @click="editing=false;error=''">返回</button><button class="primary-button" type="submit" :disabled="busy || !name.trim() || !selected.length || selected.length>200"><LoaderCircle v-if="busy" class="spin-icon" :size="16" />{{ busy?'保存中…':'保存分组' }}</button></footer>
         </form>
+        </div>
       </section>
     </div>
   </Teleport>
 </template>
 
 <style scoped>
-.trend-group-manager{width:min(640px,calc(100vw - 32px));height:min(720px,calc(100vh - 32px));height:min(720px,calc(100dvh - 32px));display:flex;flex-direction:column;overflow:hidden;padding:20px;gap:14px;}
-.trend-group-manager header{padding:0 0 12px;min-height:48px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-shrink:0;}.trend-group-manager h3{margin:0;font-size:18px;}
-.manager-toolbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}.manager-toolbar label{display:flex;align-items:center;gap:8px;font-size:13px;}.manager-toolbar select{max-width:200px;padding:9px 12px;border:1px solid var(--line);border-radius:var(--radius-m);background:var(--surface);color:var(--text);font:inherit;}.manager-delete{color:var(--danger);}
-.manager-hint{margin:0;color:var(--muted);font-size:13px;}.manager-list,.manager-indicators{flex:1;min-height:0;overflow-y:auto;padding-right:12px;overscroll-behavior:contain;}
-.manager-group{display:flex;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid var(--line);}.manager-group>div{flex:1;min-width:0;overflow-wrap:anywhere;}.manager-group small,.manager-indicator small{display:block;color:var(--muted);font-size:12px;margin-top:4px;}
-.manager-form{display:flex;flex-direction:column;min-height:0;flex:1;gap:12px;}.manager-name{display:grid;gap:8px;}.manager-name input,.manager-search{width:100%;border:1px solid var(--line);border-radius:var(--radius-m);padding:10px;}.manager-search{display:flex;align-items:center;gap:8px;}.manager-search input{min-width:0;flex:1;border:0;background:transparent;padding:0;}
-.manager-indicator{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);}.manager-indicator input{width:17px;height:17px;flex:0 0 auto;accent-color:var(--brand);}.manager-indicator span{min-width:0;overflow-wrap:anywhere;}
-.manager-form footer{display:flex;justify-content:flex-end;gap:12px;flex-shrink:0;border-top:1px solid var(--line);padding-top:14px;}.manager-loading{display:flex;align-items:center;justify-content:center;gap:8px;flex:1;}.manager-error{margin:0;color:var(--danger);white-space:pre-wrap;}.manager-error button{margin-left:8px;}.manager-empty{color:var(--muted);padding:20px 0;}
-@media(max-width:760px){.trend-group-manager{padding:16px;}.manager-toolbar{align-items:stretch;}.manager-toolbar label{flex-wrap:wrap;}}
+.trend-group-manager {
+  width: min(640px, calc(100vw - 32px)); height: min(720px, calc(100vh - 32px));
+  height: min(720px, calc(100dvh - 32px)); display: flex; flex-direction: column; overflow: hidden;
+}
+.trend-group-manager > header { flex-shrink: 0; }
+.manager-body { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 14px 16px; gap: 14px; }
+.manager-toolbar { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; }
+.manager-toolbar > button { flex-shrink: 0; }
+.manager-toolbar label { display: grid; flex: 1; min-width: 170px; gap: 7px; color: var(--muted); font-size: 12px; }
+.manager-delete { color: var(--danger); }
+.manager-hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.manager-list, .manager-indicators { flex: 1; min-height: 0; overflow-y: auto; padding-right: 12px; overscroll-behavior: contain; }
+.manager-group { display: flex; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.manager-group > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.manager-group small, .manager-indicator small { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
+.manager-form { display: flex; flex-direction: column; min-height: 0; flex: 1; gap: 12px; padding: 0; }
+.manager-search { display: flex !important; align-items: center; gap: 8px; padding: 0 12px; min-height: 44px; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--muted); background: var(--surface); }
+.manager-search:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.manager-form .manager-search input { min-width: 0; flex: 1; border: 0; background: transparent; box-shadow: none; padding: 0; }
+.manager-indicator { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.manager-indicator input { width: 17px; height: 17px; flex: 0 0 auto; accent-color: var(--brand); }
+.manager-indicator span { display: block; min-width: 0; overflow-wrap: anywhere; }
+.manager-form footer { display: flex; justify-content: flex-end; gap: 8px; flex-shrink: 0; border-top: 1px solid var(--line); padding-top: 14px; }
+.manager-loading { display: flex; align-items: center; justify-content: center; gap: 8px; flex: 1; }
+.manager-error { margin: 0; color: var(--danger); white-space: pre-wrap; }
+.manager-error button { margin-left: 8px; }
+.manager-empty { color: var(--muted); padding: 20px 0; }
+@media (max-width: 760px) {
+  .trend-group-manager { width: 100vw; height: min(720px, 94vh); height: min(720px, 94dvh); max-height: 94dvh; border-radius: 8px 8px 0 0; align-self: end; }
+}
 </style>

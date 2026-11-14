@@ -285,7 +285,7 @@ export function backfillDocumentWideObservationDates() {
 }
 
 /** Morphology findings use the same source-row/date inference as indicators. */
-export function publishMorphologyExaminationAssignments(reportId:string,findings:Array<{id:string;finding:AiMorphologyFinding}>,pages:ExaminationSourcePage[]) {
+export function publishMorphologyExaminationAssignments(reportId:string,findings:Array<{id:string;finding:Pick<AiMorphologyFinding,"sectionName"|"findingName"|"rawText"|"evidence"|"examination">}>,pages:ExaminationSourcePage[]) {
  if(!pages.length)return;
  const db=getDatabase();
  for(const {id,finding} of findings){

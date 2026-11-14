@@ -12,6 +12,8 @@ import {
   LoaderCircle,
   MoreHorizontal,
   Pencil,
+  Plus,
+  Trash2,
   Ruler,
   ScanSearch,
   Scissors,
@@ -54,6 +56,8 @@ const previewReportId = ref<string | null>(null);
 const sourcePreview = ref<{ point: MorphologyTrackingPoint; seriesName: string } | null>(null);
 const processingFinding = ref<UntrackedMorphologyFinding | null>(null);
 const editingFinding = ref<UntrackedMorphologyFinding | MorphologyTrackingPoint | null>(null);
+const addingFinding = ref(false);
+const canManage = computed(() => app.selectedMember.value?.permission === "manager");
 const mergeSeries = ref<MorphologyTrackingSeries | null>(null);
 const reminderSeries = ref<MorphologyTrackingSeries | null>(null);
 const activeSeriesMenuId = ref<string | null>(null);
@@ -120,18 +124,21 @@ const sourceViewerPages = computed<ImageViewerPage[]>(() => {
   }];
 });
 
+let loadSequence = 0;
 async function load(memberId: string, silent = false) {
+  const sequence = ++loadSequence;
   if (!silent) loading.value = true;
   loadError.value = "";
   try {
-    data.value = await request<MorphologyTrackingResponse>(
+    const result = await request<MorphologyTrackingResponse>(
       `morphology-trends?memberId=${encodeURIComponent(memberId)}`
     );
+    if (sequence === loadSequence && memberId === app.selectedMemberId.value) data.value = result;
   } catch (cause) {
-    loadError.value = cause instanceof Error ? cause.message : "形态变化加载失败";
+    if (sequence === loadSequence) loadError.value = cause instanceof Error ? cause.message : "形态变化加载失败";
     throw cause;
   } finally {
-    if (!silent) loading.value = false;
+    if (sequence === loadSequence) loading.value = false;
   }
 }
 
@@ -153,6 +160,13 @@ const { pullDistance, refreshing } = usePullRefresh(root, async () => {
 });
 
 watch(() => app.selectedMemberId.value, (memberId) => {
+  addingFinding.value = false;
+  editingFinding.value = null;
+  processingFinding.value = null;
+  mergeSeries.value = null;
+  reminderSeries.value = null;
+  sourcePreview.value = null;
+  previewReportId.value = null;
   query.value = "";
   statusFilter.value = "all";
   if (memberId) load(memberId).catch(() => {});
@@ -314,20 +328,25 @@ async function setTracking(mode: "existing" | "separate", finding = processingFi
   }
 }
 
-function ignoreFinding() {
-  const finding = processingFinding.value;
+function ignoreFinding(finding: UntrackedMorphologyFinding | MorphologyTrackingPoint | null = processingFinding.value) {
   if (!finding) return;
+  const memberId = app.selectedMemberId.value;
   confirmDialog.ask({
-    title: "标记为误提取",
-    message: "该记录将不再出现在形态变化和待确认列表，后续 AI 重跑也会保留此结果。",
-    confirmText: "确认忽略",
+    title: "删除形态记录",
+    message: "该记录将从报告和形态变化中移除，后续 AI 重跑会保留此处理结果，原件不会删除。",
+    confirmText: "确认删除",
     danger: true,
     run: async () => {
-      data.value = await request<MorphologyTrackingResponse>(
+      if (memberId !== app.selectedMemberId.value) return;
+      const result = await request<MorphologyTrackingResponse>(
         `morphology-findings/${encodeURIComponent(finding.findingId)}/ignore`, { method: "POST" }
       );
-      processingFinding.value = null;
-      toast.show("已标记为误提取");
+      if (memberId === app.selectedMemberId.value) {
+        data.value = result;
+        processingFinding.value = null;
+      }
+      toast.show("形态记录已删除");
+      app.notifyDataChanged();
     }
   });
 }
@@ -417,6 +436,7 @@ async function createFollowupReminder() {
 }
 
 async function editorSaved() {
+  app.notifyDataChanged();
   reload();
 }
 </script>
@@ -427,10 +447,13 @@ async function editorSaved() {
       <div><h2>形态变化</h2><p>按部位与发现类型关联历次原报告记录</p></div>
       <span class="page-intro-badge"><ScanSearch :size="22" /></span>
     </div>
-    <nav class="trend-view-switch" aria-label="趋势视图">
-      <RouterLink to="/trends">指标趋势</RouterLink>
-      <RouterLink to="/trends/morphology" aria-current="page">形态变化</RouterLink>
-    </nav>
+    <div class="morphology-view-toolbar">
+      <nav class="trend-view-switch" aria-label="趋势视图">
+        <RouterLink to="/trends">指标趋势</RouterLink>
+        <RouterLink to="/trends/morphology" aria-current="page">形态变化</RouterLink>
+      </nav>
+      <button v-if="canManage" class="soft-action-button" type="button" @click="addingFinding = true"><Plus :size="16" />补充记录</button>
+    </div>
     <PullIndicator :distance="pullDistance" :refreshing="refreshing" />
 
     <div v-if="loading" class="loading-list"><span v-for="index in 3" :key="index"></span></div>
@@ -502,7 +525,7 @@ async function editorSaved() {
                 ></button>
                 <div v-if="activeSeriesMenuId === item.trackingGroupId" class="morphology-menu-popover">
                   <button type="button" @click="openReminder(item)"><BellPlus :size="16" />创建复查提醒</button>
-                  <button v-if="compatibleMergeSeries(item).length" type="button" @click="openMerge(item)"><Link2 :size="16" />归为同一项目</button>
+                  <button v-if="canManage && compatibleMergeSeries(item).length" type="button" @click="openMerge(item)"><Link2 :size="16" />归为同一项目</button>
                 </div>
               </div>
             </header>
@@ -573,10 +596,11 @@ async function editorSaved() {
                   <button v-if="point.sourcePage" type="button" title="查看发现所在页高清图" @click="openSourcePage(point, item)">
                     <FileImage :size="16" /><span>原图</span>
                   </button>
-                  <button type="button" title="校对形态字段" @click="editingFinding = point">
+                  <button type="button" v-if="canManage" title="校对形态字段" @click="editingFinding = point">
                     <Pencil :size="16" /><span>校对</span>
                   </button>
-                  <button type="button" title="从当前项目移出" :disabled="actionLoading" @click="splitPoint(point)">
+                  <button v-if="canManage" type="button" title="删除形态记录" @click="ignoreFinding(point)"><Trash2 :size="16" /><span>删除</span></button>
+                  <button v-if="canManage" type="button" title="从当前项目移出" :disabled="actionLoading" @click="splitPoint(point)">
                     <Scissors :size="16" /><span>移出</span>
                   </button>
                 </div>
@@ -617,7 +641,7 @@ async function editorSaved() {
                 ></button>
                 <div v-if="activeSeriesMenuId === item.trackingGroupId" class="morphology-menu-popover">
                   <button type="button" @click="openReminder(item)"><BellPlus :size="16" />创建复查提醒</button>
-                  <button v-if="compatibleMergeSeries(item).length" type="button" @click="openMerge(item)"><Link2 :size="16" />归为同一项目</button>
+                  <button v-if="canManage && compatibleMergeSeries(item).length" type="button" @click="openMerge(item)"><Link2 :size="16" />归为同一项目</button>
                 </div>
               </div>
             </header>
@@ -629,7 +653,8 @@ async function editorSaved() {
             </button>
             <div class="morphology-single-actions">
               <button v-if="item.latest.sourcePage" type="button" @click="openSourcePage(item.latest, item)"><FileImage :size="16" />查看原图</button>
-              <button type="button" @click="editingFinding = item.latest"><Pencil :size="16" />校对记录</button>
+              <button v-if="canManage" type="button" @click="editingFinding = item.latest"><Pencil :size="16" />校对记录</button>
+              <button v-if="canManage" type="button" title="删除形态记录" @click="ignoreFinding(item.latest)"><Trash2 :size="16" />删除记录</button>
             </div>
           </article>
         </div>
@@ -649,7 +674,7 @@ async function editorSaved() {
             <small>{{ item.reason }}</small>
           </div>
           <div class="morphology-untracked-actions">
-            <button class="soft-action-button" type="button" @click="openProcess(item)"><Link2 :size="16" />查看处理</button>
+            <button v-if="canManage" class="soft-action-button" type="button" @click="openProcess(item)"><Link2 :size="16" />查看处理</button>
             <button type="button" title="打开来源报告" @click="openReport(item.reportId)"><ChevronRight :size="18" /></button>
           </div>
         </article>
@@ -669,9 +694,10 @@ async function editorSaved() {
     </ImageViewer>
 
     <MorphologyFindingEditor
-      :open="Boolean(editingFinding)"
+      :open="addingFinding || Boolean(editingFinding)"
       :finding="editingFinding"
-      @close="editingFinding = null"
+      :member-id="app.selectedMemberId.value"
+      @close="editingFinding = null; addingFinding = false"
       @saved="editorSaved"
     />
 
@@ -687,7 +713,7 @@ async function editorSaved() {
           </div>
           <footer class="compact-action-footer">
             <button class="soft-action-button" type="button" @click="editingFinding = processingFinding"><Pencil :size="16" />先校对字段</button>
-            <button class="soft-action-button danger-text" type="button" @click="ignoreFinding">不是形态发现</button>
+            <button class="soft-action-button danger-text" type="button" @click="ignoreFinding()">不是形态发现</button>
             <button class="soft-action-button" type="button" :disabled="actionLoading" @click="setTracking('separate')">作为新项目</button>
             <button v-if="compatibleSeries(processingFinding).length" class="primary-button" type="button" :disabled="actionLoading || !selectedTrackingGroup" @click="setTracking('existing')"><LoaderCircle v-if="actionLoading" class="spin-icon" :size="16" />确认归入</button>
           </footer>

@@ -4418,3 +4418,19 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
 @media (max-width: 760px), (pointer: coarse) {
   .preview-stack--floating > .preview-card > .report-card-title { display: none; }
 }
+
+/* Morphology creation reuses the existing editor and source controls. */
+.morphology-source-picker { display: grid; gap: 10px; margin-bottom: 14px; }
+.morphology-source-picker .search-bar { display: flex; gap: 8px; }
+.morphology-source-picker .search-bar input { min-width: 0; flex: 1; }
+.morphology-source-picker .search-bar button { flex-shrink: 0; }
+.morphology-source-picker small { color: var(--muted); }
+.morphology-single-actions { flex-wrap: wrap; }
+
+.morphology-view-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.morphology-view-toolbar .trend-view-switch { margin: 0; }
+.morphology-view-toolbar > button { flex-shrink: 0; white-space: nowrap; }
+@media (max-width: 760px) {
+  .morphology-view-toolbar .trend-view-switch { flex: 1; width: auto; min-width: 0; }
+  .morphology-view-toolbar > button { min-height: 34px; padding: 0 10px; font-size: 12px; }
+}

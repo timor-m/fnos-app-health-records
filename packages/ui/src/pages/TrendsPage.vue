@@ -8,6 +8,7 @@ import {
   ChevronRight,
   CircleAlert,
   FileText,
+  History,
   LoaderCircle,
   Pin,
   Search,
@@ -616,9 +617,9 @@ async function toggleRecords(item:TrendSeries) {
   if(memberId!==app.selectedMemberId.value || version!==snapshots.version.value)return;
   if(snapshots.itemFor(snapshots.keyOf(item))?.chartLoaded)expandedRecordKeys.value=[...expandedRecordKeys.value,key];
 }
-function recentPoints(item: TrendSeries) {
+function historyPoints(item: TrendSeries) {
   const points=[...item.points].reverse();
-  return expandedRecordKeys.value.includes(seriesKey(item))?points:points.slice(0,6);
+  return points;
 }
 
 function seriesKey(item: TrendSeries) {
@@ -738,6 +739,7 @@ watch(() => app.selectedMemberId.value, memberId => {
 
 watch([query,groupFilter,attentionFilter], () => {
   if(resettingMember)return;
+  expandedRecordKeys.value=[];
   closeDetails();
   snapshots.invalidate();
   const sequence=++filterSequence;
@@ -1104,9 +1106,9 @@ onDeactivated(() => {
               <span v-if="trendDateRange(item)">{{ trendDateRange(item) }}</span>
             </div>
           </div>
-          <button v-if="item.pointCount > 6" class="soft-action-button" type="button" :aria-expanded="expandedRecordKeys.includes(seriesKey(item))" @click="toggleRecords(item)">{{ expandedRecordKeys.includes(seriesKey(item)) ? '收起记录' : `查看全部 ${item.pointCount} 条记录` }}</button>
-          <div class="trend-points">
-            <article v-for="point in recentPoints(item)" :key="`${item.name}-${point.reportId}-${point.observationId}`">
+          <button class="morphology-history-toggle" type="button" :aria-expanded="expandedRecordKeys.includes(seriesKey(item))" @click="toggleRecords(item)"><span><History :size="16" />历次记录 · {{ item.pointCount }} 条</span><ChevronDown :size="17" :class="{ expanded: expandedRecordKeys.includes(seriesKey(item)) }" /></button>
+          <div v-if="expandedRecordKeys.includes(seriesKey(item))" class="trend-points">
+            <article v-for="point in historyPoints(item)" :key="`${item.name}-${point.reportId}-${point.observationId}`">
               <div>
                 <strong>{{ pointValue(item, point) }}<IndicatorHint v-if="pointComputedFlagHint(point)" :text="pointComputedFlagHint(point)" :label="`${item.name}的异常标记说明`"><template #trigger="{ toggle, open, panelId }"><button type="button" class="trend-flag" :class="pointFlagClass(point)" :title="point.abnormalReason || undefined" :aria-expanded="open" :aria-controls="open ? panelId : undefined" @click="toggle">{{ pointFlagLabel(point) }}</button></template></IndicatorHint><em v-else-if="pointFlagVisible(point)" class="trend-flag" :class="pointFlagClass(point)" :title="point.abnormalReason || undefined">{{ pointFlagLabel(point) }}</em></strong>
                 <span>{{ trendMeasurementTime(point) }} · {{ point.hospitalName || "医院待整理" }}</span>

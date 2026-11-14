@@ -158,3 +158,45 @@ it('clears dropdown filtering feedback on failure without scrolling away from re
   expect(scroll).not.toHaveBeenCalled();
  }finally{wrapper.unmount();scroll.mockRestore();}
 });
+
+it('keeps charts visible while all history is collapsed, expands complete history and resets on member changes',async()=>{
+ const item=sampleTrend(Array.from({length:9},(_,i)=>String(i+1)));
+ request.mockImplementation(async(path:string,init?:RequestInit)=>path==='trends/snapshot/charts'?snapshotParts([item],init):snapshotOverview([item]));
+ const wrapper=render();try {
+  await flushPromises();expect(wrapper.find('.trend-chart-scroll').exists()).toBe(true);
+  expect(wrapper.find('.trend-points').exists()).toBe(false);
+  const toggle=()=>wrapper.get('.morphology-history-toggle');expect(toggle().text()).toContain('9 条');expect(toggle().attributes('aria-expanded')).toBe('false');
+  await toggle().trigger('click');await vi.advanceTimersByTimeAsync(31);await flushPromises();expect(wrapper.findAll('.trend-points > article')).toHaveLength(9);
+  await toggle().trigger('click');expect(wrapper.find('.trend-points').exists()).toBe(false);
+  await toggle().trigger('click');await flushPromises();context.app.selectedMemberId.value='other';await flushPromises();
+  expect(wrapper.find('.trend-points').exists()).toBe(false);
+ } finally {wrapper.unmount();}
+});
+
+it('collapses history when filtering to another view of the same series',async()=>{
+ const item=sampleTrend(['2','3']);
+ request.mockImplementation(async(path:string,init?:RequestInit)=>path==='trends/snapshot/charts'?snapshotParts([item],init):snapshotOverview([item]));
+ const wrapper=render();try {
+  await flushPromises();await wrapper.get('.morphology-history-toggle').trigger('click');await vi.advanceTimersByTimeAsync(31);await flushPromises();
+  expect(wrapper.find('.trend-points').exists()).toBe(true);
+  await wrapper.get('input[placeholder="搜索指标名"]').setValue('合成');await vi.advanceTimersByTimeAsync(251);await flushPromises();
+  expect(wrapper.get('.morphology-history-toggle').attributes('aria-expanded')).toBe('false');expect(wrapper.find('.trend-points').exists()).toBe(false);
+ } finally {wrapper.unmount();}
+});
+
+it('applies a saved personal group, refreshes edits to the selected group and resets after deleting it',async()=>{
+ const item=sampleTrend(['2','3']);
+ request.mockImplementation(async(path:string,init?:RequestInit)=>path==='trends/snapshot/charts'?snapshotParts([item],init):snapshotOverview([item],tree));
+ const wrapper=render();try {
+  await flushPromises();wrapper.findComponent({name:'TrendGroupFilter'}).vm.$emit('manage');await flushPromises();
+  const manager=wrapper.findComponent({name:'TrendGroupManager'});
+  manager.vm.$emit('changed','mine',false);await vi.advanceTimersByTimeAsync(251);await flushPromises();
+  expect(wrapper.findComponent({name:'TrendGroupFilter'}).props('modelValue')).toBe('mine');
+  const reads=()=>request.mock.calls.filter(([path])=>path.startsWith('trends/snapshot?'));
+  expect(new URLSearchParams(reads().at(-1)![0].split('?')[1]).get('group')).toBe('mine');
+  const before=reads().length;manager.vm.$emit('changed','mine',false);await flushPromises();expect(reads()).toHaveLength(before+1);
+  manager.vm.$emit('changed','mine',true);await vi.advanceTimersByTimeAsync(251);await flushPromises();
+  expect(wrapper.findComponent({name:'TrendGroupFilter'}).props('modelValue')).toBe('');
+  expect(new URLSearchParams(reads().at(-1)![0].split('?')[1]).get('group')).toBe('');
+ } finally {wrapper.unmount();}
+});
