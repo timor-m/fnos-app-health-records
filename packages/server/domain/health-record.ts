@@ -445,6 +445,7 @@ export type ReportDuplicateDecisionRecord = {
 };
 
 export type ReportDetail = ReportSummary & {
+  combinationUndo?: {id:string;sourceTitle:string;createdAt:string}|null;
   sourceVersion: number;
   pageAppend?: {originalRevision:number;recognizedRevision:number|null;state:string;reviewWarnings?:string[]};
   createdAt: string;

@@ -3381,6 +3381,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
 .edit-col > h4 { font-size: 13px; color: var(--muted); font-weight: 700; }
 .edit-col-form { padding: 0; }
 .edit-col-form > h4 { padding: 16px 20px 0; }
+.edit-col-form .form-actions { position: sticky; bottom: 0; z-index: 1; padding: 10px 0; background: var(--surface); }
 .edit-original-tile { width: 100%; }
 
 @media (max-width: 760px) {
@@ -3418,7 +3419,6 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
   .edit-col-form { padding: 16px 20px; }
   .edit-col-form > h4 { padding: 0; }
   .edit-col-form .settings-form { padding: 0; }
-  .edit-col-form .form-actions { position: sticky; bottom: 0; padding: 10px 0 0; }
 }
 
 /* ---------- 原件 swiper（校对工作台） ---------- */
@@ -4341,6 +4341,11 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
 }
 
 /* Report supplements share the existing card, dialog and button tokens. */
+.preview-card.report-combination-info { display: flex; align-items: center; gap: 12px; padding: 12px 16px; }
+.report-combination-info__summary { flex: 1; min-width: 0; }
+.report-combination-info__summary p { margin: 0; color: var(--ink-2); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.report-combination-info__summary time { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+.report-combination-info > .soft-action-button { flex: 0 0 auto; white-space: nowrap; font-size: 12px; }
 .report-notes-panel .note-count { margin-left: 8px; color: var(--muted); font-size: 12px; font-weight: 400; }
 .report-notes-timeline { list-style: none; margin: 0; padding: 0; }
 .report-note-card { padding: 16px 0; border-top: 1px solid var(--line); }

@@ -5,10 +5,11 @@ import { observationSourceSections } from "../utils/observation-source-order";
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import {
   ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Clock3, Download,
-  CircleStop, FileImage, FileText, LoaderCircle, Maximize2, Pencil, Plus, RefreshCw, RotateCw, ScrollText, Search,
+  CircleStop, FileImage, FileText, LoaderCircle, Maximize2, Pencil, Plus, RefreshCw, RotateCcw, RotateCw, ScrollText, Search,
   Sparkles, Trash2, X
 } from "@lucide/vue";
 import ClinicalFactEditor from "./ClinicalFactEditor.vue";
+import ReportCombineDialog from "./ReportCombineDialog.vue";
 import ReportNotesPanel from './ReportNotesPanel.vue';
 import ObservationTimeEditor from './ObservationTimeEditor.vue';
 import ReportScrollingTitle from "./ReportScrollingTitle.vue";
@@ -66,6 +67,44 @@ const toast = useToast();
 const confirmDialog = useConfirm();
 const detail = ref<ReportDetail | null>(null);
 const canManageReport=computed(()=>app.allMembers.value.some(member=>member.id===detail.value?.memberId && member.permission==='manager'));
+const combineOpen = ref(false);
+const notesRevision = ref(0);
+const undoCombinationLoading=ref(false);
+const pendingUndo=ref<(()=>Promise<void>)|null>(null);
+function cancelPendingUndo() {
+  if(pendingUndo.value && confirmDialog.state?.value?.run===pendingUndo.value)confirmDialog.cancel();
+  pendingUndo.value=null;
+}
+async function askUndoCombination() {
+  const combination=detail.value?.combinationUndo,targetId=props.reportId;
+  if(!combination||!canManageReport.value||undoCombinationLoading.value)return;
+  undoCombinationLoading.value=true;
+  try {
+    const preview=await request<import('../../../shared/report-combination').ReportCombinationUndoPreview>(`reports/${targetId}/undo-combine-preview?combinationId=${encodeURIComponent(combination.id)}`);
+    if(!detailActive || props.reportId!==targetId)return;
+    const run=async()=>{
+      if(!detailActive || props.reportId!==targetId||pendingUndo.value!==run)return;
+      try {
+        await request(`reports/${targetId}/undo-combine`,{method:'POST',body:JSON.stringify({combinationId:preview.combinationId,fingerprint:preview.fingerprint})});
+        if(!detailActive || props.reportId!==targetId||pendingUndo.value!==run)return;
+        await loadDetail(targetId,true);await refreshJobs();notesRevision.value++;emit('updated');
+        toast.show('已撤销合并，两份报告已恢复');
+      } catch(error) {toast.show((error as Error).message);}
+    };
+    pendingUndo.value=run;
+    confirmDialog.ask({title:'撤销这次合并？',message:`将恢复「${preview.target.title}」和「${preview.source.title}」两份报告，以及合并前的原件、指标、人工校对和检查时间。`,confirmText:'撤销合并',run});
+  }catch(error){toast.show((error as Error).message,6000);}
+  finally{undoCombinationLoading.value=false;}
+}
+
+async function onReportsCombined() {
+  combineOpen.value=false;
+  await loadDetail(props.reportId,true);
+  await refreshJobs();
+  notesRevision.value++;
+  emit("updated");
+  toast.show("报告已合并，请核对后确认归档");
+}
 const detailLoading = ref(false);
 const detailError = ref("");
 const duplicateCandidatesError = ref("");
@@ -1470,6 +1509,15 @@ async function openDiagnosticReview(item: ProcessingDiagnosticReviewItem) {
   }
 }
 
+function askManualArchive() {
+  confirmDialog.ask({
+    title: "手动确认归档",
+    message: "请先对照原件核对报告字段和需要保留的内容。归档会保留原件、已保存的校对及补录指标，识别失败记录仍会保留。是否确认归档？",
+    confirmText: "确认归档",
+    run: confirmReady
+  });
+}
+
 async function confirmReady() {
   if (duplicateCandidatesPending.value) return;
   confirming.value = true;
@@ -1973,6 +2021,8 @@ function closeJobEvents() {
 }
 
 watch(() => props.reportId, (reportId) => {
+  cancelPendingUndo();
+  combineOpen.value = false;
   morphologyAddOpen.value = false; morphologyEditItem.value = null;
   stopJobsPolling();
   closeJobEvents();
@@ -2013,6 +2063,7 @@ onMounted(() => {
   window.addEventListener("keydown", handleViewerKeydown);
 });
 onBeforeUnmount(() => {
+  cancelPendingUndo();
   detailActive = false;
   detailSeq += 1;
   window.removeEventListener("focus", refreshDuplicateOnFocus);
@@ -2024,6 +2075,7 @@ onBeforeUnmount(() => {
 });
 /* 随 KeepAlive 页面失活暂停任务轮询，激活时立即刷新一次并按任务状态恢复轮询 */
 onDeactivated(() => {
+  cancelPendingUndo();
   detailActive = false;
   stopOriginalExportStatusPolling();
   stopJobsPolling();
@@ -2044,6 +2096,7 @@ onActivated(() => {
 </script>
 
 <template>
+  <ReportCombineDialog v-if="combineOpen && detail" :report="detail" @close="combineOpen=false" @combined="onReportsCombined" />
   <template v-if="!reviewObservationId">
   <header v-if="variant === 'floating'" class="sheet-header report-detail-floating-header">
     <ReportScrollingTitle :text="source?.title || '报告详情'" />
@@ -2084,7 +2137,13 @@ onActivated(() => {
           <CheckCircle2 v-else :size="17" />
           {{ confirming ? "确认中" : "确认归档" }}
         </button>
+        <button v-if="canManageReport && source.status === 'failed'" class="primary-button compact-primary" type="button" :disabled="confirming || jobsLoading || hasRunningJobs" @click="askManualArchive">
+          <LoaderCircle v-if="confirming" class="spin-icon" :size="17" />
+          <CheckCircle2 v-else :size="17" />
+          {{ confirming ? "确认中" : "手动归档" }}
+        </button>
         <button v-if="canManageReport" class="soft-action-button" type="button" @click="openEditReport"><Pencil :size="17" />校对字段</button>
+        <button v-if="canManageReport && detail && detail.status !== 'trashed'" class="soft-action-button" type="button" :disabled="jobsLoading || hasRunningJobs" @click="combineOpen=true"><Plus :size="17" />合并报告</button>
         <button class="soft-action-button" type="button" @click="openOcrText"><ScrollText :size="17" />查看 OCR</button>
         <button v-if="firstPdfPage" class="soft-action-button" type="button" @click="openPdfOriginalViewer(firstPdfPage)"><FileText :size="17" />查看 PDF</button>
       </div>
@@ -2187,8 +2246,9 @@ onActivated(() => {
 
     <article class="preview-card ai-result-card">
       <div class="section-title-row">
-        <div><h4>AI 整理结果</h4><p>{{ hasAiContent ? "以下内容来自 OCR 后的结构化整理，确认前请核对原件。" : "AI 尚未整理出结构化内容。" }}</p></div>
+        <div><h4>AI 整理结果</h4><p>{{ hasAiContent ? "以下为已整理或人工补充的内容，请核对原件。" : "AI 尚未整理出结构化内容。" }}</p></div>
         <div class="section-title-actions">
+          <button v-if="canManageReport && detail && !detail.observations.length" class="soft-action-button" type="button" :disabled="jobsLoading || hasRunningJobs" @click="allObservationsOpen = true; openObservationEditor()"><Plus :size="15" />补充指标</button>
           <button v-if="canManageReport && (canTriggerAi)" class="soft-action-button ai-trigger-button" type="button" :disabled="aiTriggerState.disabled" @click="triggerAiExtraction">
             <LoaderCircle v-if="aiTriggerState.loading" class="spin-icon" :size="16" />
             <Sparkles v-else :size="16" />
@@ -2638,7 +2698,14 @@ onActivated(() => {
       </div>
       <p v-else class="preview-hint">详情加载后会显示关联原件。</p>
     </article>
-    <ReportNotesPanel v-if="detail" :key="reportId" :report-id="reportId" />
+    <ReportNotesPanel v-if="detail" :key="`${reportId}:${notesRevision}`" :report-id="reportId" />
+    <section v-if="detail?.combinationUndo" class="preview-card report-combination-info" aria-label="合并信息">
+      <div class="report-combination-info__summary">
+        <p>最近合并：{{ detail.combinationUndo.sourceTitle || '另一份报告' }}</p>
+        <time>{{ formatDatabaseTimeWithYear(detail.combinationUndo.createdAt) }}</time>
+      </div>
+      <button v-if="canManageReport" class="soft-action-button" type="button" :disabled="undoCombinationLoading || jobsLoading || hasRunningJobs" title="撤销最近一次合并，恢复原来的两份报告" @click="askUndoCombination"><RotateCcw :size="15" />{{ undoCombinationLoading ? '正在检查' : '撤销合并' }}</button>
+    </section>
   </div>
 
   </template>

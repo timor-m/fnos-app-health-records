@@ -1,3 +1,4 @@
+import {reportCombinationSchemaSql} from './report-combination-draft';
 import {trendSnapshotSchemaSql} from './trend-snapshot-draft';
 import { memberMergeSchemaSql } from "./member-merge-draft";
 import { feedbackNotificationsSchemaSql } from "./feedback-notifications";
@@ -594,6 +595,7 @@ ${feedbackNotificationsSchemaSql}
 ${uploadReceiptSchemaSql}
 ${pageAppendSchemaSql}
 ${reportDuplicateDraftSql}
+${reportCombinationSchemaSql}
 ${reportExaminationDraftSql}
 ${trendSnapshotSchemaSql}
 `;

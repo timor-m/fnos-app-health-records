@@ -1296,7 +1296,7 @@ export function getReportDetail(
     .prepare(
       `
     SELECT ex.id AS examinationId,ex.occurred_at AS examinationTime,ex.time_kind AS examinationTimeKind,
-      ex.confirmation_status AS examinationTimeStatus,
+      ex.confirmation_status AS examinationTimeStatus, ex.institution AS examinationInstitution,
       o.id, o.report_id AS reportId, o.section_name AS sectionName, o.item_code AS itemCode,
       o.item_name AS itemName, o.normalized_name AS normalizedName, o.result_text AS resultText,
       o.numeric_value AS numericValue, o.unit,
@@ -1324,6 +1324,7 @@ export function getReportDetail(
     .all(reportId)
     .map((item) => {
       const row = item as unknown as Observation & {
+        examinationInstitution: string | null;
         evidenceJson: string;
         normalizationMatchedBy: string | null;
         hasAiExtraction: number;
@@ -1349,7 +1350,7 @@ export function getReportDetail(
         trendAdmission: row.examinationTimeStatus === 'pending'
           ? { eligible: false, kind: null, reason: '请先确认检查时间' }
           : assessTrendAdmission({ ...row, reportId, hasAiExtraction: row.hasAiExtraction,
-            hospitalName: admissionReport.hospitalName, reportType: admissionReport.reportType,
+            hospitalName: row.examinationInstitution || admissionReport.hospitalName, reportType: admissionReport.reportType,
             reportIssuedAt: row.examinationId ? row.examinationTime : admissionReport.reportIssuedAt }),
       });
       const reference = assessPersistedObservationReference(row);
@@ -1799,6 +1800,7 @@ export function getReportDetail(
     billingSummary,
     billingItems,
     structuredSections,
+    combinationUndo: getDatabase().prepare('SELECT c.id,r.title AS sourceTitle,c.created_at AS createdAt FROM report_combinations c JOIN reports r ON r.id=c.source_report_id WHERE c.target_report_id=? AND c.undone_at IS NULL ORDER BY c.rowid DESC LIMIT 1').get(reportId) as {id:string;sourceTitle:string;createdAt:string}|undefined || null,
     manualFieldKeys: [...listManualReportFieldKeys(reportId)],
     duplicateCandidates,
     duplicateSearch: options.includeDuplicateCandidates === false ? undefined : duplicateSearchInfo(reportId,duplicateCandidates.length),
@@ -2510,43 +2512,33 @@ export async function getReportPageOcrDetail(
 }
 
 export function confirmReportReady(user: RequestUser, reportId: string) {
-  const report = getDatabase()
-    .prepare(
-      "SELECT member_id AS memberId, status FROM reports WHERE id = ? AND status <> 'trashed'",
-    )
-    .get(reportId) as { memberId: string; status: string } | undefined;
-  if (!report)
-    throw createError({ statusCode: 404, statusMessage: "报告不存在" });
-  assertMemberManage(user, report.memberId);
-  assertNoPageAppend(reportId);
-  if (report.status === "ready") return { id: reportId, status: "ready" };
-  if (report.status !== "needs_review") {
-    throw createError({
-      statusCode: 409,
-      statusMessage: "只有待确认报告可以归档",
-    });
-  }
   const db = getDatabase();
-  db.prepare(
-    "UPDATE reports SET status = 'ready', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-  ).run(reportId);
-  db.prepare(
-    `
-    INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
-    VALUES (?, ?, 'report.confirm_ready', 'report', ?, ?)
-  `,
-  ).run(
-    createId("audit"),
-    user.id,
-    reportId,
-    JSON.stringify({ memberId: report.memberId }),
-  );
-  const reminder = createReportSuggestionReminder(user, reportId);
-  return {
-    id: reportId,
-    status: "ready",
-    ...(reminder ? { reminderCreated: true } : {}),
-  };
+  const result = runInTransaction(db, () => {
+    const report = db.prepare(
+      "SELECT member_id AS memberId, status FROM reports WHERE id = ? AND status <> 'trashed'",
+    ).get(reportId) as { memberId: string; status: string } | undefined;
+    if (!report) throw createError({ statusCode: 404, statusMessage: "报告不存在" });
+    assertMemberManage(user, report.memberId);
+    assertNoPageAppend(reportId);
+    if (report.status === "ready") return { id: reportId, status: "ready" as const, changed: false };
+    if (!["needs_review", "failed"].includes(report.status)) {
+      throw createError({ statusCode: 409, statusMessage: "只有待确认或识别失败的报告可以归档" });
+    }
+    if (report.status === "failed" && db.prepare("SELECT 1 FROM processing_jobs WHERE report_id=? AND status IN ('queued','processing') LIMIT 1").get(reportId)) {
+      throw createError({ statusCode: 409, statusMessage: "报告仍在处理中，请等待处理结束后归档" });
+    }
+    db.prepare("UPDATE reports SET status = 'ready', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(reportId);
+    db.prepare(`
+      INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
+      VALUES (?, ?, 'report.confirm_ready', 'report', ?, ?)
+    `).run(createId("audit"), user.id, reportId, JSON.stringify({
+      memberId: report.memberId,
+      ...(report.status === "failed" ? { previousStatus: "failed", manualConfirmation: true } : {}),
+    }));
+    return { id: reportId, status: "ready" as const, changed: true };
+  });
+  const reminder = result.changed ? createReportSuggestionReminder(user, reportId) : null;
+  return { id: reportId, status: "ready" as const, ...(reminder ? { reminderCreated: true } : {}) };
 }
 
 export function trashReport(user: RequestUser, reportId: string) {
@@ -3993,7 +3985,7 @@ function remapEvidenceValue(
   return { value: output, originalReferenceCount, remainingReferenceCount };
 }
 
-function remapReportEvidencePageNumbers(
+export function remapReportEvidencePageNumbers(
   db: DatabaseSync,
   reportId: string,
   pageNumbers: Map<number, number | null>,
@@ -5133,7 +5125,7 @@ export function computeTrendSeries(options: TrendComputationOptions) {
       ex.id AS examinationId,ex.specimen AS examinationSpecimen,ex.method AS examinationMethod,COALESCE(ex.time_kind,'report') AS timeKind,
       COALESCE(ex.time_precision,'unknown') AS timePrecision,COALESCE(ex.confirmation_status,'legacy') AS timeStatus,
       ex.time_text AS timeText,
-      r.hospital_name_raw AS hospitalName,
+      COALESCE(NULLIF(ex.institution,''),r.hospital_name_raw) AS hospitalName,
       hm.birth_date AS memberBirthDate
     FROM observations o
     LEFT JOIN observation_normalizations n ON n.observation_id = o.id
@@ -6333,6 +6325,8 @@ const auditActionTitles: Record<string, string> = {
   "report.restore": "恢复报告",
   "report.purge": "永久删除报告",
   "report.merge_duplicate": "合并重复报告",
+  "report.combine": "合并报告",
+  "report.combine_undo": "撤销报告合并",
   "report.reprocess_ocr_ai": "重新识别报告",
   "report.manual_update": "校对报告字段",
   "report.pages.update": "调整报告页面",
