@@ -22,7 +22,7 @@ import { linkedObservationUnitQuotes } from "./observation-unit-evidence.service
 import { unitFromResultCell } from "./measurement-units.service";
 
 export function activeIndicatorNormalizationVersion() {
-  return `indicator-normalization-p14-unit-scale-reference-expression-${activeIndicatorDictionaryVersion()}`;
+  return `indicator-normalization-p15-unit-scale-reference-expression-isotype-${activeIndicatorDictionaryVersion()}`;
 }
 
 function normalizationVersion() {
@@ -312,6 +312,7 @@ function compactIndicatorKey(value: string | null | undefined) {
 
 const protectedIndicatorQualifiers = /高切|中切|低切|空腹|餐后|随机|卧位|立位|吸气|呼气|左侧|右侧|双侧|直接|间接|总量|定性|定量|绝对值|百分比|百分率|百分数|比例|比率|^\d+\s*\/\s*s$|^[GT]$|^Ig[GMAED]$/i;
 const indicatorCodePattern = /^[A-Za-z][A-Za-z0-9.+-]{0,15}[#%]?$/;
+const immunoglobulinIsotypePattern = /^Ig[GMAED][1-4]?$/i;
 
 /**
  * 生成跨机构通用名称候选。只拆解形如 WBC、NEUT%、ALT 的指标代码，
@@ -345,7 +346,8 @@ export function indicatorNameCandidates(value: string | null | undefined) {
   const withoutNormalMarker = raw.replace(/^\s*[（(]\s*N\s*[）)]\s*/i, "");
   if (withoutNormalMarker !== raw && withoutNormalMarker.length >= 2) add(withoutNormalMarker);
   const brackets = [...raw.matchAll(/[（(]([^（）()]*)[）)]/g)];
-  const protectedBracket = brackets.some((match) => protectedIndicatorQualifiers.test(match[1] || ""));
+  const protectedBracket = brackets.some((match) => protectedIndicatorQualifiers.test(match[1] || "")
+    || immunoglobulinIsotypePattern.test((match[1] || "").trim()));
   if (protectedBracket) candidates.add(compactQualifiedIndicatorKey(raw));
   else add(raw);
 
@@ -367,19 +369,19 @@ export function indicatorNameCandidates(value: string | null | undefined) {
         add(base + content);
       }
     }
-    if (!indicatorCodePattern.test(content)) continue;
+    if (!indicatorCodePattern.test(content) || immunoglobulinIsotypePattern.test(content)) continue;
     add(content);
     withoutCodes = withoutCodes.replace(match[0], " ");
   }
   if (withoutCodes !== raw) add(withoutCodes);
 
   const prefixCode = raw.match(/^\s*([A-Za-z][A-Za-z0-9.+-]{0,15}[#%]?)\s*[-:：/\\]?\s*([\u3400-\u9fff].*)$/);
-  if (prefixCode) {
+  if (prefixCode && !immunoglobulinIsotypePattern.test(prefixCode[1])) {
     add(prefixCode[1]);
     add(prefixCode[2]);
   }
   const suffixCode = raw.match(/^(.+?[\u3400-\u9fff）)])\s*[-:：/\\]?\s*([A-Za-z][A-Za-z0-9.+-]{0,15}[#%]?)\s*$/);
-  if (suffixCode) {
+  if (suffixCode && !immunoglobulinIsotypePattern.test(suffixCode[2])) {
     add(suffixCode[1]);
     add(suffixCode[2]);
   }
@@ -1400,7 +1402,13 @@ function normalizeObservationAutomatically(row: ObservationRow): NormalizationRe
     || specimenContext(row.reportType)
     || specimenContext((getDatabase().prepare('SELECT title FROM reports WHERE id = ?')
       .get(row.reportId) as { title: string } | undefined)?.title || '');
+  const isotypesIn = (value: string) => (value.match(/Ig[GMAED][1-4]?(?![a-z\d])/gi) || [])
+    .map((value) => value.toLowerCase());
+  const sourceIsotypes = isotypesIn(`${row.itemName} ${row.itemCode || ""}`);
   const candidates = candidateAliases(row).filter(({ alias }) => {
+    // An isotype is part of antibody identity, even when a generic code or AI name also matches.
+    const aliasIsotypes = isotypesIn(`${alias.displayName} ${alias.aliasName}`);
+    if (sourceIsotypes.some((isotype) => !aliasIsotypes.includes(isotype))) return false;
     // A ratio must never be admitted through its denominator's code or AI name.
     if (/[\/／]|比值|比例/.test(row.itemName)
       && /载脂蛋白|APO/i.test(row.itemName)
