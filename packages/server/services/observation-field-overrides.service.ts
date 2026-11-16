@@ -8,7 +8,7 @@ import { rollbackAfterError, getDatabase } from "../database/client";
 import type { RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 import { assertMemberManage } from "./member.service";
-import { ensureBuiltinIndicatorCatalog, normalizeReportObservations } from "./indicator-normalization.service";
+import { assessTrendAdmission, ensureBuiltinIndicatorCatalog, normalizeReportObservations } from "./indicator-normalization.service";
 import { deriveObservationDisplayAbnormal } from "./observation-interpretation.service";
 
 export type EditableObservationFields = {
@@ -374,6 +374,83 @@ export function updateManualObservation(
     throw error;
   }
   normalizeReportObservations(reportId);
+}
+
+export type TrendIncludeResult = {
+  included: boolean;
+  pendingTime: boolean;
+  canonicalName: string;
+  reason: string | null;
+};
+
+/** Confirm one already-matched observation into its current standard series. */
+export function includeObservationInTrend(
+  user: RequestUser,
+  reportId: string,
+  observationId: string,
+  input: Record<string, unknown>,
+): TrendIncludeResult {
+  if (!reportId || !observationId || reportId.length > 80 || observationId.length > 80) {
+    throw createError({ statusCode: 400, statusMessage: "指标 ID 无效" });
+  }
+  const canonicalKey = validatedCanonicalKey(input);
+  if (!canonicalKey) throw createError({ statusCode: 400, statusMessage: "请选择要纳入的标准指标" });
+  const current = getDatabase().prepare(`
+    SELECT o.section_name AS sectionName, o.item_code AS itemCode, o.item_name AS itemName,
+      o.result_text AS resultText, o.numeric_value AS numericValue, o.unit,
+      o.reference_low AS referenceLow, o.reference_high AS referenceHigh,
+      o.reference_text AS referenceText, o.abnormal_flag AS abnormalFlag,
+      n.canonical_key AS currentCanonicalKey
+    FROM observations o
+    LEFT JOIN observation_normalizations n ON n.observation_id = o.id
+    WHERE o.id = ? AND o.report_id = ?
+  `).get(observationId, reportId) as (EditableObservationFields & { currentCanonicalKey: string | null }) | undefined;
+  if (!current) throw createError({ statusCode: 404, statusMessage: "指标不存在" });
+  if (current.currentCanonicalKey !== canonicalKey) {
+    throw createError({ statusCode: 409, statusMessage: "这条记录尚未归到当前标准指标，请先在报告详情中选择标准指标" });
+  }
+  updateManualObservation(user, reportId, observationId, { ...current, canonicalKey });
+  const row = getDatabase().prepare(`
+    SELECT o.item_name AS itemName, o.item_code AS itemCode, o.section_name AS sectionName,
+      o.result_text AS resultText, o.numeric_value AS numericValue, o.unit,
+      o.evidence_json AS evidenceJson,
+      n.canonical_name AS canonicalName, n.canonical_unit AS canonicalUnit,
+      n.quality AS normalizationQuality, n.matched_by AS normalizationMatchedBy,
+      n.excluded_reason AS normalizationExcludedReason,
+      EXISTS (SELECT 1 FROM report_extractions e WHERE e.report_id = o.report_id) AS hasAiExtraction,
+      EXISTS (SELECT 1 FROM observation_field_overrides v WHERE v.observation_id = o.id) AS manualReviewed,
+      r.report_type AS reportType, r.hospital_name_raw AS hospitalName, r.report_issued_at AS reportIssuedAt,
+      COALESCE(ex.confirmation_status, 'legacy') AS timeStatus
+    FROM observations o
+    JOIN reports r ON r.id = o.report_id
+    LEFT JOIN observation_normalizations n ON n.observation_id = o.id
+    LEFT JOIN observation_examinations oe ON oe.observation_id = o.id
+    LEFT JOIN report_examinations ex ON ex.id = oe.examination_id
+    WHERE o.id = ? AND o.report_id = ?
+  `).get(observationId, reportId) as {
+    itemName: string; itemCode: string | null; sectionName: string | null; resultText: string;
+    numericValue: number | null; unit: string | null; evidenceJson: string; canonicalName: string | null;
+    canonicalUnit: string | null; normalizationQuality: string | null; normalizationMatchedBy: string | null;
+    normalizationExcludedReason: string | null; hasAiExtraction: number; manualReviewed: number;
+    reportType: string; hospitalName: string | null; reportIssuedAt: string | null; timeStatus: string;
+  };
+  const admission = assessTrendAdmission({
+    reportId, itemName: row.itemName, itemCode: row.itemCode, sectionName: row.sectionName,
+    numericValue: row.numericValue, resultText: row.resultText, unit: row.unit, evidenceJson: row.evidenceJson,
+    normalizationQuality: row.normalizationQuality, normalizationMatchedBy: row.normalizationMatchedBy,
+    normalizationExcludedReason: row.normalizationExcludedReason, canonicalKey, canonicalName: row.canonicalName,
+    canonicalUnit: row.canonicalUnit, hasAiExtraction: row.hasAiExtraction, manualReviewed: row.manualReviewed,
+    hospitalName: row.hospitalName, reportType: row.reportType, reportIssuedAt: row.reportIssuedAt,
+  });
+  const pendingTime = row.timeStatus === "pending";
+  return {
+    included: admission.eligible && !pendingTime,
+    pendingTime,
+    canonicalName: row.canonicalName || "",
+    reason: admission.eligible
+      ? (pendingTime ? "请先确认检查时间，确认后会出现在趋势图上" : null)
+      : admission.reason,
+  };
 }
 
 export function deleteManualObservation(user: RequestUser, reportId: string, observationId: string) {
