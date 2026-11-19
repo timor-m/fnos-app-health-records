@@ -22,7 +22,7 @@ import { linkedObservationUnitQuotes } from "./observation-unit-evidence.service
 import { unitFromResultCell } from "./measurement-units.service";
 
 export function activeIndicatorNormalizationVersion() {
-  return `indicator-normalization-p15-unit-scale-reference-expression-isotype-${activeIndicatorDictionaryVersion()}`;
+  return `indicator-normalization-p16-unit-scale-reference-expression-isotype-${activeIndicatorDictionaryVersion()}`;
 }
 
 function normalizationVersion() {
@@ -1406,6 +1406,8 @@ function normalizeObservationAutomatically(row: ObservationRow): NormalizationRe
     .map((value) => value.toLowerCase());
   const sourceIsotypes = isotypesIn(`${row.itemName} ${row.itemCode || ""}`);
   const candidates = candidateAliases(row).filter(({ alias }) => {
+    // Explicit qualitative tests cannot borrow a quantitative identity through a shared code or AI name.
+    if (/定性/.test(row.itemName) && alias.valueType === 'numeric') return false;
     // An isotype is part of antibody identity, even when a generic code or AI name also matches.
     const aliasIsotypes = isotypesIn(`${alias.displayName} ${alias.aliasName}`);
     if (sourceIsotypes.some((isotype) => !aliasIsotypes.includes(isotype))) return false;

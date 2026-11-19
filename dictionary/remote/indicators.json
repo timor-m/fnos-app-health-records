@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 27,
+  "revision": 28,
   "indicators": [
     {
       "canonicalKey": "lipid_ldl_hdl_ratio",
@@ -5465,6 +5465,156 @@
         "产前筛查"
       ],
       "explanation": "血清游离人绒毛膜促性腺激素β亚单位质量浓度；不与完整或总 hCG、未注明游离的β-hCG、α亚单位或 MoM 合并。保留原报告单位和参考范围，不由系统换算或推断检测含义。"
+    },
+    {
+      "canonicalKey": "laboratory_lipase",
+      "displayName": "脂肪酶",
+      "categoryKey": "laboratory_other",
+      "order": 120,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/L",
+      "unitDimension": "enzyme_activity",
+      "aliases": [
+        "脂肪酶",
+        "脂肪酶(LIP)",
+        "血清脂肪酶",
+        "Lipase"
+      ],
+      "allowedUnits": [
+        "U/L"
+      ],
+      "sectionHints": [
+        "生化",
+        "胰腺功能"
+      ],
+      "explanation": "血清脂肪酶活性结果，保留原报告单位与参考范围；不与血清脂浊指数混用。"
+    },
+    {
+      "canonicalKey": "metabolic_beta_hydroxybutyrate",
+      "displayName": "β-羟丁酸",
+      "categoryKey": "laboratory_other",
+      "order": 121,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "mmol/L",
+      "unitDimension": "molar_concentration",
+      "aliases": [
+        "β-羟丁酸",
+        "β羟丁酸",
+        "β-羟丁酸(β-HB)",
+        "β-HB",
+        "BHB",
+        "Beta-Hydroxybutyrate"
+      ],
+      "allowedUnits": [
+        "mmol/L"
+      ],
+      "sectionHints": [
+        "生化",
+        "血酮",
+        "酮体"
+      ],
+      "explanation": "血液中β-羟丁酸浓度，与尿酮体和α-羟丁酸脱氢酶不同，不进行跨单位换算。"
+    },
+    {
+      "canonicalKey": "blood_gas_cohb",
+      "displayName": "碳氧血红蛋白",
+      "categoryKey": "laboratory_other",
+      "order": 122,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "碳氧血红蛋白",
+        "碳氧血红蛋白 COHb",
+        "COHb",
+        "一氧化碳血红蛋白"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "血气分析",
+        "血气"
+      ],
+      "explanation": "血气分析中的碳氧血红蛋白占比，不与总血红蛋白浓度或氧合血红蛋白合并。"
+    },
+    {
+      "canonicalKey": "blood_gas_thb",
+      "displayName": "总血红蛋白浓度",
+      "categoryKey": "laboratory_other",
+      "order": 123,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "whole_blood",
+      "defaultUnit": "g/dL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "总血红蛋白浓度",
+        "总血红蛋白浓度(tHb)",
+        "tHb"
+      ],
+      "allowedUnits": [
+        "g/dL"
+      ],
+      "sectionHints": [
+        "血气分析",
+        "血气"
+      ],
+      "explanation": "血气分析中的总血红蛋白浓度，独立保留检测来源，不与血红蛋白亚型比例混用。"
+    },
+    {
+      "canonicalKey": "stool_hookworm_eggs",
+      "displayName": "粪便钩虫卵",
+      "categoryKey": "stool_analysis",
+      "order": 20,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "钩虫卵",
+        "钩虫卵检查",
+        "粪便钩虫卵",
+        "大便钩虫卵"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "便常规",
+        "粪便常规",
+        "寄生虫检查"
+      ],
+      "explanation": "粪便钩虫卵的定性镜检结果，仅用于有无或阴阳性记录；虫卵计数和每克虫卵数不作为该项目的数值趋势。"
+    },
+    {
+      "canonicalKey": "stool_whipworm_eggs",
+      "displayName": "粪便鞭虫卵",
+      "categoryKey": "stool_analysis",
+      "order": 21,
+      "kind": "categorical",
+      "valueType": "positive_negative",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "categorical",
+      "aliases": [
+        "鞭虫卵",
+        "鞭虫卵检查",
+        "粪便鞭虫卵",
+        "大便鞭虫卵"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "便常规",
+        "粪便常规",
+        "寄生虫检查"
+      ],
+      "explanation": "粪便鞭虫卵的定性镜检结果，仅用于有无或阴阳性记录；虫卵计数和每克虫卵数不作为该项目的数值趋势。"
     }
   ],
   "extensions": [
@@ -5594,7 +5744,9 @@
         "γ-谷氨酰基转肽酶",
         "-谷氨酰基转肽酶(Y-GT)",
         "谷氨酰基转肽酶(Y-GT)",
-        "Y-GT"
+        "Y-GT",
+        "血清γ-谷氨酰基转移酶测定",
+        "血清y-谷氨酰基转移酶测定"
       ],
       "sectionHints": [
         "肝功能",
@@ -5620,7 +5772,8 @@
       "aliases": [
         "嗜酸细胞绝对数",
         "嗜酸性细胞绝对值",
-        "嗜酸性细胞总数"
+        "嗜酸性细胞总数",
+        "嗜酸粒细胞绝对值"
       ],
       "sectionHints": [
         "血常规",
@@ -5648,7 +5801,8 @@
       "aliases": [
         "嗜碱细胞绝对数",
         "嗜碱性细胞绝对值",
-        "嗜碱性细胞总数"
+        "嗜碱性细胞总数",
+        "嗜碱粒细胞绝对值"
       ],
       "sectionHints": [
         "血常规",
@@ -6087,6 +6241,53 @@
         "乙肝两对半",
         "乙型肝炎"
       ]
+    },
+    {
+      "canonicalKey": "electrolyte_calcium",
+      "aliases": [
+        "总钙",
+        "血清总钙"
+      ],
+      "sectionHints": []
+    },
+    {
+      "canonicalKey": "liver_ibil",
+      "aliases": [
+        "血清间接胆红素(计算值)(非结合胆红素)",
+        "血清间接胆红素",
+        "间接胆红素(计算值)"
+      ],
+      "sectionHints": []
+    },
+    {
+      "canonicalKey": "urine_protein",
+      "aliases": [
+        "尿蛋白质"
+      ],
+      "sectionHints": []
+    },
+    {
+      "canonicalKey": "urine_protein_quantitative",
+      "aliases": [
+        "尿蛋白质"
+      ],
+      "sectionHints": []
+    },
+    {
+      "canonicalKey": "body_fat_percentage",
+      "aliases": [
+        "体脂百分比%"
+      ],
+      "sectionHints": []
+    },
+    {
+      "canonicalKey": "liver_ast_alt_ratio",
+      "aliases": [
+        "天门冬氨酸氨基转移酶/丙氨酸氨基转移酶(计算值)",
+        "天门冬氨酸氨基转移酶/丙氨酸氨基转移酶",
+        "天门冬氨酸/丙氨酸氨基转移酶比值"
+      ],
+      "sectionHints": []
     }
   ],
   "redirects": {}

@@ -2,7 +2,7 @@
 export function cleanIndicatorName(value: string, options: { tableOrdinal?: boolean } = {}) {
   const decorated = value
     .normalize('NFKC')
-    .replace(/^[\s*﹡★☆¥￥"“”'‘’「」『』]+|[\s*﹡★☆¥￥"“”'‘’「」『』]+$/g, '')
+    .replace(/^[\s*﹡★☆△¥￥"“”'‘’「」『』]+|[\s*﹡★☆△¥￥"“”'‘’「」『』]+$/g, '')
     .replace(/^(指标|项目)\s*:\s*/, '');
   /* 小结/综述页的异常枚举（"3、血清总胆固醇测定增高:5.48mmol/L(参考区间:…)"）：
      先剥序号前缀，再把名称截止到"测定增高/阳性"等判断词与冒号之前。
@@ -11,8 +11,8 @@ export function cleanIndicatorName(value: string, options: { tableOrdinal?: bool
   let cleaned = decorated.replace(/^\d+\s*[、.．]\s*/, '');
   cleaned = cleaned
     .replace(/^(?:No\.?\s*\d{1,3}\s*|\(\d{1,3}\)\s*)/i, '')
-    .replace(/^\d{1,3}\s*[*★☆]+\s*/, '')
-    .replace(/^[\s*★☆]+/, '');
+    .replace(/^\d{1,3}\s*[*★☆△]+\s*/, '')
+    .replace(/^[\s*★☆△]+/, '');
   // Bare row numbers need table context; numeric medical qualifiers remain intact.
   if (options.tableOrdinal && !/^\d+(?:小时|分钟|型|羟|α|β|γ|[,，-])/u.test(cleaned)) {
     cleaned = cleaned.replace(/^\d{1,3}\s*(?=[\p{Script=Han}])/u, '');

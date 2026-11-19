@@ -162,7 +162,7 @@ test("merged thyroid and hepatitis collection names install, backfill and roll b
     assert.equal(quantitativeAntigen.canonicalUnit, null);
 
     const currentVersion = activeIndicatorNormalizationVersion();
-    const oldVersion = currentVersion.replace("p15-unit-scale-reference-expression-isotype", "p14-unit-scale-reference-expression");
+    const oldVersion = currentVersion.replace(/^indicator-normalization-p\d+/, "indicator-normalization-p14");
     assert.notEqual(oldVersion, currentVersion, "rule changes must invalidate persisted matches");
     db.prepare(`UPDATE observation_normalizations SET canonical_key='infectious_hbcab',
       indicator_id=(SELECT id FROM indicator_catalog WHERE canonical_key='infectious_hbcab'),
