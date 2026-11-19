@@ -154,6 +154,7 @@ export type ReportMedication = {
   reportId: string;
   sectionName: string | null;
   context: "prescription" | "outpatient" | "inpatient" | "discharge" | "other";
+  formula?: import('../../shared/medication-formula').MedicationFormula | null;
   medicationName: string;
   genericName: string | null;
   specification: string | null;
@@ -187,6 +188,7 @@ export type ReportProcedure = {
 };
 
 export type VaccinationRecord = {
+  confirmedVaccinationId?: string | null;
   id: string;
   reportId: string;
   vaccineName: string;
@@ -298,6 +300,9 @@ export type ReportPage = {
 };
 
 export type ReportSummary = {
+  eventId?: string | null;
+  eventTitle?: string | null;
+  eventCount?: number;
   deletedAt?: string | null;
   purgeAfter?: string | null;
   id: string;

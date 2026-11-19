@@ -1,15 +1,16 @@
 import {mount,flushPromises,type VueWrapper} from '@vue/test-utils';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import Editor from '../src/components/MorphologyFindingEditor.vue';
+import {useConfirm} from '../src/composables/useConfirm';
 import FormSelect from '../src/components/FormSelect.vue';
 const request=vi.hoisted(()=>vi.fn());
 vi.mock('../src/utils/api',()=>({request:(...args:unknown[])=>request(...args)}));
 const finding={id:'f',reportId:'r',organ:'肝脏',region:null,laterality:'right' as const,findingType:'囊肿',findingName:'合成记录',presence:'present' as const,size:{length:8,width:null,height:null,unit:'mm'},morphology:null,classification:null,rawText:'合成原文',evidence:[{pageNumber:2,quote:'合成原文'}]};
-const report={id:'r',memberId:'member',title:'合成报告',pages:[{id:'p1',pageNumber:1},{id:'p2',pageNumber:2}],morphologyFindings:[finding]};
+const report={id:'r',sourceVersion:7,memberId:'member',title:'合成报告',pages:[{id:'p1',pageNumber:1},{id:'p2',pageNumber:2}],morphologyFindings:[finding]};
 let w:VueWrapper;
 const render=(props:Record<string,unknown>={})=>w=mount(Editor,{props:{open:true,finding:null,memberId:'member',reportId:'r',...props},global:{stubs:{Teleport:true}}});
 beforeEach(()=>{request.mockReset();request.mockResolvedValue(report);});
-afterEach(()=>{w?.unmount();});
+afterEach(()=>{useConfirm().cancel();w?.unmount();});
 async function choose(label:string,value:string){const c=w.findAllComponents(FormSelect).find(c=>c.get('button').attributes('aria-label')===label)!;c.vm.$emit('update:modelValue',value);await flushPromises();}
 
 it('creates only in the current report with its chosen page, without a second report picker',async()=>{
@@ -33,7 +34,7 @@ it('edits only changed fields and retains the draft after save failures',async()
  await w.findAll('input[type="number"]')[1].setValue('9');
  request.mockRejectedValueOnce(new Error('合成失败'));await w.get('form').trigger('submit');await flushPromises();
  expect(w.text()).toContain('合成失败');expect(w.emitted('saved')).toBeUndefined();
- expect(JSON.parse(request.mock.calls.at(-1)![1].body)).toEqual({sizeLength:9});
+ expect(JSON.parse(request.mock.calls.at(-1)![1].body)).toEqual({sizeLength:9,expectedSourceVersion:7});
  await choose('来源页','1');await w.get('[aria-label="形态原文"]').setValue('更正原文');await w.get('form').trigger('submit');await flushPromises();
  expect(JSON.parse(request.mock.calls.at(-1)![1].body)).toMatchObject({sourcePageNumber:'1',rawText:'更正原文'});
 });
@@ -55,10 +56,27 @@ it('does not claim the first page as the source of an existing finding without e
  render({finding});await flushPromises();
  expect(w.findAllComponents(FormSelect).find(c=>c.get('button').attributes('aria-label')==='来源页')!.props('modelValue')).toBe('');
  await w.findAll('input[type="number"]')[1].setValue('9');await w.get('form').trigger('submit');await flushPromises();
- expect(JSON.parse(request.mock.calls.at(-1)![1].body)).toEqual({sizeLength:9});
+ expect(JSON.parse(request.mock.calls.at(-1)![1].body)).toEqual({sizeLength:9,expectedSourceVersion:7});
 });
 it('retries loading only the fixed source report after a load failure',async()=>{
  request.mockRejectedValueOnce(new Error('来源加载失败'));render();await flushPromises();expect(w.text()).toContain('来源加载失败');
  await w.findAll('button').find(b=>b.text()==='重试')!.trigger('click');await flushPromises();
  expect(request.mock.calls.map(c=>c[0])).toEqual(['reports/r?includeDuplicateCandidates=false','reports/r?includeDuplicateCandidates=false']);expect(w.text()).toContain('来源：合成报告');
+});
+
+it('keeps a supplied edit version and guards unsaved creation without removing the report-only entry',async()=>{
+ render({expectedSourceVersion:6});await flushPromises();
+ const required=w.findAll('input[required]');await required[0].setValue('合成部位');await required[1].setValue('合成类型');await required[2].setValue('合成名称');
+ await choose('来源页','1');await w.get('[aria-label="形态原文"]').setValue('合成原文');
+ await w.findAll('button').find(b=>b.text()==='取消')!.trigger('click');await flushPromises();
+ expect(useConfirm().state.value?.title).toBe('放弃未保存的修改？');expect(w.emitted('close')).toBeUndefined();useConfirm().cancel();
+ request.mockResolvedValueOnce({});await w.get('form').trigger('submit');await flushPromises();
+ expect(JSON.parse(request.mock.calls.at(-1)![1].body).expectedSourceVersion).toBe(6);
+});
+it('does not apply a late save result to another report',async()=>{
+ render({finding});await flushPromises();await w.findAll('input[type="number"]')[1].setValue('9');
+ let finish!:(v:unknown)=>void;request.mockReturnValueOnce(new Promise(resolve=>finish=resolve));
+ await w.get('form').trigger('submit');
+ await w.setProps({reportId:'r2',finding:{...finding,id:'f2',reportId:'r2'}});await flushPromises();
+ finish({});await flushPromises();expect(w.emitted('saved')).toBeUndefined();expect(w.emitted('close')).toBeUndefined();
 });

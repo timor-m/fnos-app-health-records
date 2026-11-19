@@ -1,7 +1,14 @@
+import NewVaccinationPage from './pages/NewVaccinationPage.vue';
 import MemberMergeSettingsPage from "./pages/settings/MemberMergeSettingsPage.vue";
 import { createRouter, createWebHistory } from "vue-router";
+import { confirmUnsavedRecordChanges } from './utils/record-edit-guards';
 import OverviewPage from "./pages/OverviewPage.vue";
 import RecordsPage from "./pages/RecordsPage.vue";
+import HealthEventsPage from "./pages/HealthEventsPage.vue";
+import HealthRecordDetailPage from "./pages/HealthRecordDetailPage.vue";
+import HealthProcessesPage from "./pages/HealthProcessesPage.vue";
+import HealthProcessDetailPage from "./pages/HealthProcessDetailPage.vue";
+import NewSymptomPage from "./pages/NewSymptomPage.vue";
 import TrendsPage from "./pages/TrendsPage.vue";
 import MorphologyTrendsPage from "./pages/MorphologyTrendsPage.vue";
 import UploadPage from "./pages/UploadPage.vue";
@@ -32,11 +39,17 @@ const router = createRouter({
   history: createWebHistory(base),
   routes: [
     { path: "/", redirect: "/overview" },
-    { path: "/overview", component: OverviewPage, meta: { title: "概览", subtitle: "报告、提醒和趋势摘要" } },
+    { path: "/overview", component: OverviewPage, meta: { title: "概览" } },
+    { path: "/events", component: HealthEventsPage, meta: { title: "记录", subtitle: "报告、影像、症状、用药与接种" } },
+    { path: "/events/detail/:kind/:id", component: HealthRecordDetailPage, meta: { title: "记录详情" } },
+    { path: "/health-processes", component: HealthProcessesPage, meta: { title: "健康历程" } },
+    { path: "/health-processes/:id", component: HealthProcessDetailPage, meta: { title: "健康历程" } },
+    { path: "/add/vaccination", component: NewVaccinationPage, meta: { title: "填写接种" } },
+    { path: "/add/symptom", component: NewSymptomPage, meta: { title: "记录症状" } },
     { path: "/records", component: RecordsPage, meta: { title: "档案" } },
     { path: "/trends", component: TrendsPage, meta: { title: "趋势" } },
     { path: "/trends/morphology", component: MorphologyTrendsPage, meta: { title: "形态变化", subtitle: "追踪历次形态变化" } },
-    { path: "/upload", component: UploadPage, meta: { title: "上传报告", subtitle: "拍照或上传 PDF，自动识别归档" } },
+    { path: "/upload", component: UploadPage, meta: { title: "上传档案", subtitle: "拍照或上传报告、病历等资料" } },
     { path: "/reminders", component: RemindersPage, meta: { title: "提醒", subtitle: "集中处理即将到期的健康事项" } },
     { path: "/me", component: SettingsPage, meta: { title: "我的", subtitle: "账号、成员与识别服务" } },
     { path: "/me/members", component: MembersSettingsPage, meta: { title: "家庭成员" } },
@@ -61,6 +74,8 @@ const router = createRouter({
     { path: "/:pathMatch(.*)*", redirect: "/overview" }
   ]
 });
+
+router.beforeEach((to, from) => to.fullPath === from.fullPath ? true : confirmUnsavedRecordChanges());
 
 router.beforeEach(async (to) => {
   const app = useAppContext();

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import {useUnsavedRecord} from "../composables/useUnsavedRecord";
+import { computed, nextTick, onBeforeUnmount,onActivated,onDeactivated, ref, watch } from "vue";
 import { Eye, EyeOff, Pencil, Plus, ShieldCheck, Trash2, UserRound, UsersRound, X } from "@lucide/vue";
 import { useAppContext } from "../composables/useAppContext";
 import { useConfirm } from "../composables/useConfirm";
@@ -9,6 +10,7 @@ import FormSelect from "./FormSelect.vue";
 import type { AccessUser, HealthMember, MemberAccess } from "../types/api";
 import { request } from "../utils/api";
 
+const props=defineProps<{editMemberId?:string}>();const emit=defineEmits<{saved:[id:string]}>();
 const app = useAppContext();
 const confirmDialog = useConfirm();
 const relationshipLabels: Record<string, string> = {
@@ -74,7 +76,12 @@ async function saveBatchPermission() {
     }
   });
 }
-const form = ref({ displayName: "", relationship: "child", birthDate: "", sex: "", bloodTypeAbo: "", bloodTypeRh: "" });
+const form = ref({ displayName: "", relationship: "child", birthDate: "", sex: "", bloodTypeAbo: "", bloodTypeRh: "",careAllergies:"",careHistory:"",careMedications:"",careBackgroundVersion:"" });
+const memberLeave=useUnsavedRecord(()=>editorOpen.value?JSON.stringify(form.value):'',saving);let editorGeneration=0,requestedMember='';
+async function closeEditor(){if(await memberLeave.confirmLeave()){editorOpen.value=false;editorGeneration++;memberLeave.reset();}}
+function openRequested(){const id=props.editMemberId;if(!id||id===requestedMember)return;const member=app.allMembers.value.find(m=>m.id===id&&m.permission==='manager');if(member){requestedMember=id;void openEditor(member,true);}}
+watch(()=>[props.editMemberId,app.allMembers.value],()=>{openRequested();if(editorOpen.value&&editingId.value&&!app.allMembers.value.some(m=>m.id===editingId.value&&m.permission==='manager')){editorOpen.value=false;editorGeneration++;memberLeave.reset();}},{immediate:true});
+onActivated(()=>{requestedMember='';openRequested();});onDeactivated(()=>{editorOpen.value=false;editorGeneration++;memberLeave.reset();});
 const showHidden=ref(false);
 const displayedMembers=computed(()=>app.allMembers.value.filter(member=>Boolean(member.hidden)===showHidden.value));
 async function toggleHidden(member:HealthMember) {
@@ -91,13 +98,13 @@ useScrollLock(computed(() => editorOpen.value || accessOpen.value));
 function onModalKeydown(event: KeyboardEvent) {
   if (event.key !== "Escape" || confirmDialog.state.value || saving.value) return;
   if (accessOpen.value) closeAccess();
-  else if (editorOpen.value) editorOpen.value = false;
+  else if (editorOpen.value) void closeEditor();
 }
 watch([editorOpen, accessOpen], ([editor, access]) => {
   if (editor || access) window.addEventListener("keydown", onModalKeydown);
   else window.removeEventListener("keydown", onModalKeydown);
 });
-onBeforeUnmount(() => { ++scopeRequest; window.removeEventListener("keydown", onModalKeydown); });
+onBeforeUnmount(() => { ++editorGeneration;++scopeRequest; window.removeEventListener("keydown", onModalKeydown); });
 function closeAccess() {
   if (saving.value || confirmDialog.state.value) return;
   ++scopeRequest;
@@ -117,7 +124,7 @@ function resetForm(member?: HealthMember) {
     birthDate: member?.birthDate || "",
     sex: member?.sex || "",
     bloodTypeAbo: member?.bloodTypeAbo || "",
-    bloodTypeRh: member?.bloodTypeRh || ""
+    bloodTypeRh: member?.bloodTypeRh || "",careAllergies:member?.careAllergies||"",careHistory:member?.careHistory||"",careMedications:member?.careMedications||"",careBackgroundVersion:member?.careBackgroundVersion||""
   };
   error.value = "";
 }
@@ -130,24 +137,26 @@ function bloodTypeLabel(member: HealthMember) {
   return [abo, rh].filter(Boolean).join(" · ");
 }
 
-async function openEditor(member?: HealthMember) {
+async function openEditor(member?: HealthMember,background=false) {
+  editorGeneration++;
   resetForm(member);
-  editorOpen.value = true;
+  editorOpen.value = true;memberLeave.reset();
   await nextTick();
-  document.querySelector<HTMLInputElement>("#member-display-name")?.focus();
+  document.querySelector<HTMLElement>(background?"#member-care-allergies":"#member-display-name")?.focus({preventScroll:!background});
 }
 
 async function saveMember() {
+  if(saving.value)return;const generation=editorGeneration,target=editingId.value;
   saving.value = true;
   error.value = "";
   try {
-    const body = JSON.stringify(form.value);
+    const body = JSON.stringify({...form.value,relationship:form.value.relationship==='shared'?undefined:form.value.relationship});
     if (editingId.value) await request(`members/${editingId.value}`, { method: "PUT", body });
     else await request("members", { method: "POST", body:JSON.stringify({...form.value,createSelf:form.value.relationship==='self'}) });
     await app.refreshMembers();
-    editorOpen.value = false;
+    if(generation!==editorGeneration)return;editorOpen.value = false;memberLeave.reset();emit("saved",target);
   } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "保存失败";
+    if(generation===editorGeneration)error.value = cause instanceof Error ? cause.message : "保存失败";
   } finally {
     saving.value = false;
   }
@@ -300,11 +309,11 @@ const permissionOptions = [
     </div>
   </section>
 
-  <div v-if="editorOpen" class="modal-backdrop" @click.self="editorOpen = false">
-    <section class="modal-panel" role="dialog" aria-modal="true" :aria-label="editorTitle">
+  <div v-if="editorOpen" class="modal-backdrop" @click.self="closeEditor">
+    <section class="modal-panel record-sheet member-editor-modal" role="dialog" aria-modal="true" :aria-label="editorTitle">
       <span class="sheet-grabber" aria-hidden="true"></span>
-      <header><div><UserRound :size="20" /><h3>{{ editorTitle }}</h3></div><button type="button" title="关闭" @click="editorOpen = false"><X :size="19" /></button></header>
-      <form class="member-form" @submit.prevent="saveMember">
+      <header><div><UserRound :size="20" /><h3>{{ editorTitle }}</h3></div><button type="button" title="关闭" :disabled="saving" @click="closeEditor"><X :size="19" /></button></header>
+      <form class="member-form" @submit.prevent="saveMember"><div class="member-editor-body"><fieldset :disabled="saving">
         <label><span>姓名或称呼</span><input id="member-display-name" v-model="form.displayName" maxlength="40" required /></label>
         <div class="form-grid">
           <label><span>家庭关系</span><FormSelect v-model="form.relationship" :options="relationshipOptions" :disabled="Boolean(editingId) && form.relationship === 'self'" aria-label="家庭关系" /></label>
@@ -315,8 +324,9 @@ const permissionOptions = [
           <label><span>Rh 血型</span><FormSelect v-model="form.bloodTypeRh" :options="bloodTypeRhOptions" aria-label="Rh 血型" /></label>
         </div>
         <label><span>出生日期</span><DateTimePicker v-model="form.birthDate" :min-year="1900" :max-year="currentYear" aria-label="出生日期" /></label>
-        <p v-if="error" class="form-error">{{ error }}</p>
-        <div class="form-actions"><button type="button" @click="editorOpen = false">取消</button><button class="primary-button" type="submit" :disabled="saving">{{ saving ? "保存中" : "保存" }}</button></div>
+        <section class="member-health-background" aria-label="重要健康背景"><h4>重要健康背景（选填）</h4><p>就诊摘要会自动带出。没有或不清楚请明确填写，留空表示未填写。</p><label><span>过敏及不良反应</span><textarea id="member-care-allergies" v-model="form.careAllergies" rows="2" maxlength="2000" placeholder="已知过敏物及具体反应"/></label><label><span>重要病史</span><textarea v-model="form.careHistory" rows="2" maxlength="2000" placeholder="重要既往疾病、手术等"/></label><label><span>长期用药</span><textarea v-model="form.careMedications" rows="2" maxlength="2000" placeholder="药名及用法等；不会修改已有用药记录"/></label></section>
+        <p v-if="error" class="form-error">{{ error }}</p></fieldset></div>
+        <div class="form-actions"><button type="button" :disabled="saving" @click="closeEditor">取消</button><button class="primary-button" type="submit" :disabled="saving">{{ saving ? "保存中" : "保存" }}</button></div>
       </form>
     </section>
   </div>
@@ -366,3 +376,7 @@ const permissionOptions = [
     </section>
   </div>
 </template>
+
+<style scoped>
+.member-editor-modal{max-height:88vh;max-height:88dvh}.member-editor-modal>.member-form{padding:0;display:flex;flex-direction:column;min-height:0;overflow:hidden;gap:0}.member-editor-body{min-height:0;overflow:auto;position:relative;overscroll-behavior:contain}.member-editor-body label{display:grid;gap:7px;color:var(--muted);font-size:12px}.member-editor-body fieldset{display:grid;gap:12px;border:0;margin:0;padding:12px 14px;min-width:0}.member-editor-modal .form-actions{flex-shrink:0;padding:8px 14px;margin:0;border-top:1px solid var(--line)}.member-health-background{display:grid;gap:10px;border-top:1px solid var(--line);padding-top:12px}.member-health-background h4{margin:0;font-size:14px;font-weight:500}.member-health-background p{margin:0;font-size:12px;line-height:19px;color:var(--muted)}.member-health-background textarea{width:100%;min-width:0;font:inherit;font-size:14px;line-height:21px;padding:8px 10px;border:1px solid var(--line-strong);border-radius:var(--radius-s);background:var(--surface);color:var(--ink)}.member-health-background textarea:focus{outline:2px solid var(--brand-soft);border-color:var(--brand)}
+</style>

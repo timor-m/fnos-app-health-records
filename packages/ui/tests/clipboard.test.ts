@@ -1,0 +1,7 @@
+import {afterEach,expect,it,vi} from 'vitest';
+import {copyTextToClipboard} from '../src/utils/clipboard';
+const original=Object.getOwnPropertyDescriptor(document,'execCommand');
+afterEach(()=>{vi.unstubAllGlobals();if(original)Object.defineProperty(document,'execCommand',original);else delete (document as any).execCommand;});
+it('copies with the secure clipboard API when available',async()=>{const writeText=vi.fn().mockResolvedValue(undefined);vi.stubGlobal('navigator',{clipboard:{writeText}});expect(await copyTextToClipboard('合成摘要')).toBe(true);expect(writeText).toHaveBeenCalledWith('合成摘要');});
+it('falls back in HTTP or after denied clipboard permission and always removes its temporary field',async()=>{vi.stubGlobal('navigator',{clipboard:{writeText:vi.fn().mockRejectedValue(Error('denied'))}});const fallback=vi.fn(()=>true);Object.defineProperty(document,'execCommand',{value:fallback,configurable:true});expect(await copyTextToClipboard('合成摘要')).toBe(true);expect(fallback).toHaveBeenCalledWith('copy');expect(document.querySelector('textarea')).toBeNull();vi.stubGlobal('navigator',{});expect(await copyTextToClipboard('合成摘要')).toBe(true);});
+it('reports failure for manual selection when both copy methods are unavailable',async()=>{vi.stubGlobal('navigator',{});Object.defineProperty(document,'execCommand',{value:()=>{throw Error('unsupported');},configurable:true});expect(await copyTextToClipboard('合成摘要')).toBe(false);expect(document.querySelector('textarea')).toBeNull();});

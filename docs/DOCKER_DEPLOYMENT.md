@@ -66,6 +66,14 @@ docker compose up -d
 
 保持原数据卷或数据目录配置。回滚与恢复步骤见 [备份与恢复](./BACKUP_RESTORE.md)。
 
+## 从 feat-event 分支发布版本镜像
+
+当前仓库推送 `feat-event` 分支时，由独立的 `Docker Image (feat-event)` 工作流完成校验、测试、Docker 启动检查及双架构镜像发布。沿用仓库的 `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN` Secrets 和可选的 `DOCKERHUB_IMAGE` 变量。
+
+镜像标签取自 `package.json` 的版本号，当前只发布 `0.3.0`，不增加分支标签，也不更新 `latest`，不创建 Git tag、FPK 或 GitHub Release。工作流会核对发布前后的 `latest` digest；应用版本、schema 编号和 Unreleased 状态保持不变。
+
+在 `.env` 中设置 `HEALTH_RECORDS_VERSION=0.3.0`，然后按上述升级步骤拉取镜像并重建容器。需要固定某次构建时，使用工作流摘要中的 digest；同一应用版本再次构建会更新对应版本标签。建议先使用独立数据卷测试；已有数据升级前先创建完整备份，回退旧版按[备份与恢复](./BACKUP_RESTORE.md)处理。
+
 ## 启动异常
 
 查看容器状态和最近日志：

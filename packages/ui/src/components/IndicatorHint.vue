@@ -86,9 +86,10 @@ onBeforeUnmount(cleanup);
 .indicator-hint-toggle:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .indicator-hint-panel {
   position: fixed; z-index: 160; width: max-content; max-width: min(320px, calc(100vw - 24px));
+  max-height: 40vh;
   max-height: 40dvh; overflow: auto; padding: 12px 14px; border: 1px solid var(--line);
   border-radius: 12px; background: var(--surface); color: var(--muted);
-  box-shadow: 0 8px 28px #0003; font-size: 13px; line-height: 1.6; white-space: pre-line;
+  box-shadow: 0 8px 28px #0003; font-size: 12px; line-height: 1.6; white-space: pre-line;
   overflow-wrap: anywhere; box-sizing: border-box;
 }
 </style>

@@ -1,3 +1,5 @@
+import {updateClinicalFact,deleteClinicalFact} from '../services/clinical-fact.service';
+import {syntheticFormula,syntheticFormulaPages} from './fixtures/decoction-formula';
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -9,6 +11,7 @@ import {
   detectTableSerialGapPages,
   executeAiExtractionPlan,
   mergeAiExtractionResults,
+  deduplicateMedicationContinuations,
   visionReviewCandidates,
   finalLayoutWarnings,
   withoutSupersededOcrObservations
@@ -2862,6 +2865,77 @@ test(`routes and persists prescription facts in ${extractionDepth} without a sep
 });
 }
 
+for (const depth of ['overview','detailed'] as const) {
+  test(`decoction formula preserves all ingredient evidence and stays one medication in ${depth}`,async()=>{
+    await withReport(2,async({reportId,jobId})=>{
+      getDatabase().prepare("UPDATE app_settings SET value_json=? WHERE setting_key='ai.provider'").run(JSON.stringify({extractionDepth:depth}));
+      const executor:AiExecutor=async input=>({provider:'test',model:'test',promptVersion:'test',
+        ...normalizeAiExtraction({reportType:'prescription',medications:input.route==='narrative'?[{
+          medicationName:'合成汤剂',context:'prescription',formula:syntheticFormula,
+        },{medicationName:'药材甲',context:'prescription',evidence:syntheticFormula.ingredients[0].evidence}]:[]}),
+        rawResponseJson:'{}',promptTokens:1,completionTokens:1,elapsedMs:1});
+      const execution=await executeAiExtractionPlan(jobId,reportId,executor);
+      assert.equal(execution.result.fields.medications.length,1);
+      const formula=execution.result.fields.medications[0].formula;
+      assert.equal(formula?.ingredients.length,6);
+      assert.ok(formula?.ingredients.every(item=>item.evidence.length));
+      assert.deepEqual([...new Set(execution.result.fields.medications[0].evidence.map(item=>item.pageNumber))],[1,2]);
+      persistAiExtraction(reportId,jobId,execution.result,execution.inputCharacters);
+      const saved=getDatabase().prepare('SELECT formula_json,dose FROM report_medications WHERE report_id=?').all(reportId);
+      assert.equal(saved.length,1);assert.equal(JSON.parse(String(saved[0].formula_json)).ingredients.length,6);
+      assert.equal(saved[0].dose,null);
+      const db=getDatabase();
+      db.prepare("INSERT INTO member_permissions(member_id,user_id,permission,granted_by) VALUES('member','owner','manager','owner')").run();
+      const owner={id:'owner',displayName:'合成管理',provider:'development' as const,authenticated:true,isGatewayAdmin:true};
+      const stored=db.prepare('SELECT id,formula_json FROM report_medications WHERE report_id=?').get(reportId)!;
+      const corrected=JSON.parse(String(stored.formula_json));corrected.ingredients[0].amount='99';
+      updateClinicalFact(owner,'medication',String(stored.id),{formula:corrected});
+      persistAiExtraction(reportId,jobId,execution.result,execution.inputCharacters);
+      assert.equal(db.prepare('SELECT count(*) n FROM report_medications WHERE report_id=?').get(reportId)?.n,1);
+      assert.equal(JSON.parse(String(db.prepare('SELECT formula_json FROM report_medications WHERE id=?').get(stored.id)?.formula_json)).ingredients[0].amount,'99');
+      deleteClinicalFact(owner,'medication',String(stored.id));
+      persistAiExtraction(reportId,jobId,execution.result,execution.inputCharacters);
+      assert.equal(db.prepare('SELECT count(*) n FROM report_medications WHERE report_id=? AND is_deleted=0').get(reportId)?.n,0);
+      assert.equal(getDatabase().prepare('SELECT count(*) n FROM observations').get()?.n,0);
+    },syntheticFormulaPages);
+  });
+}
+
+test('decoction with an invented constituent is rejected instead of silently saving an incomplete recipe',async()=>{
+  await withReport(2,async({reportId,jobId})=>{
+    const formula=structuredClone(syntheticFormula);formula.ingredients[0].name='虚构药材';formula.ingredients[0].evidence=[];
+    const executor:AiExecutor=async input=>({provider:'test',model:'test',promptVersion:'test',
+      ...normalizeAiExtraction({reportType:'prescription',medications:input.route==='narrative'?[{medicationName:'合成汤剂',formula}]:[]}),
+      rawResponseJson:'{}',promptTokens:1,completionTokens:1,elapsedMs:1});
+    const execution=await executeAiExtractionPlan(jobId,reportId,executor);
+    assert.equal(execution.result.fields.medications.length,0);
+    assert.throws(()=>persistAiExtraction(reportId,jobId,execution.result,execution.inputCharacters),{code:'AI_NO_VERIFIED_MEDICATIONS'});
+  },syntheticFormulaPages);
+});
+
+test("dispensing persists individual drugs and rejects empty or unverified medication results", async () => {
+  const rows=["药材调剂单（代煎）", "剂数：3", "合成药甲 8g", "合成药乙 12g"];
+  for (const mode of ["valid", "empty", "unverified"] as const) {
+    await withReport(1,async({reportId,jobId})=>{
+      const executor: AiExecutor=async input=>({provider:"test",model:"test",promptVersion:"test",
+        ...normalizeAiExtraction({reportType:"prescription", medications:input.route==="narrative" && mode!=="empty"
+          ? ["合成药甲","合成药乙"].map((medicationName,index)=>({medicationName:mode==="unverified"?"虚构药品":medicationName,context:"prescription",
+            instructions:mode==="unverified"?null:`原文用量：${index===0?8:12}g`,p:1,q:mode==="unverified"?"不存在的原文":rows[index+2]})) : []}),
+        rawResponseJson:"{}",promptTokens:0,completionTokens:0,elapsedMs:1});
+      const execution=await executeAiExtractionPlan(jobId,reportId,executor);
+      if(mode!=="valid") {
+        assert.throws(()=>persistAiExtraction(reportId,jobId,execution.result,execution.inputCharacters),
+          {code:"AI_NO_VERIFIED_MEDICATIONS"});
+        assert.equal(getDatabase().prepare("SELECT count(*) n FROM report_medications").get()?.n,0);
+        return;
+      }
+      persistAiExtraction(reportId,jobId,execution.result,execution.inputCharacters);
+      assert.equal(getDatabase().prepare("SELECT count(*) n FROM report_medications WHERE medication_context='prescription'").get()?.n,2);
+      assert.equal(getDatabase().prepare("SELECT count(*) n FROM observations").get()?.n,0);
+    },()=>rows);
+  }
+});
+
 test("extracts and persists synthetic medication layouts in overview and detailed modes", async () => {
   for (const layout of medicationLayouts) {
     for (const extractionDepth of ["overview", "detailed"] as const) {
@@ -2895,6 +2969,14 @@ test("extracts and persists synthetic medication layouts in overview and detaile
       }, pageNumber => [...layout.pages[pageNumber - 1]]);
     }
   }
+});
+
+test('same-named decoctions with different recipes are kept separate',()=>{
+  const second=structuredClone(syntheticFormula);second.ingredients[0].amount='99';
+  const results=[syntheticFormula,second].map(formula=>({provider:'test',model:'test',promptVersion:'test',
+    ...normalizeAiExtraction({medications:[{medicationName:'合成汤剂',formula}]}),
+    rawResponseJson:'{}',promptTokens:0,completionTokens:0,elapsedMs:1}));
+  assert.equal(mergeAiExtractionResults(results).fields.medications.length,2);
 });
 
 test("does not merge medication entries with different dose units or instructions", () => {
@@ -4074,3 +4156,19 @@ test('glued ordinals on single-character table names retain row evidence through
     assert.deepEqual(rows.map(row=>[row.name,row.value]).sort(),[['乙',8.6],['甲',6.4]].sort());
   }, () => ['项目 | 结果 | 单位 | 参考范围','1甲 | 6.4 | mmol/L | 1-9','2乙 | 8.6 | mmol/L | 1-9']);
 });
+
+test('deduplicates only unique explicit adjacent-page numbered medication continuations and retains both sources',async()=>{await withReport(2,async()=>{
+ const makePlan=(heading='出院带药清单续表')=>planRebuiltOcrPages('continuation-test',rebuildOcrPages([
+  {pageId:'p1',pageNumber:1,linesJson:JSON.stringify([{text:'出院小结'},{text:'1 合成药品甲片 10mg/片'}])},
+  {pageId:'p2',pageNumber:2,linesJson:JSON.stringify([{text:heading},{text:'1 每次1片 每日2次 口服'}])}
+ ]),'overview');
+ const medications=normalizeAiExtraction({medications:[
+  {medicationName:'合成药品甲片',context:'discharge',specification:'10mg/片',dose:'1',doseUnit:'片',frequency:'每日2次',route:'口服',p:1,q:'1 合成药品甲片 10mg/片'},
+  {medicationName:'合成药品甲片',context:'discharge',dose:'1',doseUnit:'片',frequency:'每日2次',route:'口服',p:2,q:'1 每次1片 每日2次 口服'}
+ ]}).fields.medications;
+ const merged=deduplicateMedicationContinuations(makePlan(),medications);assert.equal(merged.length,1);assert.equal(merged[0].specification,'10mg/片');assert.deepEqual(merged[0].evidence.map(item=>item.pageNumber),[1,2]);
+ assert.equal(deduplicateMedicationContinuations(makePlan('普通用药清单'),medications).length,2);
+ assert.equal(deduplicateMedicationContinuations(makePlan(),[medications[0],{...medications[1],dose:'2'}]).length,2);
+ assert.equal(deduplicateMedicationContinuations(makePlan(),[medications[0],{...medications[1],specification:'20mg/片'}]).length,2);
+ assert.equal(deduplicateMedicationContinuations(makePlan(),[medications[0],{...medications[0]},medications[1]]).length,3);
+});});

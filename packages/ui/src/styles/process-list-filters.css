@@ -1,0 +1,20 @@
+.process-filter-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px; min-width: 0; }
+.process-filter-row { display: flex; align-items: center; min-width: 0; gap: 6px; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; touch-action: pan-x pinch-zoom; padding: 3px 2px; scroll-padding-inline: 2px; scrollbar-width: thin; }
+.process-filter-row button { display: inline-flex; align-items: center; flex: 0 0 auto; min-height: 32px; padding: 4px 12px; border: 1px solid transparent; border-radius: 999px; color: var(--muted); background: var(--fill-2); font: inherit; font-size: 12px; line-height: 22px; white-space: nowrap; }
+.process-filter-row button[aria-pressed=true] { color: var(--brand-strong); border-color: var(--brand); background: var(--brand-soft); }
+.process-filter-secondary button { background: transparent; font-size: 12px; }
+.process-filter-secondary button[aria-pressed=true] { border-color: transparent; }
+.health-processes-page > .health-index-panel { margin-top: -6px; }
+.process-filter-clear { min-height: 32px; padding: 4px 7px; border: 0; border-radius: 0; color: var(--brand-strong); background: linear-gradient(90deg, transparent, var(--background) 30%, var(--background) 70%, transparent); font: inherit; font-size: 12px; line-height: 20px; white-space: nowrap; }
+.process-filter-row button:focus-visible, .process-filter-clear:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+@media (hover:hover) { .process-filter-row button:hover:not([aria-pressed=true]) { background: var(--fill-3); color: var(--ink); } }
+@media (max-width:760px), (pointer:coarse) {
+  .process-filter-bar, .health-processes-page > .health-index-panel > .process-filter-secondary { margin-inline: calc(-1 * var(--page-content-inset, 16px)); }
+  .process-filter-row { gap: 3px; padding: 4px var(--page-content-inset, 16px); scroll-padding-inline: var(--page-content-inset, 16px); scrollbar-width: none; }
+  .process-filter-row::-webkit-scrollbar { display: none; }
+  .process-filter-row button { min-height: 28px; padding: 4px 9px; font-size: 12px; line-height: 18px; }
+  .process-filter-secondary button { min-height: 26px; padding: 3px 8px; }
+  .process-filter-clear { min-height: 28px; margin-inline-end: var(--page-content-inset, 16px); line-height: 18px; }
+  .process-filter-bar:has(.process-filter-clear) > .process-filter-row { padding-inline-end: 2px; }
+  .health-processes-page > .health-index-panel { margin-top: -6px; }
+}

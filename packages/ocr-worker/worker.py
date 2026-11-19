@@ -2147,6 +2147,34 @@ def sideways_table(lines):
             and sum(bool(re.search(r'项目|名称|结果|参考范围', str(line.get('text', '')))) for line in lines) >= 2)
 
 
+DISPENSING_TITLE = re.compile(r'(?:调剂|配药|发药)单(?!号)')
+DISPENSING_AMOUNT = re.compile(r'\d+(?:\.\d+)?\s*(?:mg|g|毫克|克|ml|毫升)(?![A-Za-z/／])', re.I)
+
+
+def dispensing_quarter_turn(lines):
+    """Choose one turn only when a dispensing heading establishes the top edge."""
+    text = re.sub(r'\s+', '', unicodedata.normalize('NFKC', '\n'.join(str(line.get('text', '')) for line in lines)))
+    if (not DISPENSING_TITLE.search(text) or not re.search(r'药材|饮片|代煎|处方|剂数', text)
+            or re.search(r'药品说明书|药物说明书', text)):
+        return 0
+    boxes = [box for line in lines if (box := line_rect(line))]
+    if len(boxes) < 6 or sum(b[3]-b[1] > (b[2]-b[0])*1.5 for b in boxes) < len(boxes)*.6:
+        return 0
+    left, right = min(b[0] for b in boxes), max(b[2] for b in boxes)
+    if right <= left:
+        return 0
+    angles = set()
+    for line in lines:
+        if not DISPENSING_TITLE.search(re.sub(r'\s+', '', str(line.get('text', '')))):
+            continue
+        box = line_rect(line)
+        if not box or box[3]-box[1] <= (box[2]-box[0])*1.5:
+            return 0
+        fraction = ((box[0]+box[2])/2-left)/(right-left)
+        angles.add(90 if fraction <= .35 else 270 if fraction >= .65 else 0)
+    return angles.pop() if len(angles) == 1 and 0 not in angles else 0
+
+
 def upright_table_score(lines, height):
     names = [line_rect(line) for line in lines if re.fullmatch(r'项目名称|项目|名称|检验项目', str(line.get('text', '')).strip())]
     results = [line_rect(line) for line in lines if str(line.get('text', '')).strip().startswith('结果')]
@@ -2187,7 +2215,32 @@ def recognize_image(engine: Any, image_path: Path, image_role: str | None, enhan
                         'source':'photo_perspective','ocr':elapsed}
         result, engine_elapsed = engine(str(image_path))
         primary_lines = normalize_result(result)
-        if enhance_tables and sideways_table(primary_lines):
+        sideways_laboratory = enhance_tables and sideways_table(primary_lines)
+        dispensing_angle = 0 if sideways_laboratory else dispensing_quarter_turn(primary_lines)
+        if dispensing_angle:
+            # PDF rendering disables generic table enhancement. This narrowly
+            # scoped pixel pass must still run before coordinates are restored.
+            try:
+                from PIL import Image
+                with Image.open(image_path) as image, tempfile.TemporaryDirectory(prefix='health-dispensing-direction-') as temp_name:
+                    width, height = image.size
+                    path = Path(temp_name)/'upright.png'
+                    with image.rotate(-dispensing_angle, expand=True) as turned:
+                        turned.save(path)
+                    candidate, elapsed = engine(str(path))
+                    candidate = normalize_result(candidate)
+                    amount_count = lambda lines: sum(len(DISPENSING_AMOUNT.findall(str(line.get('text', '')))) for line in lines)
+                    upright_heading = any(DISPENSING_TITLE.search(re.sub(r'\s+', '', str(line.get('text', ''))))
+                        and (box := line_rect(line)) and box[2]-box[0] > (box[3]-box[1])*1.5 for line in candidate)
+                    if (upright_heading and len(candidate) >= len(primary_lines)*.8
+                            and amount_count(candidate) > amount_count(primary_lines)):
+                        if enhance_tables:
+                            candidate = enhance_page_lines(path, candidate)
+                        return restore_quarter_turn(candidate, dispensing_angle, width, height), {
+                            'source': 'quarter_turn_dispensing', 'rotation': dispensing_angle, 'ocr': elapsed}
+            except Exception:
+                pass  # A failed optional turn cannot erase the primary OCR.
+        if sideways_laboratory:
             from PIL import Image
             with Image.open(image_path) as image, tempfile.TemporaryDirectory(prefix='health-table-direction-') as temp_name:
                 width, height = image.size

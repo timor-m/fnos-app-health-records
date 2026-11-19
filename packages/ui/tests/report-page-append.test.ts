@@ -436,3 +436,14 @@ it("renders the append entry on HTTP NAS addresses without randomUUID", async ()
   await flushPromises();
   expect(wrapper.find('[role="dialog"]').exists()).toBe(true);
 });
+
+it('uses attachment wording for the original attachment action and keeps ordinary report wording unchanged',async()=>{
+ wrapper=mount(Panel,{props:{reportId:'report',oldPageCount:1,label:'上传附件'}});
+ expect(wrapper.get('button[aria-haspopup="dialog"]').attributes('aria-label')).toBe('上传附件');
+ await wrapper.get('button[aria-haspopup="dialog"]').trigger('click');await flushPromises();
+ expect(wrapper.get('[role="dialog"]').attributes('aria-label')).toBe('上传附件');
+ expect(wrapper.text()).toContain('附件将添加到当前原件中');expect(wrapper.text()).not.toContain('其他检查');
+ expect(wrapper.find('[aria-label="选择附件"]').exists()).toBe(true);
+ await wrapper.setProps({label:undefined});expect(wrapper.text()).toContain('将页面补充到当前报告');
+ expect(wrapper.find('[aria-label="选择补充报告文件"]').exists()).toBe(true);
+});

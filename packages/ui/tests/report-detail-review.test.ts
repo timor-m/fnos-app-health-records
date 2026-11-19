@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { flushPromises, mount } from "@vue/test-utils";
+import { DOMWrapper, flushPromises, mount } from "@vue/test-utils";
 import { ref } from "vue";
 
 vi.mock("../src/composables/useAppContext", () => ({
@@ -14,6 +14,7 @@ vi.mock("../src/composables/useConfirm", () => ({ useConfirm: () => ({ ask: vi.f
 vi.mock("../src/composables/useToast", () => ({ useToast: () => ({ show: vi.fn() }) }));
 vi.mock("../src/composables/useScrollLock", () => ({ useScrollLock: () => {} }));
 
+import FormSelect from "../src/components/FormSelect.vue";
 import ReportDetail from "../src/components/ReportDetail.vue";
 
 const observation = {
@@ -104,6 +105,30 @@ afterEach(() => {
 });
 
 describe("ReportDetail 核对指标模式", () => {
+  it.each(['stale','failed'])('keeps the %s duplicate recheck inside the notice content without rerunning extraction',async status=>{
+    let checked=false;
+    fetchMock.mockImplementation(async(input:RequestInfo|URL)=>{
+      const url=String(input).replace('?includeDuplicateCandidates=false','');
+      if(url.endsWith('/api/reports/r1/duplicate-recheck')){checked=true;return jsonResponse({checked:true});}
+      if(url.endsWith('/api/reports/r1'))return jsonResponse({...detailPayload,duplicateVerification:{status:checked?'complete':status}});
+      if(url.includes('/original/status'))return jsonResponse({status:'ready'});
+      if(url.includes('jobs'))return jsonResponse([]);
+      if(url.includes('/notes'))return jsonResponse({notes:[],canManage:false});
+      return jsonResponse({});
+    });
+    const wrapper=await mountReview('');
+    try{
+      const notice=wrapper.findAll('.duplicate-warning').find(item=>item.text().includes('重新核验'))!;
+      expect(notice.find(':scope > svg').exists()).toBe(true);
+      expect(notice.find(':scope > p, :scope > button').exists()).toBe(false);
+      expect(notice.get(':scope > div > p').text()).toContain(status==='stale'?'判重规则已更新':'重复核验暂未完成');
+      const button=notice.get(':scope > div > .duplicate-actions > button');
+      await button.trigger('click');await flushPromises();
+      expect(callsTo('/duplicate-recheck')).toHaveLength(1);
+      expect(checked).toBe(true);expect(wrapper.text()).not.toContain('判重规则已更新');
+      expect(callsTo('/reprocess')).toHaveLength(0);
+    }finally{wrapper.unmount();}
+  });
   it('shows a compact direction warning only for stale pages without opening the original viewer', async () => {
     const pages = [1, 2].map(pageNumber => ({
       id: `p${pageNumber}`, reportId: 'r1', pageNumber, mimeType: 'image/png',
@@ -500,4 +525,29 @@ it('teleports only supplementation into a separate dialog and returns editing to
   expect(document.querySelector('[aria-label="补充指标来源页"]')).toBeNull();
   expect(document.querySelector('.observation-add-backdrop')).toBeNull();
  } finally {wrapper.unmount();}
+});
+
+it('corrects an other document through a type-only dialog while preserving unrelated metadata',async()=>{
+ let current={...detailPayload,reportType:'other',observations:[],summary:'合成原有结论'};
+ fetchMock.mockImplementation(async(input:RequestInfo|URL,options?:RequestInit)=>{
+  if(String(input).replace('?includeDuplicateCandidates=false', '').endsWith('/api/reports/r1')){if(options?.method==='PUT')current={...current,...JSON.parse(String(options.body)),sourceVersion:8};return jsonResponse(current);}
+  if(String(input).replace('?includeDuplicateCandidates=false', '').includes('jobs'))return jsonResponse([]);return jsonResponse({});
+ });
+ const wrapper=mount(ReportDetail,{attachTo:document.body,props:{reportId:'r1',variant:'panel'},global:{stubs:{RouterLink:true,ReportNotesPanel:true,ReportPageAppend:true}}});
+ try{await flushPromises();await flushPromises();expect(wrapper.text()).toContain('暂归为其他资料');
+ await wrapper.findAll('button').find(button=>button.text()==='修改类型')!.trigger('click');await flushPromises();
+ const dialog=new DOMWrapper(document.body).get('.report-type-form');wrapper.findAllComponents(FormSelect).find(select=>select.props('ariaLabel')==='资料类型')!.vm.$emit('update:modelValue','outpatient');await flushPromises();
+ await dialog.trigger('submit');await flushPromises();
+ const call=fetchMock.mock.calls.find(([,options])=>options?.method==='PUT')!;
+ expect(JSON.parse(String(call[1].body))).toEqual({reportType:'outpatient',expectedSourceVersion:7});
+ expect(document.querySelector('.report-type-form')).toBeNull();expect(current.summary).toBe('合成原有结论');
+ }finally{wrapper.unmount();}
+});
+it('offers confirmation on outpatient and inpatient clinical facts and links an already recorded vaccination',async()=>{
+ for(const reportType of ['outpatient','inpatient']){
+ const vaccinations=[{id:'v',vaccineName:'合成疫苗',doseNumber:'1',evidence:[],manualFields:[],confirmedVaccinationId:'confirmed'}];
+ fetchMock.mockImplementation(async(input:RequestInfo|URL)=>String(input).replace('?includeDuplicateCandidates=false', '').endsWith('/api/reports/r1')?jsonResponse({...detailPayload,reportType,observations:[],medications:[{id:'m',medicationName:'合成药品',evidence:[],manualFields:[]}],vaccinations}):String(input).replace('?includeDuplicateCandidates=false', '').includes('jobs')?jsonResponse([]):jsonResponse({}));
+ const wrapper=mount(ReportDetail,{attachTo:document.body,props:{reportId:'r1',variant:'panel'},global:{stubs:{RouterLink:{props:['to'],template:'<a><slot/></a>'},ReportNotesPanel:true,ReportPageAppend:true}}});
+ try{await flushPromises();await flushPromises();expect(wrapper.text()).toContain('报告所列用药');expect(wrapper.text()).toContain('确认实际使用');expect(wrapper.text()).toContain('查看已记录接种');expect(wrapper.text()).not.toContain('核对并记录');}finally{wrapper.unmount();}
+ }
 });

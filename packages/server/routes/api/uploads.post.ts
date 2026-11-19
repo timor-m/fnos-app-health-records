@@ -45,7 +45,12 @@ export default defineEventHandler(async (event) => {
   if (requestKey && (!Array.isArray(expectedPages) || expectedPages.length !== files.length || expectedPages.some((page, index) => page.size !== files[index]?.size))) {
     throw createError({ statusCode: 400, data: { code: "UPLOAD_INVALID" }, statusMessage: '文件清单与接收内容不一致，请重试整份报告' });
   }
-  const result = createUploadFromStagedFiles(user, memberId, files, requestKey);
+  let context;
+  if (fields.context) {
+    try { context = JSON.parse(fields.context); }
+    catch { throw createError({statusCode:400,statusMessage:'上传来源信息无效'}); }
+  }
+  const result = createUploadFromStagedFiles(user, memberId, files, requestKey, context);
   setResponseStatus(event, 201);
   return ok(result);
   });

@@ -1,16 +1,23 @@
 <script setup lang="ts">
 import MemberManager from "../components/MemberManager.vue";
 import { computed, onMounted, onBeforeUnmount, ref, watch } from "vue";
-import { useRoute } from "vue-router";
-import { Bell, Camera, ChartNoAxesCombined, ChevronsUpDown, FolderHeart, LayoutDashboard, Search, UserRound, X } from "@lucide/vue";
+import { useRoute, useRouter } from "vue-router";
+import { Bell, ChartNoAxesCombined, ChevronsUpDown, FolderHeart, LayoutDashboard, Search, UserRound, X } from "@lucide/vue";
 import appIcon from "../assets/app-icon.png";
 import MemberSwitcher from "../components/MemberSwitcher.vue";
 import SetupGuideModal from "../components/SetupGuideModal.vue";
+import QuickAddMenu from "../components/QuickAddMenu.vue";
 import { useAppContext } from "../composables/useAppContext";
 import { request } from "../utils/api";
+import { healthPageScrollKey } from '../utils/health-record-navigation';
 
 const app = useAppContext();
 const route = useRoute();
+const router = useRouter();
+watch(app.selectedMemberId, (next, previous) => {
+  if (previous && next !== previous && (/^\/(health-processes|add)\/[^/]+$/.test(route.path) || route.path.startsWith('/events/detail/'))) void router.replace('/events');
+  if (previous && next !== previous && route.path === '/events' && (route.query?.recordKind || route.query?.recordId || route.query?.add)) void router.replace('/events');
+}, { flush: 'sync' });
 const memberSheetOpen = ref(false);
 const topbarSearchFocused = ref(false);
 const topbarSearchInput = ref<HTMLInputElement | null>(null);
@@ -44,6 +51,7 @@ const accountRole = computed(() => {
 });
 const pageTitle = computed(() => (route.meta.title as string) || "健康档案");
 const pageSubtitleKey = computed(() => {
+  if (route.path === "/overview") return "overview";
   if (route.path === "/records") return "records";
   if (route.path === "/trends") return "trends";
   return "";
@@ -59,13 +67,15 @@ const reminderBadge = computed(() => {
   if (count <= 0) return "";
   return count > 99 ? "99+" : String(count);
 });
-function isNavActive(to: string) {
+function isNavActive(to: string, mobile = false) {
+  if (to === '/events' && (route.path === '/health-processes' || route.path.startsWith('/health-processes/') || route.path === '/records')) return true;
   return route.path === to || route.path.startsWith(`${to}/`);
 }
 // “我的”及其二级设置页统一展示账号信息顶栏，页面标题由页面内的 SubPageHeader 承担
 const isMePage = computed(() => route.path === "/me" || route.path.startsWith("/me/"));
 const topbarSearchPageKey = computed(() => {
   if (route.path === "/records") return "records";
+  if (route.path === "/events") return "events";
   if (route.path === "/trends" || route.path.startsWith("/trends/")) return "trends";
   return "";
 });
@@ -77,7 +87,7 @@ const topbarSearchPlaceholder = computed(() => {
   const search = activeTopbarSearch.value;
   if (topbarSearchFocused.value && search?.expandedPlaceholder) return search.expandedPlaceholder;
   return search?.placeholder
-    || (topbarSearchPageKey.value === "records" ? "搜索档案" : "搜索指标");
+    || (topbarSearchPageKey.value === "events" ? "搜索记录" : topbarSearchPageKey.value === "records" ? "搜索档案" : "搜索指标");
 });
 const topbarSearchValue = computed({
   get: () => activeTopbarSearch.value?.model.value || "",
@@ -107,12 +117,12 @@ watch([topbarSearchPageKey, () => app.topbarSearch.value?.key], () => {
 
 /* 页面缓存（KeepAlive）下的滚动位置记忆：切走前按路径保存；恢复放在 enter（新页已插入但淡入未开始），避免过渡期间位置漂移造成跳动 */
 const pageScrollPositions = new Map<string, number>();
-let activePath = route.fullPath;
+let activePath = healthPageScrollKey(route.fullPath, app.selectedMemberId.value);
 function savePageScroll() {
   pageScrollPositions.set(activePath, window.scrollY);
 }
 function restorePageScroll() {
-  activePath = route.fullPath;
+  activePath = healthPageScrollKey(route.fullPath, app.selectedMemberId.value);
   window.scrollTo(0, pageScrollPositions.get(activePath) ?? 0);
 }
 const sessionInitial = computed(() => app.session.value?.displayName?.slice(0, 1) || "我");
@@ -123,17 +133,17 @@ const providerLabel = computed(() => {
   return "fnOS 账号";
 });
 const roleLabel = computed(() => app.session.value?.isAdmin ? "管理员" : "家庭成员");
+const canManageSelectedMember = computed(() => app.selectedMember.value?.permission === 'manager');
 const navItems = [
   { to: "/overview", label: "概览", icon: LayoutDashboard },
-  { to: "/records", label: "档案", icon: FolderHeart },
-  { to: "/upload", label: "上传报告", icon: Camera, primary: true },
+  { to: "/events", label: "记录", icon: FolderHeart },
   { to: "/trends", label: "趋势", icon: ChartNoAxesCombined },
   { to: "/me", label: "我的", icon: UserRound, badge: reminderBadge }
 ];
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :class="{ 'is-vaccination-entry': route.path === '/add/vaccination' }">
     <aside class="sidebar">
       <div class="brand">
         <img :src="appIcon" alt="" />
@@ -148,13 +158,16 @@ const navItems = [
         </span>
       </button>
       <nav class="desktop-nav" aria-label="主导航">
-        <RouterLink v-for="item in navItems" :key="item.to" :to="item.to" :class="{ primary: item.primary, 'router-link-active': isNavActive(item.to) }">
-          <span class="nav-icon-wrap">
-            <component :is="item.icon" :size="item.primary ? 19 : 17" />
-            <span v-if="item.badge?.value" class="nav-badge">{{ item.badge.value }}</span>
-          </span>
-          <span>{{ item.label }}</span>
-        </RouterLink>
+        <template v-for="item in navItems" :key="item.to">
+          <RouterLink :to="item.to" :class="{ 'router-link-active': isNavActive(item.to) }">
+            <span class="nav-icon-wrap">
+              <component :is="item.icon" :size="17" />
+              <span v-if="item.badge?.value" class="nav-badge">{{ item.badge.value }}</span>
+            </span>
+            <span>{{ item.label }}</span>
+          </RouterLink>
+          <QuickAddMenu v-if="item.to === '/events'" placement="desktop" :can-manage="canManageSelectedMember" :route-key="route.fullPath" />
+        </template>
       </nav>
       <div class="account-summary">
         <span class="member-avatar small" aria-hidden="true">{{ app.session.value?.displayName?.slice(0, 1) }}</span>
@@ -199,6 +212,7 @@ const navItems = [
                 ref="topbarSearchInput"
                 v-model="topbarSearchValue"
                 :placeholder="topbarSearchPlaceholder"
+                :aria-label="activeTopbarSearch?.placeholder || topbarSearchPlaceholder"
                 enterkeyhint="search"
                 @focus="topbarSearchFocused = true"
                 @blur="topbarSearchFocused = false"
@@ -244,13 +258,16 @@ const navItems = [
     </section>
 
     <nav class="mobile-nav" aria-label="触屏导航">
-      <RouterLink v-for="item in navItems" :key="item.to" :to="item.to" :class="{ primary: item.primary, 'router-link-active': isNavActive(item.to) }" :aria-label="item.primary ? '拍照上传' : undefined">
-        <span class="mobile-nav-icon">
-          <component :is="item.icon" :size="item.primary ? 26 : 21" />
-          <span v-if="item.badge?.value" class="nav-badge mobile">{{ item.badge.value }}</span>
-        </span>
-        <span v-if="!item.primary">{{ item.label }}</span>
-      </RouterLink>
+      <template v-for="item in navItems" :key="item.to">
+        <RouterLink :to="item.to" :class="{ 'router-link-active': isNavActive(item.to, true) }">
+          <span class="mobile-nav-icon">
+            <component :is="item.icon" :size="21" />
+            <span v-if="item.badge?.value" class="nav-badge mobile">{{ item.badge.value }}</span>
+          </span>
+          <span>{{ item.label }}</span>
+        </RouterLink>
+        <QuickAddMenu v-if="item.to === '/events'" placement="mobile" :can-manage="canManageSelectedMember" :route-key="route.fullPath" />
+      </template>
     </nav>
 
     <MemberSwitcher :open="memberSheetOpen" @close="memberSheetOpen = false" />

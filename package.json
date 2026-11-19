@@ -1,7 +1,7 @@
 {
   "name": "fnos-app-health-records",
   "version": "0.2.20",
-  "description": "Family health report archive and AI-assisted record management for fnOS",
+  "description": "Self-hosted family health records, medication tracking and care timelines",
   "type": "module",
   "author": {
     "name": "timor-m"

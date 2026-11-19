@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { LoaderCircle, Pencil, Plus, X } from "@lucide/vue";
+import { useUnsavedRecord } from "../composables/useUnsavedRecord";
 import FormSelect from "./FormSelect.vue";
 import { useScrollLock } from "../composables/useScrollLock";
 import { useToast } from "../composables/useToast";
@@ -25,7 +26,7 @@ type EditableFinding = {
   manualFields?: string[];
 };
 
-const props = defineProps<{ open: boolean; finding: EditableFinding | null; memberId?: string; reportId?: string }>();
+const props = defineProps<{ open: boolean; finding: EditableFinding | null; memberId?: string; reportId?: string; expectedSourceVersion?: number }>();
 const creating = computed(() => !props.finding);
 const emit = defineEmits<{ close: []; saved: [] }>();
 const toast = useToast();
@@ -47,9 +48,12 @@ async function loadSource() {
     if (seq !== sourceRequest || !props.open) return;
     if (props.memberId && report.memberId !== props.memberId) throw new Error("来源报告不属于当前成员");
     sourceReport.value = report;
+    editVersion.value = props.expectedSourceVersion ?? report.sourceVersion;
+    const wasDirty = leave.dirty.value;
     const current = report.morphologyFindings.find(item => item.id === (props.finding?.id || props.finding?.findingId));
     form.sourcePageNumber = String(current?.evidence[0]?.pageNumber || (creating.value ? report.pages[0]?.pageNumber : "") || "");
     initialForm.value.sourcePageNumber = form.sourcePageNumber;
+    if (!wasDirty) leave.reset();
   } catch (cause) {
     if (seq === sourceRequest) sourceError.value = cause instanceof Error ? cause.message : "来源报告加载失败";
   } finally { if (seq === sourceRequest) sourceLoading.value = false; }
@@ -61,6 +65,12 @@ const form = reactive({
   sizeUnit: "", morphology: "", classificationSystem: "", classificationValue: "",
   classificationText: "", rawText: "", sourcePageNumber: ""
 });
+
+const editVersion = ref<number>();
+let generation = 0;
+let alive = true;
+const leave = useUnsavedRecord(() => props.open ? JSON.stringify(form) : '', saving);
+onBeforeUnmount(() => { alive = false; generation++; sourceRequest++; });
 
 const lateralityOptions = [
   { value: "unspecified", label: "未明确" }, { value: "left", label: "左侧" },
@@ -75,7 +85,8 @@ const presenceOptions = [
 
 watch(() => [props.open, props.finding, props.memberId, props.reportId] as const, ([open, finding]) => {
   ++sourceRequest;
-  if (!open) return;
+  generation++; saving.value = false; editVersion.value = props.expectedSourceVersion;
+  if (!open) { leave.reset(); return; }
   Object.assign(form, {
     organ: finding?.organ || "", region: finding?.region || "", laterality: finding?.laterality || "unspecified",
     findingType: finding?.findingType || "", findingName: finding?.findingName || "",
@@ -88,14 +99,16 @@ watch(() => [props.open, props.finding, props.memberId, props.reportId] as const
   });
   initialForm.value = { ...form };
   error.value = ""; sourceError.value = "";
+  leave.reset();
   void loadSource();
 }, { immediate: true });
 
-function close() { if (!saving.value) emit("close"); }
+async function close() { if (await leave.confirmLeave()) emit("close"); }
 
 useScrollLock(computed(() => props.open));
 
 async function save() {
+  const token = generation;
   const id = props.finding?.id || props.finding?.findingId;
   if (saving.value || sourceLoading.value || (!creating.value && !id)) return;
   if (creating.value && (!sourceReport.value || sourceLoading.value)) return;
@@ -114,16 +127,17 @@ async function save() {
     }
     await request(creating.value ? `reports/${encodeURIComponent(sourceReportId.value)}/morphology-findings` : `morphology-findings/${encodeURIComponent(id!)}`, {
       method: creating.value ? "POST" : "PUT",
-      body: JSON.stringify(body)
+      body: JSON.stringify({...body, expectedSourceVersion: editVersion.value})
     });
-    if (scope !== sourceRequest || !props.open) return;
+    if (!alive || token !== generation || scope !== sourceRequest || !props.open) return;
     toast.show(creating.value ? "形态记录已补充" : "形态校对已保存");
+    leave.reset();
     emit("saved");
     emit("close");
   } catch (cause) {
-    if (scope === sourceRequest && props.open) error.value = cause instanceof Error ? cause.message : "保存失败";
+    if (alive && token === generation && scope === sourceRequest && props.open) error.value = cause instanceof Error ? cause.message : "保存失败";
   } finally {
-    saving.value = false;
+    if (token === generation) saving.value = false;
   }
 }
 </script>
@@ -162,7 +176,7 @@ async function save() {
             <label class="field-wide"><span>原文</span><textarea v-model="form.rawText" :required="creating" maxlength="3000" rows="3" placeholder="填写来源页中对应的原文" aria-label="形态原文"></textarea></label>
           </div>
           <p v-if="error" class="inline-panel-error">{{ error }}</p>
-          <footer class="form-actions morphology-editor-actions">
+          <footer class="form-actions morphology-editor-actions record-form-actions">
             <button type="button" :disabled="saving" @click="close">取消</button>
             <button class="primary-button" type="submit" :disabled="saving || sourceLoading || (creating && (!sourceReport || !form.sourcePageNumber || !form.rawText.trim()))">
               <LoaderCircle v-if="saving" class="spin-icon" :size="16" />{{ saving ? "保存中" : creating ? "保存记录" : "保存校对" }}

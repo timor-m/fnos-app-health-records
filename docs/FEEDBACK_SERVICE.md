@@ -14,7 +14,9 @@
 
 所有反馈请求统一发送 `HealthRecords/<版本> (<部署方式>; <系统>; <架构>)`，例如 `HealthRecords/0.2.12 (Docker; Linux; aarch64)` 或 `HealthRecords/0.2.12 (fnOS; Linux; x86_64)`。Docker 判断优先于宿主机或账号模式；本地账号模式本身不等于 Docker。开发环境使用 `Development`，不确定项使用 `Unknown`。系统为 Linux、macOS、Windows 或 Unknown，架构统一使用 x86_64、aarch64、x86、arm、riscv64、ppc64、s390x 或 Unknown；不附加安装 ID、账号、路径或浏览器原始 UA。
 
-next-admin 的迁移 `089_health_installation_deployment.sql` 为安装记录增加 `deployment_type` 和 `deployment_reported_at`。服务只解析固定产品格式，保存最近一次有效的 Docker、fnOS 或开发环境类型；旧版 node/undici、未知或异常 UA 不覆盖已有值，也不因此拒绝请求。UA 不参与身份鉴权，版本仍以 x-version 为准；管理员访问不更新安装元数据。同一安装迁移部署方式后可刷新类型，历史记录不推测回填。先执行 next-admin 迁移并部署服务，再部署应用；旧服务会忽略新 UA。
+next-admin 的迁移 `089_health_installation_deployment.sql` 为安装记录增加 `deployment_type` 和 `deployment_reported_at`。服务按固定产品格式解析部署类型；`Unknown` 不覆盖已有已知类型。应用请求须携带规范的 43 字符 Base64URL 安装标识（拒绝全相同字符占位值）、有效三段版本 `x-version` 及版本一致的完整 HealthRecords UA，缺失或不合规返回 401，不登记或更新安装。该校验同时覆盖反馈和微信群查询；客户端已统一发送这些请求头。UA 规则仅用于格式校验，不是可信设备认证，也不要求版本已正式发布。管理员访问不更新安装元数据。
+
+安装列表、分页总数和地区统计会过滤缺版本、异常 UA、版本不匹配或标识不合规的历史记录，保留原始数据及反馈关联；旧记录收到合规上报后可恢复显示。本次仅修改 next-admin 校验和查询，无新增迁移，应用 schema 保持不变。
 
 支持列表分页与搜索、详情和处理记录分页、截图上传、提交、补充说明、确认解决和重新打开。列表及详情展示修复版本。POST 使用独立幂等键，当前页面内相同请求失败重试复用键；成功后清除。未提交草稿保留在当前页面内存，刷新会丢失。统一附件入口支持图片与 PDF 混合选择，不设附件数量上限，单个最多 10 MiB。图片编辑只上传编辑后的文件；PDF 保留原始字节，不支持在线打码，上传前需自行遮挡隐私。远端解析校验 PDF，拒绝损坏、无页面和受密码保护的文件；管理后台在同一附件区提供 PDF 预览及下载，补充附件也按类型展示；上传临时文件使用受限权限并清理。远程错误不显示假成功，不暴露上游响应或凭据。
 

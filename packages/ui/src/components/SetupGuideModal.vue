@@ -297,7 +297,7 @@ onBeforeUnmount(stopOcrPolling);
           </div>
           <div class="setup-guide-actions">
             <button class="primary-button" type="button" :disabled="dismissing" @click="finishGuide">
-              <LoaderCircle v-if="dismissing" class="spin-icon" :size="15" />开始上传报告
+              <LoaderCircle v-if="dismissing" class="spin-icon" :size="15" />开始上传档案
             </button>
           </div>
         </template>
@@ -309,7 +309,7 @@ onBeforeUnmount(stopOcrPolling);
 
 <style scoped>
 .setup-guide-backdrop { display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 90; }
-.setup-guide-panel { width: min(520px, 100%); max-height: calc(100dvh - 40px); overflow-y: auto; padding: 18px 22px 22px; }
+.setup-guide-panel { width: min(520px, 100%); max-height: calc(100vh - 40px); max-height: calc(100dvh - 40px); overflow-y: auto; padding: 18px 22px 22px; }
 .setup-guide-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .setup-guide-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .setup-guide-title-icon { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 10px; display: flex; align-items: center; justify-content: center; background: var(--brand-softer, #e8f1fe); color: var(--brand-strong, #1f64d8); }
@@ -320,7 +320,7 @@ onBeforeUnmount(stopOcrPolling);
 .setup-guide-progress span.done { background: var(--brand, #2f7cf6); opacity: .45; }
 .setup-guide-progress small { margin-left: 4px; color: var(--muted); font-size: 12px; }
 .setup-guide-body { display: grid; gap: 12px; }
-.setup-guide-body h3 { margin: 0; font-size: 18px; }
+.setup-guide-body h3 { margin: 0; font-size: 16px; }
 .setup-guide-step-title { display: flex; align-items: center; gap: 8px; }
 .setup-guide-step-title svg { flex: 0 0 auto; color: var(--brand-strong, #1f64d8); }
 .setup-guide-step-title.ok svg { color: var(--success, #1c9a5b); }
@@ -333,7 +333,7 @@ onBeforeUnmount(stopOcrPolling);
 .setup-guide-status { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-radius: 12px; font-size: 14px; font-weight: 600; }
 .setup-guide-status.ok { background: var(--success-soft, #e5f7ed); color: var(--success, #1c9a5b); }
 .setup-guide-status.busy { background: var(--brand-softer, #e8f1fe); color: var(--brand-strong, #1f64d8); }
-.setup-guide-log { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--fill-2, #f6f7f9); color: var(--muted); font-size: 11px; line-height: 1.6; max-height: 120px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+.setup-guide-log { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--fill-2, #f6f7f9); color: var(--muted); font-size: 12px; line-height: 1.6; max-height: 120px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
 .setup-guide-tutorial { margin: 0; padding-left: 20px; display: grid; gap: 6px; color: var(--ink); font-size: 14px; line-height: 1.7; }
 .setup-guide-tutorial a { color: var(--brand-strong, #1f64d8); font-weight: 600; display: inline-flex; align-items: center; gap: 3px; }
 .setup-guide-field { display: grid; gap: 6px; }
@@ -341,7 +341,7 @@ onBeforeUnmount(stopOcrPolling);
 .setup-guide-field input { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line-strong, #d4d7dd); border-radius: 10px; background: var(--surface); color: var(--ink); }
 .setup-guide-field input:focus { border-color: var(--brand, #2f7cf6); outline: 0; box-shadow: 0 0 0 3px var(--brand-soft, #d6e6fd); }
 .setup-guide-hint { margin: 0; color: var(--muted); font-size: 12px; }
-.setup-guide-error { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--danger, #d64545); font-size: 13px; }
+.setup-guide-error { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--danger, #d64545); font-size: 12px; }
 .setup-guide-error.ok { color: var(--success, #1c9a5b); }
 .setup-guide-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .setup-guide-actions button { display: inline-flex; align-items: center; gap: 6px; }
@@ -349,7 +349,7 @@ onBeforeUnmount(stopOcrPolling);
 .setup-guide-link:hover { color: var(--brand-strong, #1f64d8); }
 @media (max-width: 760px), (pointer: coarse) {
   .setup-guide-backdrop { padding: 0; align-items: flex-end; }
-  .setup-guide-panel { width: 100%; max-height: 94dvh; border-radius: 20px 20px 0 0; padding-bottom: calc(22px + var(--safe-bottom, 0px)); }
+  .setup-guide-panel { width: 100%; max-height: 94vh; max-height: 94dvh; border-radius: 20px 20px 0 0; padding-bottom: calc(22px + var(--safe-bottom, 0px)); }
   .setup-guide-actions button { flex: 1 1 auto; justify-content: center; }
 }
 </style>

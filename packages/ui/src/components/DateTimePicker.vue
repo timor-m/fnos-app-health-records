@@ -204,7 +204,7 @@ function readInput(commit = false) {
   const monthDays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   const valid = match && years.value.includes(y) && m >= 1 && m <= 12 && d >= 1 && d <= monthDays[m - 1]
     && (!props.showTime || (h >= 0 && h <= 23 && minute >= 0 && minute <= 59));
-  inputError.value = valid ? '' : `请输入有效日期（${inputPlaceholder.value}，年份 ${years.value[0]}–${years.value.at(-1)}）`;
+  inputError.value = valid ? '' : `请输入有效日期（${inputPlaceholder.value}，年份 ${years.value[0]}–${years.value[years.value.length - 1]}）`;
   inputElement.value?.setCustomValidity(inputError.value);
   if (valid && commit) {
     const value = `${y}-${padZero(m)}-${padZero(d)}` + (props.showTime ? `T${padZero(h)}:${padZero(minute)}` : '');
@@ -557,8 +557,8 @@ onBeforeUnmount(() => {
 .datetime-picker { display: block; width: 100%; min-width: 0; }
 .datetime-picker.compact-filter { width: auto; min-width: 0; padding: 0; background: transparent; box-shadow: none; }
 
-.datetime-picker-field { display: flex; align-items: center; min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
-.datetime-picker-field:focus-within { border-color: var(--brand); }
+.datetime-picker-field { display: flex; align-items: center; min-width: 0; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); }
+.datetime-picker-field:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
 .datetime-picker input { flex: 1; width: 100%; min-width: 0; min-height: 44px; padding: 0 10px; border: 0; border-radius: inherit; background: transparent; color: var(--ink); font: inherit; font-size: 14px; font-variant-numeric: tabular-nums; box-shadow: none; outline: none; }
 .datetime-picker input::placeholder { color: var(--muted); }
 .datetime-picker-trigger { display: flex; align-items: center; justify-content: center; flex: 0 0 40px; min-height: 44px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
@@ -568,8 +568,8 @@ onBeforeUnmount(() => {
 .datetime-input-error { position: fixed; z-index: 160; box-sizing: border-box; width: min(320px, calc(100vw - 24px)); padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow-s); color: var(--red, #b42318); font-size: 12px; line-height: 1.6; pointer-events: none; }
 .datetime-picker-field:has(input[aria-invalid="true"]) { border-color: var(--red, #b42318); }
 .datetime-picker.compact-filter .datetime-picker-field { box-shadow: var(--shadow-s); border: 0; }
-.datetime-picker.compact-filter input, .datetime-picker.compact-filter .datetime-picker-trigger { min-height: 38px; font-size: 13px; }
+.datetime-picker.compact-filter input, .datetime-picker.compact-filter .datetime-picker-trigger { min-height: 38px; font-size: 14px; }
 @media (min-width: 761px) and (pointer: fine) {
-  .datetime-picker input, .datetime-picker-trigger { min-height: 36px; font-size: 13px; }
+  .datetime-picker.compact-filter input, .datetime-picker.compact-filter .datetime-picker-trigger { min-height: 36px; font-size: 14px; }
 }
 </style>

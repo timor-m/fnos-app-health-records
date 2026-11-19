@@ -11,6 +11,8 @@ vi.mock("../src/composables/useScrollLock", () => ({ useScrollLock: () => {} }))
 vi.mock("../src/composables/useAppContext", () => ({
   useAppContext: () => ({
     session: ref({ id: "owner" }),
+    selectedMember: ref(null),
+    selectedMemberId: ref(''),
     preferences: ref({ selfMemberId: "member" }),
     allMembers: ref([
       { id: "member", displayName: "示例成员", relationship: "self", permission: "manager", canManageSharing: true },

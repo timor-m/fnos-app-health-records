@@ -1,3 +1,6 @@
+import {linkProcessRecords,recordProcesses,getRecordProcess} from '../services/health-record-process.service';
+import { createVaccination,getVaccination } from '../services/vaccination.service';
+import { createHealthEpisode } from '../services/health-episode.service';
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -5,6 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
 import type { RequestUser } from "../domain/request-user.ts";
+import { patientSexFromOcrText } from "../services/ai-input-planner.service.ts";
 import {
   assessReportMemberIdentity,
   assignReportMember,
@@ -187,6 +191,54 @@ test("extracts patient name only next to an explicit label", () => {
   for (const lines of [["姓名：", "性别：男"], ["医生：李小明"], ["医生姓名：李小明"], ["药师姓名：李小明"], ["联系人姓名：李小明"], ["李小明"], ["姓名：", "处方医师"]]) {
     assert.equal(patientNameFromOcrText([ocrLinesJson(lines)]), null);
   }
+});
+
+test("split identity labels are joined locally only within one OCR field", () => {
+  const raw = [
+    {text:'姓',box:[10,10,30,30]}, {text:'名：李小明',box:[70,10,190,30]},
+    {text:'性',box:[10,50,30,70]}, {text:'别：女',box:[70,50,130,70]},
+  ];
+  for (const sideways of [false,true]) {
+    const lines=raw.map(line=>({...line,box:sideways
+      ? [line.box[1],220-line.box[2],line.box[3],220-line.box[0]] : line.box}));
+    const original=JSON.stringify(lines);
+    assert.equal(patientNameFromOcrText([original]),'李小明');
+    assert.equal(patientSexFromOcrText([original]),'female');
+    assert.equal(JSON.stringify(lines),original,'identity reading must not rewrite source OCR');
+  }
+  assert.equal(patientNameFromOcrText([ocrLinesJson(['姓','名：李小明'])]),'李小明');
+  assert.equal(patientSexFromOcrText([ocrLinesJson(['性','别：','女'])]),'female');
+  assert.equal(patientSexFromOcrText([ocrLinesJson(['性 别：女'])]),'female');
+  for (const replacement of [{text:'名：李小明',box:[70,110,190,130]}, {text:'名：李小明',box:[1000,10,1120,30]}]) {
+    assert.equal(patientNameFromOcrText([JSON.stringify([raw[0],replacement])]),null);
+  }
+  for (const role of ['医生','药师','发药人','调剂人','联系人','家属','监护人']) {
+    assert.equal(patientNameFromOcrText([ocrLinesJson([role,'姓','名：李小明'])]),null);
+  }
+  assert.equal(patientNameFromOcrText([ocrLinesJson(['姓','科室：内科','名：李小明'])]),null);
+  assert.equal(patientNameFromOcrText([ocrLinesJson(['姓名：','','李小明'])]),null);
+});
+
+test("split identity labels participate in member assessment without rerunning extraction",async()=>{
+  await withDatabase(({reportId})=>{
+    const assessment=assessReportMemberIdentity(manager,reportId);
+    assert.equal(assessment?.patientName,'李小明');
+    assert.equal(assessment?.patientSex,'female');
+    assert.deepEqual(assessment?.mismatchedFields,['name']);
+    assert.equal(assessment?.verificationIncomplete,false);
+  },{memberSex:null,memberBirthDate:null,ocrLines:['姓','名：李小明','性','别：女','龄：35岁']});
+});
+
+test("manual reassignment rejects targets with viewer permission or no access",async()=>{
+  await withDatabase(({reportId})=>{
+    const db=getDatabase();
+    db.exec(`INSERT INTO health_members(id,display_name,created_by) VALUES('target','合成成员','identity-manager');
+      INSERT INTO member_permissions(member_id,user_id,permission,granted_by) VALUES('target','identity-manager','viewer','identity-manager');`);
+    assert.throws(()=>assignReportMember(manager,reportId,{memberId:'target'}),{statusCode:403});
+    db.prepare("DELETE FROM member_permissions WHERE member_id='target'").run();
+    assert.throws(()=>assignReportMember(manager,reportId,{memberId:'target'}),{statusCode:403});
+    assert.equal(db.prepare('SELECT member_id FROM reports WHERE id=?').get(reportId)?.member_id,'member-self');
+  });
 });
 
 test("suggests members whose display name matches the patient name", async () => {
@@ -414,4 +466,58 @@ test("creates a new member and assigns the report in one step", async () => {
     },
     { memberSex: "female" },
   );
+});
+
+test('member reassignment detaches old clinical context while preserving confirmed medication and manual reminders', async () => {
+  await withDatabase(({reportId})=>{
+    const db=getDatabase();
+    db.exec(`
+      INSERT INTO health_members(id,display_name,relationship,created_by) VALUES('member-target','Synthetic','parent','identity-manager');
+      INSERT INTO member_permissions(member_id,user_id,permission,granted_by) VALUES('member-target','identity-manager','manager','identity-manager');
+      INSERT INTO health_events(id,member_id,event_type,title,created_by) VALUES('old-event','member-self','outpatient','Synthetic','identity-manager');
+      INSERT INTO health_event_resources(id,event_id,resource_type,resource_id,relation_type,created_by) VALUES('old-link','old-event','report','report','primary','identity-manager');
+      INSERT INTO health_upload_items(report_id,context_json,state,event_id) VALUES('report','{}','archived','old-event');
+      INSERT INTO medication_courses(id,member_id,medication_name,status,started_at,last_changed_at,source_report_id,source_medication_id,source_snapshot_json,created_by)
+        VALUES('course','member-self','Synthetic','active','2026-10-01','2026-10-01','report','source-medication','{"medicationName":"Synthetic"}','identity-manager');
+      INSERT INTO reminders(id,member_id,report_id,title,due_at,status,source,created_by) VALUES
+        ('suggested','member-self','report','Synthetic','2026-11-01','completed','report_suggestion','identity-manager'),
+        ('manual','member-self','report','Synthetic','2026-11-01','pending','manual','identity-manager');
+    `);
+    const process=createHealthEpisode(manager,{memberId:'member-self',episodeType:'other',title:'合成原过程'});
+    const vaccination=createVaccination(manager,{memberId:'member-self',vaccineName:'合成原接种',administeredAt:'2026-01-01',sourceReportId:reportId,episodeId:process.id});
+    linkProcessRecords(manager,{kind:'report',id:reportId},[{kind:'vaccination',id:vaccination.id}]);
+    const result=assignReportMember(manager,reportId,{memberId:'member-target'});
+    assert.equal(getVaccination(manager,vaccination.id).memberId,'member-self');
+    assert.equal(getVaccination(manager,vaccination.id).sourceReportId,null);
+    assert.equal(getVaccination(manager,vaccination.id).vaccineName,'合成原接种');
+
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM health_record_links').get()?.n,0);
+    assert.equal(result.memberId,'member-target');
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM health_event_resources WHERE resource_id='report'").get()!.n,0);
+    assert.equal(db.prepare("SELECT member_id FROM health_events WHERE id='old-event'").get()!.member_id,'member-self');
+    assert.deepEqual({...db.prepare("SELECT state,context_json,event_id FROM health_upload_items WHERE report_id='report'").get()}, {state:'pending',context_json:'{}',event_id:null});
+    assert.deepEqual({...db.prepare("SELECT member_id,source_report_id,source_medication_id,source_snapshot_json,status FROM medication_courses WHERE id='course'").get()},
+      {member_id:'member-self',source_report_id:null,source_medication_id:null,source_snapshot_json:'{"medicationName":"Synthetic"}',status:'active'});
+    assert.deepEqual({...db.prepare("SELECT member_id,report_id,status FROM reminders WHERE id='suggested'").get()}, {member_id:'member-target',report_id:'report',status:'completed'});
+    assert.deepEqual({...db.prepare("SELECT member_id,report_id,status FROM reminders WHERE id='manual'").get()}, {member_id:'member-self',report_id:null,status:'pending'});
+    const audit=JSON.parse(String(db.prepare("SELECT detail_json FROM audit_logs WHERE action='report.member.assign'").get()!.detail_json));
+    assert.deepEqual(audit.detachedMedicationCourseIds,['course']);assert.deepEqual(audit.movedReminderIds,['suggested']);
+  });
+});
+
+test('new-member assignment rolls back the new member, permissions, audit and detached links on failure', async () => {
+  await withDatabase(({reportId})=>{
+    const db=getDatabase();
+    db.exec(`
+      INSERT INTO health_events(id,member_id,event_type,created_by) VALUES('rollback-event','member-self','outpatient','identity-manager');
+      INSERT INTO health_event_resources(id,event_id,resource_type,resource_id,relation_type,created_by) VALUES('rollback-link','rollback-event','report','report','primary','identity-manager');
+      CREATE TEMP TRIGGER fail_member_assignment BEFORE UPDATE OF member_id ON reports BEGIN SELECT RAISE(ABORT,'synthetic assignment failure'); END;
+    `);
+    const count=(table:string)=>db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()!.n;
+    const before=[count('health_members'),count('member_permissions'),count('audit_logs')];
+    assert.throws(()=>assignReportMember(manager,reportId,{newMember:{displayName:'Synthetic',relationship:'parent'}}),/synthetic assignment failure/);
+    assert.deepEqual([count('health_members'),count('member_permissions'),count('audit_logs')],before);
+    assert.equal(db.prepare("SELECT member_id FROM reports WHERE id='report'").get()!.member_id,'member-self');
+    assert.equal(db.prepare("SELECT event_id FROM health_event_resources WHERE id='rollback-link'").get()!.event_id,'rollback-event');
+  });
 });

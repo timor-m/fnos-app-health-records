@@ -1,7 +1,15 @@
 <script setup lang="ts">
+import MedicationFormulaPanel from './MedicationFormulaPanel.vue';
 import SourceRegionPicker from "./SourceRegionPicker.vue";
 import type {SourceRegion} from "../../../shared/source-region";
 import { observationSourceSections } from "../utils/observation-source-order";
+import HealthProcessEditorDialog from './HealthProcessEditorDialog.vue';
+import { formatMedicationFrequency } from '../../../shared/medication-frequency';
+import type {HealthRecordRef} from '../../../shared/health-record-associations';
+import HealthRecordTrashAction from './HealthRecordTrashAction.vue';
+import { useUnsavedRecord } from '../composables/useUnsavedRecord';
+import RecordLoading from './RecordLoading.vue';
+import { documentStatusMeta as statusMeta, type HealthRecordHeading } from '../utils/health-record-presentation';
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import {
   ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Clock3, Download,
@@ -11,6 +19,8 @@ import {
 import ClinicalFactEditor from "./ClinicalFactEditor.vue";
 import ReportCombineDialog from "./ReportCombineDialog.vue";
 import ReportNotesPanel from './ReportNotesPanel.vue';
+import ReportProcessAssociation from './ReportProcessAssociation.vue';
+import ReportMedicationUseButton from './ReportMedicationUseButton.vue';
 import ObservationTimeEditor from './ObservationTimeEditor.vue';
 import ReportScrollingTitle from "./ReportScrollingTitle.vue";
 import ReportPageAppend from './ReportPageAppend.vue';
@@ -51,14 +61,25 @@ type DisplayAiUnit = AiExtractionUnitProgress & { displayLabel: string };
 
 const props = defineProps<{
   reportId: string;
+  openRelatedInPlace?:boolean;
+  expectedMemberId?: string;
+  hideVaccinationConfirmation?: boolean;
+  hideTitle?: boolean;
+  hideTrashAction?: boolean;
+  originalsOnly?: boolean;
+  returnTo?: string;
   reviewObservationId?: string;
   summary?: ReportSummary | null;
+  initialDetail?: ReportDetail | null;
   variant: "panel" | "floating";
 }>();
 const emit = defineEmits<{
+  heading: [value: HealthRecordHeading];
   close: [];
   updated: [];
+  loaded: [value: ReportDetail];
   openCandidate: [candidate: DuplicateCandidate];
+  openRecord:[record:HealthRecordRef];
 }>();
 
 const app = useAppContext();
@@ -108,6 +129,7 @@ async function onReportsCombined() {
 const detailLoading = ref(false);
 const detailError = ref("");
 const duplicateCandidatesError = ref("");
+const memberMismatch = ref(false);
 const selectedJobs = ref<ProcessingJob[]>([]);
 const jobsLoading = ref(false);
 const jobsError = ref("");
@@ -220,12 +242,16 @@ const editForm = ref({
   bodyPart: "", reportIssuedAt: "", examinedAt: "", clinicalDiagnosis: "", purpose: "",
   findings: "", impression: "", summary: "", recommendation: ""
 });
+const reportEditLeave=useUnsavedRecord(()=>editOpen.value?JSON.stringify(editForm.value):'',savingReport);
+const observationLeave=useUnsavedRecord(()=>observationEditorOpen.value?JSON.stringify(observationForm.value):'',savingObservation);
+async function closeEditReport(){if(await reportEditLeave.confirmLeave()){editOpen.value=false;reportEditLeave.reset();}}
 let jobsTimer: ReturnType<typeof setInterval> | null = null;
 let eventTimer: ReturnType<typeof setInterval> | null = null;
 let detailSeq = 0;
+let reportContextSeq = 0;
 let detailActive = true;
-let jobsSnapshotLoaded = false;
 let jobsSeq = 0;
+let jobsSnapshotLoaded = false;
 let jobsLoadingSeq = 0;
 let ocrSeq = 0;
 let jobsPollFailures = 0;
@@ -241,12 +267,18 @@ function failJobsAction(cause: unknown, fallback: string) {
 }
 
 const currentDetail = computed(() =>
-  detail.value?.id === props.reportId ? detail.value : null
+  !memberMismatch.value && detail.value?.id === props.reportId
+    && (props.expectedMemberId === undefined || detail.value.memberId === props.expectedMemberId) ? detail.value : null
 );
 const currentSummary = computed(() =>
-  props.summary?.id === props.reportId ? props.summary : null
+  !memberMismatch.value && props.summary?.id === props.reportId
+    && (props.expectedMemberId === undefined || props.summary.memberId === props.expectedMemberId) ? props.summary : null
 );
 const source = computed(() => currentDetail.value || currentSummary.value || null);
+watch(() => [source.value?.title, source.value?.reportType] as const, () => {
+  const item = source.value;
+  if (item) emit('heading', { title: item.title, category: item.reportType === 'imaging' ? 'imaging' : item.reportType === 'prescription' ? 'medication' : item.reportType === 'vaccination' ? 'vaccination' : 'report' });
+}, { immediate: true });
 const isAiEventLog = computed(() => eventJob.value?.jobType === "ai_extract");
 const orderedAiUnits = computed<DisplayAiUnit[]>(() => {
   const units = [...(jobEventDetail.value?.units || [])].sort((left, right) => {
@@ -474,15 +506,7 @@ const typeLabels: Record<string, string> = {
   checkup: "体检", laboratory: "检验", imaging: "影像", functional: "功能检查", pathology: "病理",
   outpatient: "门诊", inpatient: "住院", prescription: "处方", billing: "票据", vaccination: "疫苗", other: "其他"
 };
-const statusMeta: Record<string, { label: string; chip: string }> = {
-  uploading: { label: "上传中", chip: "chip--info" },
-  queued: { label: "排队中", chip: "chip--info" },
-  processing: { label: "处理中", chip: "chip--info" },
-  needs_review: { label: "待确认", chip: "chip--amber" },
-  ready: { label: "已归档", chip: "chip--green" },
-  failed: { label: "识别失败", chip: "chip--red" },
-  trashed: { label: "回收站", chip: "chip--plain" }
-};
+
 const typeOptions = [
   { value: "all", label: "全部类型" },
   ...Object.entries(typeLabels).map(([value, label]) => ({ value, label }))
@@ -838,14 +862,16 @@ function observationSourceLabel(item: ReportDetail["observations"][number]) {
   const date = time?.match(/^\d{4}-\d{2}-\d{2}/)?.[0] || (item.examinationId ? "时间待确认" : "日期未注明");
   return `${page ? `P${page.pageNumber}` : "P?"}·${date}`;
 }
-function selectObservation(item: ReportDetail["observations"][number]) {
+async function selectObservation(item: ReportDetail["observations"][number]) {
+  if(observationEditorOpen.value&&!await observationLeave.confirmLeave())return;
   selectedObservationId.value=item.id;
   const pageIndex=detail.value?.pages.findIndex(page=>page.id===item.evidence?.pageId) ?? -1;
   observationSourcePageIndex.value=pageIndex>=0?pageIndex:0;
-  observationEditorOpen.value=false;
+  observationEditorOpen.value=false;observationLeave.reset();
 }
 const observationEditVersion = ref<number>();
-function openObservationEditor(item?: ReportDetail["observations"][number]) {
+async function openObservationEditor(item?: ReportDetail["observations"][number]) {
+  if(observationEditorOpen.value&&!await observationLeave.confirmLeave())return;
   observationEditorOpen.value = false;
   selectedObservationId.value = item?.id || null;
   const evidencePageIndex = item?.evidence?.pageId
@@ -880,25 +906,30 @@ function openObservationEditor(item?: ReportDetail["observations"][number]) {
   };
   observationSourceTouched.value = false;
   observationEditorOpen.value = true;
+  observationLeave.reset();
   if (item?.itemName) void searchObservationCatalog();
   else void nextTick(() => observationEditorPanel.value?.querySelector<HTMLInputElement>("input")?.focus());
 }
 
-function closeObservationEditor() {
+async function closeObservationEditor() {
+  if(!await observationLeave.confirmLeave())return false;
   const adding = isAddingObservation.value;
   if (props.reviewObservationId && editingObservationId.value) emit("close");
   observationEditorOpen.value = false;
   editingObservationId.value = null;
+  observationLeave.reset();
   if (adding) void nextTick(() => observationAddTrigger.value?.focus());
+  return true;
 }
 
-function closeAllObservations() {
+async function closeAllObservations() {
+  if(!await closeObservationEditor())return;
   allObservationsOpen.value = false;
-  closeObservationEditor();
   selectedObservationId.value = null;
 }
 
 async function saveObservation() {
+  if(savingObservation.value)return;
   if (!observationForm.value.itemName.trim()) {
     observationEditorError.value = "请填写指标名称";
     return;
@@ -909,14 +940,14 @@ async function saveObservation() {
     const path = editingObservationId.value
       ? `reports/${encodeURIComponent(props.reportId)}/observations/${encodeURIComponent(editingObservationId.value)}`
       : `reports/${encodeURIComponent(props.reportId)}/observations`;
-    detail.value = await request<ReportDetail>(path, {
+    if (!await updateDetail(path, {
       method: editingObservationId.value ? "PUT" : "POST",
       body: JSON.stringify({ ...observationForm.value, sourcePageId: editingObservationId.value && !observationSourceTouched.value ? undefined : observationForm.value.sourcePageId, sourceRegion: editingObservationId.value && !observationSourceTouched.value ? undefined : observationForm.value.sourceRegion, expectedSourceVersion: observationEditVersion.value })
-    });
-    observationEditorOpen.value = false;
+    })) return;
+    observationEditorOpen.value = false;observationLeave.reset();
     emit("updated");
     const saved = editingObservationId.value
-      ? detail.value.observations.find(item => item.id === editingObservationId.value)
+      ? detail.value?.observations.find(item => item.id === editingObservationId.value)
       : undefined;
     toast.show(saved
       ? saved.displayTier === "primary"
@@ -982,7 +1013,7 @@ function medicationDetail(item: ReportDetail["medications"][number]) {
   return [
     item.specification,
     [item.dose, item.doseUnit].filter(Boolean).join(" "),
-    item.frequency,
+    formatMedicationFrequency(item.frequency),
     item.route,
     item.duration,
     item.quantity ? `数量 ${item.quantity}${item.quantityUnit || ""}` : null
@@ -1072,7 +1103,7 @@ function removeObservation(item: ReportDetail['observations'][number]) {
     confirmText: '删除', danger: true,
     run: async () => {
       try {
-        detail.value = await request<ReportDetail>(`reports/${encodeURIComponent(props.reportId)}/observations/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
+        if (!await updateDetail(`reports/${encodeURIComponent(props.reportId)}/observations/${encodeURIComponent(item.id)}`, { method: 'DELETE' })) return;
         if (editingObservationId.value === item.id) {
           editingObservationId.value = null;
           observationEditorOpen.value = false;
@@ -1094,10 +1125,10 @@ function removeClinicalFact(type: ClinicalFactType, fact: { id: string }) {
     danger: true,
     run: async () => {
       try {
-        detail.value = await request<ReportDetail>(
+        if (!await updateDetail(
           `clinical-facts/${type}/${encodeURIComponent(fact.id)}`,
           { method: "DELETE" }
-        );
+        )) return;
         emit("updated");
         toast.show(`${clinicalFactTypeLabels[type]}已删除`);
       } catch (cause) {
@@ -1121,10 +1152,10 @@ function removeStructuredSection(section: ReportDetail["structuredSections"][num
     danger: true,
     run: async () => {
       try {
-        detail.value = await request<ReportDetail>(
+        if (!await updateDetail(
           `report-structured-sections/${encodeURIComponent(section.id)}`,
           { method: "DELETE" }
-        );
+        )) return;
         emit("updated");
         toast.show(`${section.title}已删除`);
       } catch (cause) {
@@ -1214,6 +1245,19 @@ async function morphologySaved() {
   emit("updated");
 }
 
+const typeCorrectionOpen=ref(false),correctedType=ref('other'),typeCorrectionError=ref(''),typeCorrectionBusy=ref(false);
+const typeCorrectionOpener=ref<HTMLElement|null>(null),typeCorrectionVersion=ref<number|null>(null);
+const typeLeave=useUnsavedRecord(()=>typeCorrectionOpen.value?correctedType.value:'',typeCorrectionBusy);
+function openTypeCorrection(event:MouseEvent){if(!canManageReport.value||!detail.value)return;correctedType.value=detail.value.reportType;typeCorrectionVersion.value=detail.value.sourceVersion;typeCorrectionOpener.value=event.currentTarget as HTMLElement;typeCorrectionError.value='';typeCorrectionOpen.value=true;typeLeave.reset();}
+async function closeTypeCorrection(){if(!typeCorrectionBusy.value&&await typeLeave.confirmLeave()){typeCorrectionOpen.value=false;typeLeave.reset();}}
+async function saveTypeCorrection(){
+ if(!canManageReport.value||typeCorrectionBusy.value||!detail.value)return;
+ const context=reportContextSeq;typeCorrectionBusy.value=true;typeCorrectionError.value='';
+ try{if(!await updateDetail('reports/'+encodeURIComponent(props.reportId),{method:'PUT',body:JSON.stringify({reportType:correctedType.value,expectedSourceVersion:typeCorrectionVersion.value})}))return;
+ typeCorrectionOpen.value=false;typeLeave.reset();emit('updated');toast.show('资料类型已更新，原件和已提取内容保留');
+ }catch(cause){if(context===reportContextSeq)typeCorrectionError.value=cause instanceof Error?cause.message:'分类修改失败';}
+ finally{if(context===reportContextSeq)typeCorrectionBusy.value=false;}
+}
 const reportEditVersion = ref<number | null>(null);
 async function openEditReport() {
   const current = source.value;
@@ -1240,7 +1284,7 @@ async function openEditReport() {
     summary: detail.value?.summary || "",
     recommendation: detail.value?.recommendation || ""
   };
-  editOpen.value = true;
+  editOpen.value = true;reportEditLeave.reset();
   if (
     window.matchMedia("(min-width: 761px)").matches
     && (!ocrPages.value.length || ocrReportId.value !== reportId)
@@ -1252,14 +1296,15 @@ async function openEditReport() {
 }
 
 async function saveReportFields() {
+  if(savingReport.value)return;
   savingReport.value = true;
   detailError.value = "";
   try {
-    detail.value = await request<ReportDetail>(`reports/${encodeURIComponent(props.reportId)}`, {
+    if (!await updateDetail(`reports/${encodeURIComponent(props.reportId)}`, {
       method: "PUT",
       body: JSON.stringify({...editForm.value, expectedSourceVersion:reportEditVersion.value})
-    });
-    editOpen.value = false;
+    })) return;
+    editOpen.value = false;reportEditLeave.reset();
     emit("updated");
     toast.show("校对内容已保存");
   } catch (cause) {
@@ -1273,10 +1318,10 @@ async function savePageLayout(pages: ReportPage[]) {
   savingPages.value = true;
   detailError.value = "";
   try {
-    detail.value = await request<ReportDetail>(`reports/${encodeURIComponent(props.reportId)}/pages`, {
+    if (!await updateDetail(`reports/${encodeURIComponent(props.reportId)}/pages`, {
       method: "PUT",
       body: JSON.stringify({ pages: pages.map((page) => ({ id: page.id, rotation: page.rotation })) })
-    });
+    })) return;
     pageRefreshAwaitingJobs.value = true;
     await refreshJobs(true);
     emit("updated");
@@ -1293,10 +1338,10 @@ async function rotateSavedPage(page: ReportPage) {
   savingPages.value = true;
   detailError.value = "";
   try {
-    detail.value = await request<ReportDetail>(`reports/${encodeURIComponent(props.reportId)}/pages/${encodeURIComponent(page.id)}/rotation`, {
+    if (!await updateDetail(`reports/${encodeURIComponent(props.reportId)}/pages/${encodeURIComponent(page.id)}/rotation`, {
       method: "PUT",
       body: JSON.stringify({ expectedRotation: page.rotation, rotation: (page.rotation + 90) % 360 })
-    });
+    })) return;
     ++ocrDetailSeq;
     ocrDetailLoading.value = false;
     if (ocrDetailPage.value?.pageId === page.id) ocrDetailPage.value = null;
@@ -1330,7 +1375,7 @@ async function deleteSavedPage(page: ReportPage) {
     run: async () => {
       savingPages.value = true;
       try {
-        detail.value = await request<ReportDetail>(`reports/${encodeURIComponent(props.reportId)}/pages/${encodeURIComponent(page.id)}`, { method: "DELETE" });
+        if (!await updateDetail(`reports/${encodeURIComponent(props.reportId)}/pages/${encodeURIComponent(page.id)}`, { method: "DELETE" })) return;
         pageRefreshAwaitingJobs.value = true;
         await refreshJobs(true);
         emit("updated");
@@ -1519,37 +1564,44 @@ function askManualArchive() {
 }
 
 async function confirmReady() {
-  if (duplicateCandidatesPending.value) return;
+  if (duplicateCandidatesPending.value || memberIdentityBusy.value || !canManageReport.value) return;
+  const reportId = props.reportId;
+  const context = reportContextSeq;
   confirming.value = true;
   jobsError.value = "";
   try {
-    await request(`reports/${encodeURIComponent(props.reportId)}/confirm`, { method: "POST" });
-    await loadDetail(props.reportId);
+    await request(`reports/${encodeURIComponent(reportId)}/confirm`, { method: "POST" });
+    if (!detailActive || context !== reportContextSeq) return;
+    await loadDetail(reportId);
+    if (!detailActive || context !== reportContextSeq) return;
     emit("updated");
     toast.show("已确认归档");
   } catch (cause) {
-    failJobsAction(cause, "确认归档失败");
+    if (detailActive && context === reportContextSeq) failJobsAction(cause, "确认归档失败");
   } finally {
-    confirming.value = false;
+    if (context === reportContextSeq) confirming.value = false;
   }
 }
 
 function askTrash() {
+  const id=props.reportId; const member=app.selectedMemberId.value;
   confirmDialog.ask({
     title: "移入回收站",
     message: `确认将「${source.value?.title || "当前报告"}」移入回收站？未完成的识别和补页任务会同时停止。原件会保留 30 天，不会立刻删除。`,
     confirmText: "移入回收站",
     danger: true,
-    run: trashCurrentReport
+    run: async()=>{if(id===props.reportId&&member===app.selectedMemberId.value&&canManageReport.value)await trashCurrentReport();}
   });
 }
 
 async function trashCurrentReport() {
   if (trashingReport.value) return;
+  const id=props.reportId;const member=app.selectedMemberId.value;
   trashingReport.value = true;
   jobsError.value = "";
   try {
-    await request(`reports/${encodeURIComponent(props.reportId)}`, { method: "DELETE" });
+    await request(`reports/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if(id!==props.reportId||member!==app.selectedMemberId.value||!detailActive)return;
     stopJobsPolling();
     detail.value = null;
     selectedJobs.value = [];
@@ -1557,7 +1609,7 @@ async function trashCurrentReport() {
     emit("close");
     toast.show("已移入回收站，原件将保留 30 天");
   } catch (cause) {
-    failJobsAction(cause, "移入回收站失败");
+    if(id===props.reportId&&member===app.selectedMemberId.value&&detailActive)failJobsAction(cause, "移入回收站失败");
   } finally {
     trashingReport.value = false;
   }
@@ -1652,6 +1704,14 @@ const dismissingMismatch = ref(false);
 const memberCreateOpen = ref(false);
 const memberCreateSaving = ref(false);
 const memberCreateError = ref("");
+const memberIdentityBusy = computed(() => assigningMember.value || memberCreateSaving.value || dismissingMismatch.value || confirming.value);
+const memberPickerOpen = ref(false);
+const memberPickerId = ref("");
+const assignableMembers = computed(() => app.allMembers.value.filter(member =>
+  member.permission === "manager" && member.id !== currentDetail.value?.memberId));
+const memberPickerOptions = computed(() => [{ value: "", label: "请选择成员" }, ...assignableMembers.value.map(member => ({
+  value: member.id, label: `${member.displayName}（${mismatchRelationshipLabels[member.relationship] || "其他"}）`
+}))]);
 const memberCreateForm = ref({ displayName: "", relationship: "other", sex: "", birthDate: "" });
 const memberCreateMaxYear = new Date().getFullYear();
 const memberCreateRelationshipOptions = computed(() =>
@@ -1664,36 +1724,76 @@ const memberCreateSexOptions = [
 ];
 
 async function postMemberAssignment(body: Record<string, unknown>, successMessage: string) {
-  await request(`reports/${encodeURIComponent(props.reportId)}/assign-member`, {
+  const reportId = props.reportId;
+  const context = reportContextSeq;
+  await request(`reports/${encodeURIComponent(reportId)}/assign-member`, {
     method: "POST",
     body: JSON.stringify(body)
   });
-  await loadDetail(props.reportId, true);
-  emit("updated");
-  toast.show(successMessage);
+  app.notifyDataChanged();
+  toast.show(`${successMessage}，切换到该成员即可查看`);
+  // The report has left this member's scope; never reload it under the old scope.
+  if (detailActive && props.reportId === reportId && context === reportContextSeq) {
+    ++reportContextSeq;
+    ++detailSeq;
+    memberMismatch.value = true;
+    clearReportViews();
+    emit("close");
+    emit("updated");
+  }
+  if (body.newMember) {
+    try { await app.refreshMembers(); }
+    catch { toast.show("归属已完成，成员列表刷新失败，请刷新页面后查看"); }
+  }
 }
 
 function assignToCandidate(candidate: { id: string; displayName: string }) {
-  if (assigningMember.value) return;
+  if (memberIdentityBusy.value || !canManageReport.value) return;
+  const reportId = props.reportId;
+  const context = reportContextSeq;
   const title = source.value?.title || "当前报告";
   confirmDialog.ask({
     title: "归属报告",
     message: `确认把「${title}」归属到成员「${candidate.displayName}」？\n\n报告的指标、趋势和形态发现会一并转移到该成员的档案下。`,
     confirmText: "确认归属",
     run: async () => {
+      if (memberIdentityBusy.value) return;
+      if (!detailActive || context !== reportContextSeq || props.reportId !== reportId || !canManageReport.value
+        || !assignableMembers.value.some(member => member.id === candidate.id)) {
+        toast.show("报告或管理权限已变化，请重新选择成员");
+        return;
+      }
       assigningMember.value = true;
       try {
         await postMemberAssignment({ memberId: candidate.id }, `已归属到「${candidate.displayName}」`);
       } catch (cause) {
-        failJobsAction(cause, "归属失败");
+        if (detailActive && context === reportContextSeq) failJobsAction(cause, "归属失败");
       } finally {
-        assigningMember.value = false;
+        if (context === reportContextSeq) assigningMember.value = false;
       }
     }
   });
 }
 
+function openMemberPicker() {
+  if (memberIdentityBusy.value || !canManageReport.value) return;
+  memberPickerId.value = "";
+  memberCreateOpen.value = false;
+  memberPickerOpen.value = true;
+}
+
+function confirmMemberPicker() {
+  const member = assignableMembers.value.find(member => member.id === memberPickerId.value);
+  if (!member) {
+    toast.show("请选择有管理权限的成员");
+    return;
+  }
+  assignToCandidate(member);
+}
+
 function openMemberCreate() {
+  if (memberIdentityBusy.value || !canManageReport.value) return;
+  memberPickerOpen.value = false;
   const assessment = memberIdentityAssessment.value;
   memberCreateForm.value = {
     displayName: assessment?.patientName || "",
@@ -1706,7 +1806,8 @@ function openMemberCreate() {
 }
 
 async function submitMemberCreate() {
-  if (memberCreateSaving.value) return;
+  if (memberIdentityBusy.value || !canManageReport.value) return;
+  const context = reportContextSeq;
   const displayName = memberCreateForm.value.displayName.trim();
   if (!displayName) {
     memberCreateError.value = "请填写成员姓名";
@@ -1726,25 +1827,28 @@ async function submitMemberCreate() {
       },
       `已创建成员「${displayName}」并完成归属`
     );
-    memberCreateOpen.value = false;
+    if (context === reportContextSeq) memberCreateOpen.value = false;
   } catch (cause) {
-    memberCreateError.value = cause instanceof Error ? cause.message : "创建成员失败";
+    if (detailActive && context === reportContextSeq) memberCreateError.value = cause instanceof Error ? cause.message : "创建成员失败";
   } finally {
-    memberCreateSaving.value = false;
+    if (context === reportContextSeq) memberCreateSaving.value = false;
   }
 }
 
 async function dismissMemberMismatch() {
-  if (dismissingMismatch.value) return;
+  if (memberIdentityBusy.value || !canManageReport.value) return;
+  const reportId = props.reportId;
+  const context = reportContextSeq;
   dismissingMismatch.value = true;
   try {
-    await request(`reports/${encodeURIComponent(props.reportId)}/dismiss-member-mismatch`, { method: "POST" });
-    await loadDetail(props.reportId, true);
-    toast.show("已忽略这份报告的成员提醒");
+    await request(`reports/${encodeURIComponent(reportId)}/dismiss-member-mismatch`, { method: "POST" });
+    if (!detailActive || context !== reportContextSeq) return;
+    await loadDetail(reportId, true);
+    if (detailActive && context === reportContextSeq) toast.show("已忽略这份报告的成员提醒");
   } catch (cause) {
-    failJobsAction(cause, "操作失败");
+    if (detailActive && context === reportContextSeq) failJobsAction(cause, "操作失败");
   } finally {
-    dismissingMismatch.value = false;
+    if (context === reportContextSeq) dismissingMismatch.value = false;
   }
 }
 
@@ -1869,6 +1973,7 @@ async function refreshJobs(silent = false) {
     if (seq !== jobsSeq || props.reportId !== reportId) return;
     const hadJobsSnapshot = jobsSnapshotLoaded;
     jobsSnapshotLoaded = true;
+    // The opening history is a baseline, not a newly completed processing run.
     const jobStatusChanged = hadJobsSnapshot && (nextJobs.length !== previousStatuses.size
       || nextJobs.some((job) => previousStatuses.get(job.id) !== job.status));
     selectedJobs.value = nextJobs;
@@ -1917,6 +2022,41 @@ async function refreshJobs(silent = false) {
   }
 }
 
+function clearReportViews() {
+  confirming.value = false;
+  assigningMember.value = false;
+  memberCreateSaving.value = false;
+  dismissingMismatch.value = false;
+  memberCreateError.value = "";
+  duplicateCandidatesError.value = "";
+  detail.value = null;
+  jobsSnapshotLoaded = false;
+  ++jobsSeq;
+  ++ocrSeq;
+  ++ocrDetailSeq;
+  selectedJobs.value = [];
+  jobsLoading.value = false;
+  ocrPages.value = [];
+  ocrReportId.value = null;
+  viewerOpen.value = false;
+  closePdfOriginalViewer();
+  closeOcrText();
+  editOpen.value = false;
+  typeCorrectionOpen.value=false;typeCorrectionBusy.value=false;typeLeave.reset();
+  allObservationsOpen.value = false;
+  observationEditorOpen.value = false;
+  morphologyEditItem.value = null;
+  clinicalFactEditor.value = null;
+  memberPickerOpen.value = false;
+  memberPickerId.value = "";
+  memberCreateOpen.value = false;
+  structuredSectionEditor.value = null;reportEditLeave.reset();observationLeave.reset();
+  closeJobEvents();
+  stopOriginalExportStatusPolling();
+  stopJobsPolling();
+}
+
+
 async function loadDuplicateCandidates() {
   const target = detail.value;
   if (!target?.duplicateCandidatesPending) return;
@@ -1931,36 +2071,71 @@ async function loadDuplicateCandidates() {
   }
 }
 
+function acceptDetail(next: ReportDetail) {
+  if (next.id !== props.reportId) return false;
+  if (props.expectedMemberId !== undefined && next.memberId !== props.expectedMemberId) {
+    memberMismatch.value = true;
+    ++reportContextSeq;
+    ++detailSeq;
+    detailLoading.value = false;
+    clearReportViews();
+    detailError.value = "此档案不属于当前成员，请返回当前成员的记录列表。";
+    return false;
+  }
+  memberMismatch.value = false;
+  detail.value = next;
+  duplicateCandidatesError.value = "";
+  if (next.duplicateCandidatesPending) void loadDuplicateCandidates();
+  emit("loaded", next);
+  return true;
+}
+
+async function updateDetail(path: string, options: RequestInit) {
+  const context = reportContextSeq;
+  try {
+    const next = await request<ReportDetail>(path, options);
+    if (!detailActive || context !== reportContextSeq) return false;
+    return acceptDetail(next);
+  } catch (cause) {
+    if (!detailActive || context !== reportContextSeq) return false;
+    throw cause;
+  }
+}
+
+let initialDetailConsumed = false;
 async function loadDetail(reportId: string, preserveCurrent = false) {
+  if (!detailActive) return;
   const seq = ++detailSeq;
   detailLoading.value = true;
   detailError.value = "";
   duplicateCandidatesError.value = "";
   if (!preserveCurrent) detail.value = null;
   try {
-    const next = await request<ReportDetail>(`reports/${encodeURIComponent(reportId)}?includeDuplicateCandidates=false`);
-    if (detailActive && seq === detailSeq && props.reportId === reportId && next.id === reportId) {
-      detail.value = next;
-      if (next.duplicateCandidatesPending) void loadDuplicateCandidates();
+    const initial = initialDetailConsumed ? null : props.initialDetail;
+    initialDetailConsumed = true;
+    const next = initial?.id === reportId ? initial : await request<ReportDetail>(`reports/${encodeURIComponent(reportId)}?includeDuplicateCandidates=false`);
+    if (seq === detailSeq && props.reportId === reportId && next.id === reportId) {
+      if (!acceptDetail(next)) return;
       if (props.reviewObservationId && !preserveCurrent) {
         const target = next.observations.find(item => item.id === props.reviewObservationId);
         if (target) openObservationEditor(target);
         else detailError.value = "该指标已不存在，请关闭后刷新列表";
       }
       void request<{ status: "ready" | "generating" | "available" }>(`reports/${encodeURIComponent(reportId)}/original/status`).then(status => {
-        if (detailActive && seq === detailSeq && props.reportId === reportId) {
+        if (seq === detailSeq && props.reportId === reportId) {
           originalExportStatus.value = status.status;
           if (status.status === "generating") startOriginalExportStatusPolling(reportId);
         }
-      }).catch(() => { /* 原件状态不影响报告详情显示。 */ });
+      }).catch(() => { /* 原件状态不影响档案详情显示。 */ });
     }
   } catch (cause) {
     if (seq === detailSeq && props.reportId === reportId) {
-      detailError.value = cause instanceof Error ? cause.message : "报告详情读取失败";
+      detailError.value = cause instanceof Error ? cause.message : "档案详情读取失败";
     }
   } finally {
-    if (detailActive && seq === detailSeq && props.reportId === reportId) {
+    if (seq === detailSeq && props.reportId === reportId) {
       detailLoading.value = false;
+      // Jobs may have returned before the report; resume polling if it is still processing.
       maybeStartJobsPolling();
     }
   }
@@ -2020,7 +2195,11 @@ function closeJobEvents() {
   eventLoading.value = false;
 }
 
-watch(() => props.reportId, (reportId) => {
+watch(() => [props.reportId, props.expectedMemberId] as const, ([reportId]) => {
+  ++reportContextSeq;
+  ++detailSeq;
+  memberMismatch.value = false;
+  clearReportViews();
   cancelPendingUndo();
   combineOpen.value = false;
   morphologyAddOpen.value = false; morphologyEditItem.value = null;
@@ -2043,6 +2222,7 @@ watch(() => props.reportId, (reportId) => {
   ocrLoading.value = false;
   ocrError.value = "";
   editOpen.value = false;
+  typeCorrectionOpen.value=false;typeCorrectionBusy.value=false;typeLeave.reset();
   allObservationsOpen.value = false;
   editOriginalIndex.value = 0;
   if (!reportId) {
@@ -2065,7 +2245,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   cancelPendingUndo();
   detailActive = false;
-  detailSeq += 1;
+  ++detailSeq;
+  ++reportContextSeq;
   window.removeEventListener("focus", refreshDuplicateOnFocus);
   stopOriginalExportStatusPolling();
   stopJobsPolling();
@@ -2077,14 +2258,17 @@ onBeforeUnmount(() => {
 onDeactivated(() => {
   cancelPendingUndo();
   detailActive = false;
-  stopOriginalExportStatusPolling();
+  ++detailSeq;
+  ++reportContextSeq;
+  clearReportViews();
   stopJobsPolling();
   stopEventPolling();
 });
 onActivated(() => {
-  const wasInactive = !detailActive;
-  detailActive = true;
-  if (wasInactive) void loadDetail(props.reportId, true);
+  if (!detailActive) {
+    detailActive = true;
+    void loadDetail(props.reportId);
+  }
   if (hasRunningJobs.value || source.value?.status === "queued" || source.value?.status === "processing") {
     void refreshJobs(true);
   }
@@ -2099,23 +2283,29 @@ onActivated(() => {
   <ReportCombineDialog v-if="combineOpen && detail" :report="detail" @close="combineOpen=false" @combined="onReportsCombined" />
   <template v-if="!reviewObservationId">
   <header v-if="variant === 'floating'" class="sheet-header report-detail-floating-header">
-    <ReportScrollingTitle :text="source?.title || '报告详情'" />
+    <ReportScrollingTitle :text="source?.title || '档案详情'" />
     <button class="plain-icon-button" type="button" title="关闭" @click="emit('close')"><X :size="18" /></button>
   </header>
-  <div v-if="!source" class="mini-loading report-detail-loading"><LoaderCircle class="spin-icon" :size="16" />正在读取报告详情</div>
+  <p v-if="!source && detailError" class="inline-panel-error" role="alert">{{ detailError }}</p>
+  <RecordLoading v-else-if="!source" class="report-detail-loading" label="正在读取档案详情" />
   <div v-else class="preview-stack" :class="{ 'preview-stack--floating': variant === 'floating' }">
-    <article class="preview-card">
+    <p v-if="originalsOnly && detailError" class="inline-panel-error" role="alert">{{detailError}}</p>
+    <template v-if="!originalsOnly">
+    <HealthRecordTrashAction v-if="!hideTrashAction" class="report-detail-toolbar" :delegate="canManageReport" :disabled="trashingReport" @request="askTrash">
       <div class="preview-heading">
+        <span class="chip chip--type">{{ typeLabel(source.reportType) }}</span>
+        <span v-if="statusMeta[source.status]" class="chip" :class="statusMeta[source.status].chip">{{ statusMeta[source.status].label }}</span>
+      </div>
+    </HealthRecordTrashAction>
+    <article class="preview-card">
+      <div v-if="hideTrashAction" class="preview-heading">
         <span class="chip chip--type">{{ typeLabel(source.reportType) }}</span>
         <span v-if="statusMeta[source.status]" class="chip" :class="statusMeta[source.status].chip">
           {{ statusMeta[source.status].label }}
         </span>
-        <button v-if="canManageReport" class="preview-trash-button" type="button" title="移入回收站" :disabled="trashingReport" @click="askTrash">
-          <LoaderCircle v-if="trashingReport" class="spin-icon" :size="16" />
-          <Trash2 v-else :size="16" />
-        </button>
+
       </div>
-      <h3 class="report-card-title">{{ source.title }}</h3>
+      <h3 v-if="!hideTitle" class="report-card-title">{{ source.title }}</h3>
       <p v-if="detailError" class="inline-panel-error">{{ detailError }}</p>
       <div v-if="ocrEmptyNotice" class="runtime-warning compact">
         <CircleAlert :size="18" />
@@ -2125,14 +2315,14 @@ onActivated(() => {
         <div><dt>报告日期</dt><dd>{{ source.reportIssuedAt || "日期待确认" }}<span v-if="isManualField('reportIssuedAt')" class="manual-field-chip">人工校对</span></dd></div>
         <div><dt>医院</dt><dd>{{ [source.hospitalName, source.hospitalBranch].filter(Boolean).join(" · ") || "待整理" }}<span v-if="isManualField('hospitalName') || isManualField('hospitalBranch')" class="manual-field-chip">人工校对</span></dd></div>
         <div><dt>科室</dt><dd>{{ source.departmentName || "待整理" }}<span v-if="['departmentName', 'performingDepartment', 'reportingDepartment', 'orderingDepartment'].some(isManualField)" class="manual-field-chip">人工校对</span></dd></div>
-        <div><dt>部位</dt><dd>{{ source.bodyPart || "待整理" }}<span v-if="isManualField('bodyParts')" class="manual-field-chip">人工校对</span></dd></div>
+        <div v-if="source.reportType !== 'prescription'"><dt>部位</dt><dd>{{ source.bodyPart || "待整理" }}<span v-if="isManualField('bodyParts')" class="manual-field-chip">人工校对</span></dd></div>
         <div><dt>页数</dt><dd>{{ source.pageCount || 0 }} 页</dd></div>
         <div><dt>状态</dt><dd>{{ statusMeta[source.status]?.label || source.status }}</dd></div>
         <div v-if="currentDetail?.createdAt"><dt>上传时间</dt><dd>{{ formatDatabaseTimeWithYear(currentDetail.createdAt) }}</dd></div>
       </dl>
-      <div v-if="detailLoading" class="mini-loading"><LoaderCircle class="spin-icon" :size="16" />{{ currentDetail ? "正在更新报告内容" : "正在读取报告详情" }}</div>
+      <div v-if="detailLoading" class="mini-loading"><LoaderCircle class="spin-icon" :size="16" />{{ currentDetail ? "正在更新报告内容" : "正在读取档案详情" }}</div>
       <div class="report-action-row">
-        <button v-if="canManageReport && (source.status === 'needs_review')" class="primary-button compact-primary" type="button" :disabled="confirming || duplicateCandidatesPending" @click="confirmReady">
+        <button v-if="canManageReport && (source.status === 'needs_review')" class="primary-button compact-primary" type="button" :disabled="memberIdentityBusy || duplicateCandidatesPending" @click="confirmReady">
           <LoaderCircle v-if="confirming" class="spin-icon" :size="17" />
           <CheckCircle2 v-else :size="17" />
           {{ confirming ? "确认中" : "确认归档" }}
@@ -2142,11 +2332,14 @@ onActivated(() => {
           <CheckCircle2 v-else :size="17" />
           {{ confirming ? "确认中" : "手动归档" }}
         </button>
+        <button v-if="canManageReport" class="soft-action-button" type="button" @click="openTypeCorrection($event)">修改类型</button>
         <button v-if="canManageReport" class="soft-action-button" type="button" @click="openEditReport"><Pencil :size="17" />校对字段</button>
         <button v-if="canManageReport && detail && detail.status !== 'trashed'" class="soft-action-button" type="button" :disabled="jobsLoading || hasRunningJobs" @click="combineOpen=true"><Plus :size="17" />合并报告</button>
         <button class="soft-action-button" type="button" @click="openOcrText"><ScrollText :size="17" />查看 OCR</button>
         <button v-if="firstPdfPage" class="soft-action-button" type="button" @click="openPdfOriginalViewer(firstPdfPage)"><FileText :size="17" />查看 PDF</button>
       </div>
+      <p v-if="source.reportType==='other'&&['ready','needs_review'].includes(source.status)" class="report-type-hint">暂归为其他资料。可通过“修改类型”选择正确分类；分类不会删除原件或已提取内容。</p>
+      <ReportProcessAssociation :open-in-place="openRelatedInPlace" @open-record="emit('openRecord',$event)" :report-id="reportId" :member-id="source.memberId" :kind="source.reportType==='prescription'?'medication_document':'report'" @updated="emit('updated')" />
       <section v-if="reprocessNotice" class="reprocess-notice" :class="`is-${reprocessNotice.tone}`">
         <LoaderCircle v-if="reprocessNotice.tone === 'info'" class="spin-icon" :size="19" />
         <CircleAlert v-else :size="19" />
@@ -2169,9 +2362,14 @@ onActivated(() => {
         <template v-if="duplicateCandidatesError">{{ duplicateCandidatesError }} <button class="soft-action-button" type="button" @click="loadDetail(reportId,true)">重试核对</button></template>
         <template v-else>正在核对是否有重复报告，报告内容已可查看。</template>
       </div>
-      <section v-if="currentDetail?.duplicateVerification?.status === 'failed'" class="duplicate-warning">
-        <p>报告整理已完成，重复核验暂未完成，已有结果不受影响。</p>
-        <button v-if="canManageReport" class="soft-action-button" type="button" :disabled="triggeringAi" @click="retryDuplicateVerification">重新核验</button>
+      <section v-if="['failed','stale'].includes(currentDetail?.duplicateVerification?.status || '')" class="duplicate-warning">
+        <CircleAlert :size="18" />
+        <div>
+          <p>{{currentDetail?.duplicateVerification?.status==='stale'?'报告内容或判重规则已更新，请重新核验是否重复。':'报告整理已完成，重复核验暂未完成，已有结果不受影响。'}}</p>
+          <div v-if="canManageReport" class="duplicate-actions">
+            <button class="soft-action-button" type="button" :disabled="triggeringAi" @click="retryDuplicateVerification">重新核验</button>
+          </div>
+        </div>
       </section>
       <section v-if="duplicateCandidates.length || duplicatePause" class="duplicate-warning">
         <CircleAlert :size="18" />
@@ -2196,7 +2394,7 @@ onActivated(() => {
             <span>{{ candidate.reason }} · {{ candidate.matchedFields.join("、") }}</span>
           </button>
           <div v-if="source.status === 'needs_review'" class="duplicate-actions">
-            <button v-if="canManageReport" class="duplicate-confirm-button" type="button" :disabled="confirming || duplicateCandidatesPending" @click="confirmReady">
+            <button v-if="canManageReport" class="duplicate-confirm-button" type="button" :disabled="memberIdentityBusy || duplicateCandidatesPending" @click="confirmReady">
               <CheckCircle2 :size="15" />仍然确认归档
             </button>
           </div>
@@ -2209,32 +2407,41 @@ onActivated(() => {
           <p v-if="memberIdentityAssessment.verificationIncomplete">已识别到患者信息（{{ memberPatientInfo }}），但未能可靠识别姓名，当前成员资料也不足以完成身份比对，请对照原件核对归属。</p>
           <p v-else>报告患者信息（{{ memberPatientInfo }}）与当前成员资料的{{ memberMismatchFieldLabels }}不一致，请核对是否选对成员；成员使用昵称或亲属称呼时，也可以确认属于当前成员。核对后可以一键归属，或创建新成员并归属。</p>
           <div class="duplicate-actions member-mismatch-actions">
+            <button v-if="canManageReport" class="duplicate-confirm-button" type="button" :disabled="memberIdentityBusy" @click="openMemberPicker">选择已有成员</button>
             <button v-if="canManageReport"
               v-for="candidate in memberIdentityAssessment.candidates"
               :key="candidate.id"
               class="duplicate-confirm-button"
               type="button"
-              :disabled="assigningMember"
+              :disabled="memberIdentityBusy"
               @click="assignToCandidate(candidate)"
             >
               <LoaderCircle v-if="assigningMember" class="spin-icon" :size="15" />
               <CheckCircle2 v-else :size="15" />
               归属到「{{ candidate.displayName }}」（{{ mismatchRelationshipLabels[candidate.relationship] || "其他" }}）
             </button>
-            <button v-if="canManageReport" class="duplicate-confirm-button" type="button" :disabled="assigningMember" @click="openMemberCreate">
+            <button v-if="canManageReport" class="duplicate-confirm-button" type="button" :disabled="memberIdentityBusy" @click="openMemberCreate">
               <Plus :size="15" />创建新成员并归属
             </button>
-            <button v-if="canManageReport" class="soft-action-button" type="button" :disabled="dismissingMismatch" @click="dismissMemberMismatch">
+            <button v-if="canManageReport" class="soft-action-button" type="button" :disabled="memberIdentityBusy" @click="dismissMemberMismatch">
               {{ dismissingMismatch ? "处理中" : "确认属于当前成员" }}
             </button>
           </div>
+          <form v-if="memberPickerOpen && canManageReport" class="member-create-form" @submit.prevent="confirmMemberPicker">
+            <template v-if="assignableMembers.length">
+              <FormSelect v-model="memberPickerId" :options="memberPickerOptions" :disabled="memberIdentityBusy" aria-label="归属到已有成员" />
+              <button type="submit" class="duplicate-confirm-button" :disabled="memberIdentityBusy || !memberPickerId">核对并归属</button>
+            </template>
+            <p v-else>暂无其他可管理的成员，可创建新成员，或由成员管理员授予管理权限后再归属。</p>
+            <button type="button" class="soft-action-button" :disabled="memberIdentityBusy" @click="memberPickerOpen=false">取消</button>
+          </form>
           <form v-if="memberCreateOpen" class="member-create-form" @submit.prevent="submitMemberCreate">
             <input v-model="memberCreateForm.displayName" type="text" maxlength="40" placeholder="成员姓名（必填）" required />
             <FormSelect v-model="memberCreateForm.relationship" :options="memberCreateRelationshipOptions" aria-label="家庭关系" />
             <FormSelect v-model="memberCreateForm.sex" :options="memberCreateSexOptions" aria-label="性别" />
             <DateTimePicker v-model="memberCreateForm.birthDate" :min-year="1900" :max-year="memberCreateMaxYear" aria-label="出生日期" />
             <p v-if="!memberIdentityAssessment.patientBirthDate && memberIdentityAssessment.patientApproxBirthDate" class="member-create-hint">出生日期按报告年龄推算，请核对后再保存</p>
-            <button type="submit" class="duplicate-confirm-button" :disabled="memberCreateSaving">
+            <button type="submit" class="duplicate-confirm-button" :disabled="memberIdentityBusy">
               {{ memberCreateSaving ? "创建中" : "创建并归属" }}
             </button>
             <button type="button" class="soft-action-button" @click="memberCreateOpen = false">取消</button>
@@ -2324,7 +2531,9 @@ onActivated(() => {
           </div>
         </section>
         <section v-if="detail?.medications.length" class="clinical-fact-panel">
-          <header><strong>用药记录</strong><span>共 {{ detail.medications.length }} 项</span></header>
+          <header><strong>{{ detail.medications.every(item=>item.formula) ? '报告所列药方' : '报告所列用药' }}</strong><span>共 {{ detail.medications.length }} {{ detail.medications.every(item=>item.formula) ? '份药方' : '项' }}</span></header>
+          <p class="clinical-confirm-hint">报告中的药物不代表已使用；核对后可确认实际使用，生成用药记录。</p>
+          <p v-if="detail.medications.filter(item=>item.formula).length>1" class="formula-review-notice">识别到多份汤剂配方，请先核对是否为不同处方或重复扫描，再确认实际使用。</p>
           <div class="clinical-fact-list">
             <article v-for="item in detail.medications" :key="item.id">
               <div class="clinical-fact-heading">
@@ -2337,6 +2546,8 @@ onActivated(() => {
               </div>
               <p>{{ medicationDetail(item) || item.instructions || "原报告未注明详细用法" }}</p>
               <small v-if="item.instructions && medicationDetail(item)">{{ item.instructions }}</small>
+              <MedicationFormulaPanel v-if="item.formula" :formula="item.formula" show-source @source="openClinicalEvidence" />
+              <ReportMedicationUseButton v-if="canManageReport" :member-id="detail.memberId" :medication-id="item.id" :formula="Boolean(item.formula)" />
             </article>
           </div>
         </section>
@@ -2357,14 +2568,15 @@ onActivated(() => {
           </div>
         </section>
         <section v-if="detail?.vaccinations.length" class="clinical-fact-panel">
-          <header><strong>疫苗接种</strong><span>共 {{ detail.vaccinations.length }} 项</span></header>
+          <header><strong>报告所列接种</strong><span>共 {{ detail.vaccinations.length }} 项</span></header>
+          <p class="clinical-confirm-hint">核对接种日期和剂次后保存为接种记录，原报告保留为来源。</p>
           <div class="clinical-fact-list">
             <article v-for="item in detail.vaccinations" :key="item.id">
               <div class="clinical-fact-heading">
                 <strong>{{ item.vaccineName }}<template v-if="item.doseNumber"> · {{ item.doseNumber }}</template><em v-if="item.manualFields.length" class="manual-field-chip">人工校对</em></strong>
                 <div class="clinical-fact-actions">
                   <button v-if="item.evidence.length" type="button" :title="savingPages ? '页面正在更新' : '查看原页'" :disabled="savingPages" @click="openClinicalEvidence(item.evidence)"><FileImage :size="15" /></button>
-                  <button v-if="canManageReport" type="button" title="校对疫苗" @click="editClinicalFact('vaccination', item)"><Pencil :size="15" /></button>
+                  <RouterLink v-if="item.confirmedVaccinationId" :to="{path:'/events/detail/vaccination/'+encodeURIComponent(item.confirmedVaccinationId),query:{returnTo:returnTo||'/events/detail/report/'+encodeURIComponent(reportId)}}">查看已记录接种</RouterLink><RouterLink v-else-if="canManageReport&&!hideVaccinationConfirmation" :to="{path:'/add/vaccination',query:{sourceReportId:reportId,sourceFactId:item.id,returnTo:returnTo||`/events/detail/report/${encodeURIComponent(reportId)}`}}">核对并记录</RouterLink><button v-if="canManageReport" type="button" title="校对疫苗" @click="editClinicalFact('vaccination', item)"><Pencil :size="15" /></button>
                   <button v-if="canManageReport" type="button" title="删除疫苗" @click="removeClinicalFact('vaccination', item)"><Trash2 :size="15" /></button>
                 </div>
               </div>
@@ -2496,6 +2708,7 @@ onActivated(() => {
       :finding="morphologyEditItem"
       :report-id="reportId"
       @close="morphologyEditItem = null; morphologyAddOpen = false"
+      :expected-source-version="detail?.sourceVersion"
       @saved="morphologySaved"
     />
     <ClinicalFactEditor
@@ -2504,6 +2717,7 @@ onActivated(() => {
       :report-id="props.reportId"
       :type="clinicalFactEditor.type"
       :fact="clinicalFactEditor.fact"
+      :expected-source-version="detail?.sourceVersion"
       @close="clinicalFactEditor = null"
       @saved="clinicalFactSaved"
     />
@@ -2513,6 +2727,7 @@ onActivated(() => {
       :report-id="props.reportId"
       :report-type="detail.reportType"
       :section="structuredSectionEditor === 'create' ? null : structuredSectionEditor"
+      :expected-source-version="detail?.sourceVersion"
       @close="structuredSectionEditor = null"
       @saved="structuredSectionSaved"
     />
@@ -2658,15 +2873,16 @@ onActivated(() => {
       </div>
     </article>
 
+    </template>
     <article class="preview-card originals-card">
-      <div class="section-title-row originals-toolbar">
-        <div><h4>报告原件</h4><p>点击打开原图或 PDF 原件</p></div>
-        <button class="soft-action-button" type="button" :disabled="exportingOriginal || !detail?.pages.length" @click="downloadReportOriginal">
+      <div class="section-title-row originals-toolbar" :class="{ 'originals-toolbar--attachments': originalsOnly }">
+        <div><h4>{{ originalsOnly ? '原件附件' : '报告原件' }}</h4><p>点击打开原图或 PDF 原件</p></div>
+        <button class="soft-action-button originals-download" type="button" :disabled="exportingOriginal || !detail?.pages.length" @click="downloadReportOriginal">
           <LoaderCircle v-if="exportingOriginal || originalExportStatus === 'generating'" class="spin-icon" :size="15" />
           <Download v-else :size="15" />
           {{ originalExportStatus === 'ready' ? '下载 PDF' : originalExportStatus === 'generating' ? '正在生成 PDF' : '生成 PDF' }}
         </button>
-        <ReportPageAppend v-if="app.session.value?.authenticated && canManageReport && detail && detail.status !== 'trashed'" :key="reportId" :report-id="reportId" :old-page-count="detail.pages.length" :report-title="detail.title" :member-name="app.allMembers.value.find(member => member.id === detail?.memberId)?.displayName" :busy="detail.status === 'processing'" @state-changed="syncAppendProcessing" @updated="emit('updated')" />
+        <ReportPageAppend :label="originalsOnly ? '上传附件' : undefined" v-if="app.session.value?.authenticated && canManageReport && detail && detail.status !== 'trashed'" :key="reportId" :report-id="reportId" :old-page-count="detail.pages.length" :report-title="detail.title" :member-name="app.allMembers.value.find(member => member.id === detail?.memberId)?.displayName" :busy="detail.status === 'processing'" @state-changed="syncAppendProcessing" @updated="emit('updated')" />
       </div>
       <div v-if="detail?.pages.length" class="original-grid">
         <div v-for="(page, index) in detail.pages" :key="page.id" class="original-tile-card">
@@ -2698,7 +2914,7 @@ onActivated(() => {
       </div>
       <p v-else class="preview-hint">详情加载后会显示关联原件。</p>
     </article>
-    <ReportNotesPanel v-if="detail" :key="`${reportId}:${notesRevision}`" :report-id="reportId" />
+    <ReportNotesPanel v-if="detail && !originalsOnly" :key="`${reportId}:${notesRevision}`" :report-id="reportId" />
     <section v-if="detail?.combinationUndo" class="preview-card report-combination-info" aria-label="合并信息">
       <div class="report-combination-info__summary">
         <p>最近合并：{{ detail.combinationUndo.sourceTitle || '另一份报告' }}</p>
@@ -2710,7 +2926,7 @@ onActivated(() => {
 
   </template>
   <Teleport to="body">
-    <div v-if="(allObservationsOpen && detail) || reviewObservationId" class="modal-backdrop observation-all-backdrop" @click.self="reviewObservationId ? emit('close') : closeAllObservations()">
+    <div v-if="(allObservationsOpen && detail) || reviewObservationId" class="modal-backdrop observation-all-backdrop" @click.self="closeAllObservations()">
       <section class="modal-panel observation-all-modal" :class="{ 'observation-direct-review': reviewObservationId }" role="dialog" aria-modal="true" :aria-label="reviewObservationId ? '核对指标' : '全部结构化指标'" :inert="isAddingObservation || undefined">
         <div v-if="reviewObservationId && (!detail || detailError)" class="observation-review-loading">
           <p>{{ detailError || '正在加载目标指标…' }}</p>
@@ -2877,7 +3093,7 @@ onActivated(() => {
                 </details>
                 <p v-if="observationEditorError" class="inline-panel-error">{{ observationEditorError }}</p>
                 </div>
-                <div class="form-actions">
+                <div class="form-actions record-form-actions">
                   <button class="soft-action-button" type="button" @click="closeObservationEditor">取消</button>
                   <button class="primary-button" type="submit" :disabled="savingObservation">
                     <LoaderCircle v-if="savingObservation" class="spin-icon" :size="16" />保存并重新判断
@@ -2895,14 +3111,14 @@ onActivated(() => {
   </Teleport>
 
   <Teleport to="body">
-    <div v-if="editOpen" class="modal-backdrop report-edit-backdrop" @click.self="editOpen = false">
+    <div v-if="editOpen" class="modal-backdrop report-edit-backdrop" @click.self="closeEditReport">
       <section class="modal-panel edit-workspace" role="dialog" aria-modal="true" aria-label="校对报告字段">
         <header class="edit-workspace-header">
           <div class="edit-workspace-title">
             <Pencil :size="20" />
             <div><h3>校对报告字段</h3><p>对照原件与 OCR 文本逐项核对</p></div>
           </div>
-          <button class="plain-icon-button" type="button" title="关闭" @click="editOpen = false"><X :size="18" /></button>
+          <button class="plain-icon-button" type="button" title="关闭" @click="closeEditReport"><X :size="18" /></button>
         </header>
         <div class="edit-workspace-body">
           <section class="edit-col edit-col-originals">
@@ -3010,7 +3226,7 @@ onActivated(() => {
                 <label><span>开单科室<em v-if="isManualField('orderingDepartment')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.orderingDepartment" /></label>
                 <label><span>执行科室<em v-if="isManualField('performingDepartment')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.performingDepartment" /></label>
                 <label><span>报告科室<em v-if="isManualField('reportingDepartment')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.reportingDepartment" /></label>
-                <label><span>检查部位<em v-if="isManualField('bodyParts')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.bodyPart" /></label>
+                <label v-if="editForm.reportType !== 'prescription'"><span>检查部位<em v-if="isManualField('bodyParts')" class="manual-field-chip">人工校对</em></span><input v-model="editForm.bodyPart" /></label>
               </div>
               <label><span>临床诊断<em v-if="isManualField('clinicalDiagnosis')" class="manual-field-chip">人工校对</em></span><textarea v-model="editForm.clinicalDiagnosis" rows="2"></textarea></label>
               <label><span>检查目的<em v-if="isManualField('purpose')" class="manual-field-chip">人工校对</em></span><textarea v-model="editForm.purpose" rows="2"></textarea></label>
@@ -3019,8 +3235,8 @@ onActivated(() => {
               <label><span>摘要<em v-if="isManualField('summary')" class="manual-field-chip">人工校对</em></span><textarea v-model="editForm.summary" rows="3"></textarea></label>
               <label><span>建议/复查<em v-if="isManualField('recommendation')" class="manual-field-chip">人工校对</em></span><textarea v-model="editForm.recommendation" rows="3"></textarea></label>
               <p v-if="detailError" class="inline-panel-error">{{ detailError }}</p>
-              <div class="form-actions">
-                <button type="button" @click="editOpen = false">取消</button>
+              <div class="form-actions record-form-actions">
+                <button type="button" @click="closeEditReport">取消</button>
                 <button class="primary-button" type="submit" :disabled="savingReport">
                   <LoaderCircle v-if="savingReport" class="spin-icon" :size="16" />
                   保存校对
@@ -3339,12 +3555,15 @@ onActivated(() => {
       </section>
     </div>
   </Teleport>
+  <HealthProcessEditorDialog v-if="typeCorrectionOpen&&canManageReport" title="修改资料类型" close-label="关闭类型修改" :busy="typeCorrectionBusy" :return-focus="typeCorrectionOpener" @close="closeTypeCorrection">
+    <form class="report-type-form" @submit.prevent="saveTypeCorrection"><div><p>请选择原件对应的资料类型，不会改变已有用药或接种记录。</p><FormSelect v-model="correctedType" :options="typeOptions.filter(option=>option.value!=='all')" aria-label="资料类型" :disabled="typeCorrectionBusy"/><p v-if="typeCorrectionError" role="alert" class="inline-panel-error">{{typeCorrectionError}}</p></div><footer class="form-actions record-form-actions"><button type="button" :disabled="typeCorrectionBusy" @click="closeTypeCorrection">取消</button><button type="submit" class="primary-button" :disabled="typeCorrectionBusy">{{typeCorrectionBusy?'正在保存…':'保存类型'}}</button></footer></form>
+  </HealthProcessEditorDialog>
 </template>
 
 <style scoped>
 .observation-manual-region { position:absolute; border:2px solid #d68a24; background:#e9a43a25; box-sizing:border-box; pointer-events:none; }
 .observation-order-control { display: flex; gap: 4px; padding: 4px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
-.observation-order-control button { flex: 1; min-height: 36px; padding: 6px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; }
+.observation-order-control button { flex: 1; min-height: 36px; padding: 6px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: 14px; white-space: nowrap; cursor: pointer; }
 .observation-order-control button[aria-pressed="true"] { background: var(--brand-soft); color: var(--brand); font-weight: 600; }
 .observation-source-order-status { font-size: 12px; color: var(--muted); }
 </style>
@@ -3352,7 +3571,7 @@ onActivated(() => {
 <style scoped>
 .observation-editor-host { display: contents; }
 .observation-editor-host.observation-add-backdrop { position: fixed; inset: 0; z-index: 131; display: flex; align-items: center; justify-content: center; padding: 16px; background: var(--overlay); }
-.observation-edit-panel.observation-add-modal { grid-area: auto; position: relative; inset: auto; z-index: auto; width: min(1600px, 100%); height: calc(100dvh - 32px); max-height: none; display: flex; padding: 16px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow-l); animation: none; }
+.observation-edit-panel.observation-add-modal { grid-area: auto; position: relative; inset: auto; z-index: auto; width: min(1600px, 100%); height: calc(100vh - 32px); height: calc(100dvh - 32px); max-height: none; display: flex; padding: 16px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow-l); animation: none; }
 .observation-add-modal > .observation-edit-grabber { display: none; }
 .observation-add-modal > header { flex-shrink: 0; min-height: 32px; align-items: center; margin-bottom: 8px; }
 .observation-add-modal > header h4 { margin: 0; }
@@ -3365,15 +3584,26 @@ onActivated(() => {
 .observation-add-source :deep(.source-region-tools) { flex-shrink: 0; }
 .observation-add-source :deep(.source-region-scroll) { flex: 1; min-height: 0; height: auto; max-height: none; }
 .observation-source-placeholder { grid-column: 1; grid-row: 1 / span 9; align-self: start; min-width: 0; }
-.observation-add-modal :deep(.source-region-scroll) { height: calc(100dvh - 148px); max-height: calc(100dvh - 148px); }
+.observation-add-modal :deep(.source-region-scroll) { height: calc(100vh - 148px); height: calc(100dvh - 148px); max-height: calc(100vh - 148px); max-height: calc(100dvh - 148px); }
 .observation-source-placeholder { display: grid; place-items: center; min-height: 300px; padding: 24px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); text-align: center; }
 @media (max-width: 760px) {
   .observation-editor-host.observation-add-backdrop { padding: 8px; }
-  .observation-edit-panel.observation-add-modal { width: 100%; height: calc(100dvh - 16px); padding: 16px; border-radius: 14px; }
+  .observation-edit-panel.observation-add-modal { width: 100%; height: calc(100vh - 16px); height: calc(100dvh - 16px); padding: 16px; border-radius: 14px; }
   .observation-add-modal .observation-editor-form { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(160px, 1fr) minmax(120px, 1fr) auto; }
   .observation-add-source { grid-column: 1; grid-row: 1; }
   .observation-add-modal .observation-editor-fields { grid-column: 1; grid-row: 2; }
   .observation-add-modal .observation-editor-form > .form-actions { grid-column: 1; grid-row: 3; }
 
+}
+</style>
+
+<style scoped>
+.formula-review-notice{padding:10px 12px;border:1px solid var(--line-strong);border-radius:10px;background:var(--surface-soft);font-size:12px;line-height:1.6;color:var(--muted)}
+.report-type-hint,.clinical-confirm-hint{margin:8px 0;font-size:12px;line-height:19px;color:var(--muted)}.report-type-form{display:flex;flex-direction:column;min-height:0}.report-type-form>div{padding:12px 14px;display:grid;gap:10px;overflow:auto}.report-type-form p{margin:0;font-size:12px;line-height:19px;color:var(--muted)}.report-type-form footer{margin:0;padding:8px 14px;border-top:1px solid var(--line)}
+@media (max-width:760px), (pointer:coarse) {
+  .report-action-row { gap:12px 6px; align-items:center; }
+  .report-action-row > button { position:relative; height:auto; min-height:32px; padding:5px 8px; gap:5px; font-size:12px; line-height:20px; }
+  .report-action-row > button::after { content:''; position:absolute; inset:-6px 0; }
+  .report-action-row > button > svg { width:15px; height:15px; flex-shrink:0; }
 }
 </style>

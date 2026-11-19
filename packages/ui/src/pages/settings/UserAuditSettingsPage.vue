@@ -117,7 +117,7 @@ onBeforeUnmount(() => observer?.disconnect());
 
 <template>
   <section ref="root" class="settings-page audit-page">
-    <SubPageHeader back-to="/me/maintenance" back-label="返回维护工具" title="用户操作日志" description="按时间倒序记录报告、成员、提醒、备份和维护操作">
+    <SubPageHeader back-to="/me/maintenance" back-label="返回维护工具" title="用户操作日志" description="按时间倒序查看健康记录、历程关联、成员、提醒和维护操作">
       <button class="icon-button audit-clear-button" type="button" title="清理用户操作日志" :disabled="loading || refreshing || !logs.length" @click="clearLogs">
         <Trash2 :size="17" />
       </button>

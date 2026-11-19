@@ -26,6 +26,7 @@ export type Session = {
 };
 
 export type HealthMember = {
+  careAllergies?:string|null;careHistory?:string|null;careMedications?:string|null;careBackgroundVersion?:string;
   isSelf: boolean;
   hidden: boolean;
   canManageSharing: boolean;
@@ -111,6 +112,9 @@ export type MemberAccess = {
 };
 
 export type ReportSummary = {
+  eventId?: string | null;
+  eventTitle?: string | null;
+  eventCount?: number;
   deletedAt?: string | null;
   purgeAfter?: string | null;
   id: string;
@@ -283,12 +287,7 @@ export type ReportSummaryStats = {
   latestReportIssuedAt: string | null;
 };
 
-export type OverviewSummary = {
-  stats: ReportSummaryStats;
-  pendingReminders: Reminder[];
-  recentReadyReports: ReportSummary[];
-  unfiledReports: ReportSummary[];
-};
+export type { HealthOverview as OverviewSummary } from '../../../shared/health-overview';
 
 export type ReportPage = {
   id: string;
@@ -1055,6 +1054,7 @@ export type ReportMedication = {
   reportId: string;
   sectionName: string | null;
   context: "prescription" | "outpatient" | "inpatient" | "discharge" | "other";
+  formula?: import('../../../shared/medication-formula').MedicationFormula | null;
   medicationName: string;
   genericName: string | null;
   specification: string | null;
@@ -1088,6 +1088,7 @@ export type ReportProcedure = {
 };
 
 export type VaccinationRecord = {
+  confirmedVaccinationId?: string | null;
   id: string;
   reportId: string;
   vaccineName: string;
@@ -1231,18 +1232,7 @@ export type ReportDetail = ReportSummary & {
 
 export type CursorPage<T> = { items: T[]; nextCursor: string | null; hasMore: boolean };
 
-export type Reminder = {
-  id: string;
-  memberId: string;
-  reportId: string | null;
-  title: string;
-  dueAt: string;
-  status: "pending" | "completed" | "dismissed";
-  source: "manual" | "report_suggestion";
-  reportTitle: string | null;
-  reportHospitalName: string | null;
-  reportIssuedAt: string | null;
-};
+export type { Reminder } from '../../../shared/health-reminders';
 
 export type AppNotification = {
   id: string;

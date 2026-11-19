@@ -1,3 +1,4 @@
+import { parseMedicationFormula, type MedicationFormula } from '../../shared/medication-formula';
 import { collectUnverifiedPreviousObservations, readUnverifiedPreviousObservations } from './extraction-review.service';
 import type { ExaminationInput } from "../domain/examination";
 import { examinationSourcePages, inferObservationExamination, expandTemporalObservationColumns, publishExaminationAssignments, publishMorphologyExaminationAssignments } from "./report-examination-inference.service";
@@ -41,7 +42,7 @@ import type {
 } from "./ai-input-planner.service";
 import { writeAiInputDebugLog, writeAiOutputDebugLog } from "../utils/ai-input-debug-log";
 import { isTrackableMorphologyFinding } from "../utils/morphology-rules";
-import type { ReportContentType } from "./report-content-classifier.service";
+import { hasDispensingMedicationContent, type ReportContentType } from "./report-content-classifier.service";
 import {
   reportStructuredSectionKeys,
   type ReportStructuredSectionKey,
@@ -53,7 +54,7 @@ import {
 } from "./observation-interpretation.service";
 import { assessObservationReference } from "./observation-reference.service";
 
-export const aiExtractionPromptVersion = "health-record-routed-v12-result-review";
+export const aiExtractionPromptVersion = "health-record-routed-v13-decoction-formula";
 const maxInputCharacters = 80_000;
 const reportTypeAliases: Record<string, string> = {
   physical_exam: "checkup",
@@ -239,6 +240,7 @@ export type AiDiagnosis = {
 };
 
 export type AiMedication = {
+  formula?: MedicationFormula | null;
   sectionName: string | null;
   context: "prescription" | "outpatient" | "inpatient" | "discharge" | "other";
   medicationName: string;
@@ -602,6 +604,8 @@ function normalizeDiagnosis(value: unknown): AiDiagnosis | null {
 function normalizeMedication(value: unknown): AiMedication | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const row = value as Record<string, unknown>;
+  const formula = parseMedicationFormula(row.formula);
+  if (row.formula != null && !formula) return null;
   const medicationName = textValue(
     row.medicationName ?? row.name ?? row.n,
     300,
@@ -609,6 +613,7 @@ function normalizeMedication(value: unknown): AiMedication | null {
   if (!medicationName) return null;
   const rawContext = textValue(row.context ?? row.t, 40) || "other";
   return {
+    formula,
     sectionName: textValue(row.sectionName ?? row.s, 200),
     context: medicationContexts.has(rawContext)
       ? (rawContext as AiMedication["context"])
@@ -1582,7 +1587,10 @@ function narrativeContract(input: AiExtractionInput) {
     );
   }
   if (types.has("prescription")) parts.push(`处方只输出 medications。用药可出现在门诊病历、住院记录、出院带药或独立用药清单中，不要求有“处方”标题。
-编号列表、表格、药名与用法分行、多栏和跨页续表均按同一药品条目关联；只有相同编号、明确表格列或连续上下文能证明归属时才合并，不能把相邻栏或下一药品的剂量拼给上一药品。跨页证据分别保留页码；证据不足的规格、剂量、频次留空。
+中药调剂单、代煎单中的汤剂按整张处方输出一个 medications 条目，药名用原文明示方名，未命名时使用“中药汤剂”。用药人、处方号或日期不一致的方分别输出；同张处方跨页续表才合并。中成药及西药继续逐个药品输出，不能把混合药单的全部药品并入汤剂。
+整方条目增加 formula={kind:"decoction",doseCount,preparation,ingredients:[{name,amount,unit,amountBasis,totalAmount,totalUnit,instructions,evidence:[{pageNumber,quote}]}]}。doseCount 保留原文剂数；preparation 保留原文煎制说明。逐味保留药名及药材原文明示用量：amountBasis=per_dose 表示每剂投料量、total 表示整方总量、unspecified 表示原文未明确，不能猜测；totalAmount/totalUnit 仅记录另列的原文总量。配制方法写入该味 instructions，每味均需对应原文证据，不纠正或猜测 OCR 药名。
+每味克数不是检验指标，也不是每次服用剂量。整方 dose/doseUnit、frequency、route、instructions 只填写明确的整方服用说明；剂数、袋数、每袋容量与每次服用量分别保留原意，不互相换算，不推算频次、疗程或表示已经服用。数值字段不重复带单位。不再同时输出这张方的各味独立用药条目。
+编号列表、表格、药名与用法分行、多栏和跨页续表均按同一药品条目关联；只有相同编号、明确表格列或连续上下文能证明归属时才合并，不能把相邻栏或下一药品的剂量拼给上一药品。跨页证据分别保留页码；同编号明确续表的同一药品只输出一条，规格与用法分别保留各页证据，不再输出缺少规格的重复条目；不同规格或无明确续表对应关系不能合并。证据不足的规格、剂量、频次留空。
 药品规格不是每次剂量，数量不是疗程；保留盐型、剂型及不同规格，不根据商品名推断通用名。频次缩写及即刻、必要时等原样保留，不换算或补全。处方 context=prescription、门诊用药 context=outpatient、住院用药 context=inpatient、出院带药 context=discharge；按条目所在章节判断。
 停用、暂停、调整或既往用药只能按原文明示保留在 instructions，不能改成当前正在使用；单纯过敏史、药品说明书中的示例及收费明细不作为用药事实。不得添加任何用药建议。`);
   if (types.has("billing"))
@@ -1590,6 +1598,7 @@ function narrativeContract(input: AiExtractionInput) {
       `票据只输出 billingSummary、billingItems，金额必须来自原文，不得自行计算。`,
     );
   if (types.has("vaccination")) parts.push(`接种记录只输出 vaccinations。`);
+  if (types.has("vaccination")||types.has("outpatient")||types.has("inpatient")) parts.push(`允许提取当前门诊、住院资料及其附件中原文明示的接种条目 vaccinations，不得因为文档主类型不是接种而丢弃。每项使用 vaccineName、doseNumber、manufacturer、lotNumber、administeredAt、administrationSite、nextDueAt、p、q；administeredAt 是本次已接种日期，nextDueAt 是明确的下次日期，不能用就诊、出院或上传日期代替。日期与批号出现在邻行时仍需核对并保留对应原文证据；缺失才留空。计划接种或接种建议不能改写为已接种事实。`);
   parts.push(
     `diagnoses 每项使用 diagnosisText、diagnosisType、diagnosisCode、codeSystem、isPrimary、sectionName、p、q；medications 使用 medicationName、genericName、specification、dosageForm、dose、doseUnit、frequency、route、duration、quantity、quantityUnit、instructions、context、sectionName、p、q；procedures 使用 procedureName、procedureType、procedureCode、bodyPart、performedAt、resultText、sectionName、p、q；reportSections 使用 sectionKey、title、content、p、q，title 只写对应类型的简短中文标题，不得抄录英文副标题或整行双语页眉。只返回当前类型允许且原文明示的数组。`,
   );
@@ -3666,6 +3675,12 @@ export function persistAiExtraction(
     throw Object.assign(new Error('自动补救后仍未取得可核实结果，请核对原件清晰度或配置可用的视觉增强'), {code:'AI_NO_VERIFIED_OBSERVATIONS'});
   }
   const examinationPagesForOverrides=examinationSourcePages(reportId);
+  if (!fields.medications.length && examinationPagesForOverrides.some(page => {
+    const text = page.lines.map(line => line.text).join("\n");
+    return hasDispensingMedicationContent(text) && /\d+(?:\.\d+)?\s*(?:mg|g|克|毫克)(?![A-Za-z/／])/i.test(text);
+  })) {
+    throw Object.assign(new Error("调剂单尚未提取到可核实的药品明细，请核对原件与识别文字后重试"), { code: "AI_NO_VERIFIED_MEDICATIONS" });
+  }
   const observationsWithOverrides = applyObservationFieldOverrides(
     reportId,
     fields.observations.map(observation=>{
@@ -3909,8 +3924,8 @@ export function persistAiExtraction(
         INSERT INTO report_medications (
           id, report_id, section_name, medication_context, medication_name, generic_name,
           specification, dosage_form, dose, dose_unit, frequency, route, duration,
-          quantity, quantity_unit, instructions, evidence_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          quantity, quantity_unit, instructions, evidence_json, formula_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       ).run(
         createId("medication"),
@@ -3930,6 +3945,7 @@ export function persistAiExtraction(
         medication.quantityUnit,
         medication.instructions,
         JSON.stringify(medication.evidence),
+        medication.formula ? JSON.stringify(medication.formula) : null,
       );
     }
     db.prepare(

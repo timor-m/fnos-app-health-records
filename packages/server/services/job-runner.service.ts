@@ -1155,7 +1155,7 @@ function failJob(job: JobRow, error: unknown) {
   ).slice(0, 80);
   const permanentFailure = permanentSourceErrorCodes.has(code);
   // A completed quality review needs better evidence or user input, not the same job again.
-  const finalFailure = permanentFailure || ['AI_NO_VERIFIED_OBSERVATIONS','AI_RECOVERY_INCOMPLETE'].includes(code) || job.attempts >= maxAttempts;
+  const finalFailure = permanentFailure || ['AI_NO_VERIFIED_OBSERVATIONS','AI_NO_VERIFIED_MEDICATIONS','AI_RECOVERY_INCOMPLETE'].includes(code) || job.attempts >= maxAttempts;
   const delay = retryDelays[Math.min(job.attempts - 1, retryDelays.length - 1)];
   getDatabase()
     .prepare(

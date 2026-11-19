@@ -173,9 +173,9 @@ test('rejects stale previews and rolls every write back on a mid-transaction fai
     saveReportNote(owner, source, { contentText: '合成预览后的修改', assets: [] });
     assert.throws(() => combineReports(owner, target, payload(source, preview.fingerprint)), /内容已变化/);
     preview = previewReportCombination(owner, source, target);
-    const before = db.prepare('SELECT * FROM reports ORDER BY id').all(), pages = db.prepare('SELECT * FROM report_pages ORDER BY id').all(), observations = db.prepare('SELECT * FROM observations ORDER BY id').all();
     db.exec("CREATE TRIGGER synthetic_combination_failure BEFORE UPDATE OF report_id ON report_medications BEGIN SELECT RAISE(ABORT,'synthetic-rollback'); END");
     createClinicalFact(owner, source, 'medication', { medicationName: '合成回滚测试药品' });
+    const before = db.prepare('SELECT * FROM reports ORDER BY id').all(), pages = db.prepare('SELECT * FROM report_pages ORDER BY id').all(), observations = db.prepare('SELECT * FROM observations ORDER BY id').all();
     preview = previewReportCombination(owner, source, target);
     assert.throws(() => combineReports(owner, target, payload(source, preview.fingerprint)), /synthetic-rollback/);
     assert.deepEqual(db.prepare('SELECT * FROM reports ORDER BY id').all(), before);

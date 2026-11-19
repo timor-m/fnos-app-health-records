@@ -1,6 +1,16 @@
+import { parseMedicationFormula } from '../../shared/medication-formula';
 import {trendSeriesKey} from './trend-snapshot-types';
 import {sourceRegion,rotateRegionBox} from "../../shared/source-region";
+import type {HealthProcessDetail,HealthProcessSummary} from '../../shared/health-process';
+import {recordProcessSummaryMap,processRecordKey} from './health-record-process.service';
+import {memberBackgroundVersion} from './member-background';
+import { writeDatabaseSnapshot } from '../database/snapshot';
+import { processAiAuditAction,processAiAuditRowsSql } from './health-process-ai-audit.service';
+import { loadHealthUserAuditTargets,readUserAuditDetail } from './user-audit-health-targets';
+import {reminderRecordContext,saveReminderRecord} from './health-process-reminder.service';
 import { listFeedbackNotifications, updateFeedbackNotification } from './feedback-sync.service';
+import { dateInput as healthDateInput } from './health-event-input';
+import { exportMemberHealthWorkflow, mergeReportWorkflow, validateHealthWorkflowDatabase } from './health-workflow-integrity.service';
 import { splitMeasurementBound, type MeasurementComparator } from '../../shared/measurement-result';
 import { preserveFeedbackInstallation } from './feedback-installation.service';
 import { assertRestoreAdministrator, restoreAccessPolicy, type RestoreAccessPolicy } from './restore-access.service';
@@ -18,7 +28,6 @@ import { isStorageNormalizationActive } from './indicator-normalization-task.ser
 import { apiError, classifySystemError } from "../utils/api-error";
 import {
   rollbackAfterError,
-  checkpointDatabase,
   prepareRestoredDatabase,
   closeDatabase,
   getDatabase,
@@ -157,6 +166,7 @@ export type ReportFilters = {
   dateTo?: string;
   ocrQuery?: string;
   trash?: boolean;
+  unlinkedEvent?: boolean;
   sort?: ReportSort;
 };
 
@@ -726,6 +736,7 @@ export function listMembers(user: RequestUser) {
       CASE WHEN ap.self_member_id=hm.id THEN 'self' WHEN hm.created_by=? AND hm.relationship<>'self' THEN hm.relationship ELSE 'shared' END AS relationship,
       ap.self_member_id=hm.id AS isSelf, mup.hidden_at IS NOT NULL AS hidden,
       mp.can_manage_sharing AS canManageSharing, hm.birth_date AS birthDate,
+      hm.care_allergies AS careAllergies,hm.care_history AS careHistory,hm.care_medications AS careMedications,
       hm.sex, hm.blood_type_abo AS bloodTypeAbo, hm.blood_type_rh AS bloodTypeRh,
       hm.blood_type_source_report_id AS bloodTypeSourceReportId,
       hm.avatar_path AS avatarPath, mp.permission
@@ -737,7 +748,7 @@ export function listMembers(user: RequestUser) {
     ORDER BY CASE WHEN ap.self_member_id=hm.id THEN 0 ELSE 1 END, hm.created_at
   `,
     )
-    .all(user.id,user.id);
+    .all(user.id,user.id).map(member=>({...member,careBackgroundVersion:memberBackgroundVersion(member)} as typeof member & {careBackgroundVersion:string}));
 }
 
 export function listReports(
@@ -769,6 +780,10 @@ export function listReports(
     memberId || null,
     memberId || null,
   ];
+  if (filters.unlinkedEvent) where.push(`NOT EXISTS (
+    SELECT 1 FROM health_event_resources er JOIN health_events e ON e.id=er.event_id
+    WHERE er.resource_type='report' AND er.resource_id=r.id AND e.deleted_at IS NULL
+  )`);
   if (filters.trash) where.push("r.status = 'trashed'");
   else where.push("r.status <> 'trashed'");
   if (filters.status && filters.status !== "all") {
@@ -838,6 +853,16 @@ export function listReports(
       ${reportDisplayDateSql} AS reportIssuedAt,
       ${sortDateSql} AS sortDate,
       ${reportAbnormalCountSql},
+      (SELECT e.id FROM health_event_resources er JOIN health_events e ON e.id=er.event_id
+        WHERE er.resource_type='report' AND er.resource_id=r.id AND e.deleted_at IS NULL
+        ORDER BY CASE er.relation_type WHEN 'primary' THEN 0 WHEN 'related' THEN 1 ELSE 2 END,
+          e.started_at DESC, e.created_at DESC LIMIT 1) AS eventId,
+      (SELECT COALESCE(e.title, e.event_type) FROM health_event_resources er JOIN health_events e ON e.id=er.event_id
+        WHERE er.resource_type='report' AND er.resource_id=r.id AND e.deleted_at IS NULL
+        ORDER BY CASE er.relation_type WHEN 'primary' THEN 0 WHEN 'related' THEN 1 ELSE 2 END,
+          e.started_at DESC, e.created_at DESC LIMIT 1) AS eventTitle,
+      (SELECT COUNT(*) FROM health_event_resources er JOIN health_events e ON e.id=er.event_id
+        WHERE er.resource_type='report' AND er.resource_id=r.id AND e.deleted_at IS NULL) AS eventCount,
       (SELECT COUNT(*) FROM report_pages p WHERE p.report_id = r.id) AS pageCount
     FROM reports r
     JOIN member_permissions mp ON mp.member_id = r.member_id AND mp.user_id = ?
@@ -922,42 +947,6 @@ export function getReportSummaryStats(user: RequestUser, memberId?: string) {
   };
 }
 
-export function getOverview(user: RequestUser, memberId?: string) {
-  if (!user.authenticated) {
-    return {
-      stats: getReportSummaryStats(user, memberId),
-      pendingReminders: [],
-      recentReadyReports: [],
-      unfiledReports: [],
-    };
-  }
-  if (memberId) assertMemberAccess(user, memberId);
-  const pendingStatuses = ["needs_review", "processing", "queued", "failed"];
-  const stats = getReportSummaryStats(user, memberId);
-  const pendingReminders = listReminders(user, memberId)
-    .filter((item) => (item as { status: string }).status === "pending")
-    .slice(0, 3);
-  const recentReadyReports = listReports(user, 3, {
-    memberId,
-    status: "ready",
-  }).items;
-  const seen = new Set<string>();
-  const unfiledReports = pendingStatuses
-    .flatMap((status) => listReports(user, 3, { memberId, status }).items)
-    .filter((item) => {
-      if (seen.has(item.id)) return false;
-      seen.add(item.id);
-      return true;
-    })
-    .sort((left, right) => {
-      const dateCompare = String(right.reportIssuedAt || "").localeCompare(
-        String(left.reportIssuedAt || ""),
-      );
-      return dateCompare || right.id.localeCompare(left.id);
-    })
-    .slice(0, 3);
-  return { stats, pendingReminders, recentReadyReports, unfiledReports };
-}
 
 export function classifyObservationDisplay(input: {
   normalizationQuality: Observation["normalizationQuality"];
@@ -1576,7 +1565,7 @@ export function getReportDetail(
       medication_context AS context, medication_name AS medicationName,
       generic_name AS genericName, specification, dosage_form AS dosageForm,
       dose, dose_unit AS doseUnit, frequency, route, duration, quantity,
-      quantity_unit AS quantityUnit, instructions, evidence_json AS evidenceJson,
+      quantity_unit AS quantityUnit, instructions, formula_json AS formulaJson, evidence_json AS evidenceJson,
       source, manual_fields_json AS manualFieldsJson
     FROM report_medications WHERE report_id = ? AND is_deleted = 0
     ORDER BY medication_context, section_name, id
@@ -1588,11 +1577,14 @@ export function getReportDetail(
         ReportMedication,
         "evidence" | "manualFields"
       > & {
+        formulaJson: string | null;
         evidenceJson: string;
         manualFieldsJson: string;
       };
       return {
         ...fact,
+        formula: parseMedicationFormula(parseJson(fact.formulaJson, null)),
+        formulaJson: undefined,
         evidence: parseJson(fact.evidenceJson, []),
         manualFields: parseJson(fact.manualFieldsJson, []),
         evidenceJson: undefined,
@@ -1628,6 +1620,7 @@ export function getReportDetail(
         manualFieldsJson: undefined,
       };
     }) as ReportProcedure[];
+  const confirmedVaccinations=getDatabase().prepare(`SELECT id,source_fact_id AS sourceFactId,vaccine_name AS vaccineName,dose_number AS doseNumber,administered_at AS administeredAt FROM health_vaccinations WHERE source_report_id=? AND member_id=(SELECT member_id FROM reports WHERE id=?) AND deleted_at IS NULL`).all(reportId,reportId) as unknown as Array<{id:string;sourceFactId:string|null;vaccineName:string;doseNumber:string|null;administeredAt:string}>;
   const vaccinations = getDatabase()
     .prepare(
       `
@@ -1649,8 +1642,11 @@ export function getReportDetail(
         evidenceJson: string;
         manualFieldsJson: string;
       };
+      const direct=confirmedVaccinations.filter(item=>item.sourceFactId===fact.id);
+      const matched=direct.length?direct:fact.administeredAt&&fact.doseNumber?confirmedVaccinations.filter(item=>item.vaccineName===fact.vaccineName&&item.doseNumber===fact.doseNumber&&item.administeredAt===fact.administeredAt):[];
       return {
         ...fact,
+        confirmedVaccinationId:matched.length===1?matched[0].id:null,
         evidence: parseJson(fact.evidenceJson, []),
         manualFields: parseJson(fact.manualFieldsJson, []),
         evidenceJson: undefined,
@@ -1816,6 +1812,7 @@ export function getReportDetail(
     })(),
   };
 }
+
 
 export function getReportDuplicateCandidates(user: RequestUser, reportId: string) {
   const report = getDatabase().prepare("SELECT member_id AS memberId FROM reports WHERE id=? AND status<>'trashed' AND deleted_at IS NULL").get(reportId) as {memberId:string}|undefined;
@@ -2542,6 +2539,28 @@ export function confirmReportReady(user: RequestUser, reportId: string) {
 }
 
 export function trashReport(user: RequestUser, reportId: string) {
+  const report = getDatabase().prepare('SELECT member_id FROM reports WHERE id=?').get(reportId);
+  if (!report) throw createError({statusCode:404,statusMessage:'报告不存在'});
+  assertMemberManage(user, String(report.member_id));
+  return trashReportWithActor(user.id, reportId);
+}
+
+/** Keep a detached vaccination original recoverable without resurrecting it as a new vaccination. */
+export function retireUnusedVaccinationOriginal(reportId: string, memberId: string, actor: string | null) {
+  const db = getDatabase();
+  const report = db.prepare(`SELECT 1 FROM reports r WHERE r.id=? AND r.member_id=?
+    AND r.report_type='vaccination' AND r.status<>'trashed'
+    AND NOT EXISTS(SELECT 1 FROM health_vaccinations v WHERE v.source_report_id=r.id)
+    AND NOT EXISTS(SELECT 1 FROM medication_courses c WHERE c.source_report_id=r.id)
+    AND NOT EXISTS(SELECT 1 FROM health_record_reminders p WHERE (p.anchor_kind IN ('report','medication_document') AND p.anchor_id=r.id)
+      OR (p.completed_kind IN ('report','medication_document') AND p.completed_id=r.id))
+    AND NOT EXISTS(SELECT 1 FROM health_event_resources l WHERE l.resource_type='report' AND l.resource_id=r.id)
+    AND NOT EXISTS(SELECT 1 FROM health_record_links l WHERE (l.source_kind IN ('report','medication_document') AND l.source_id=r.id)
+      OR (l.target_kind IN ('report','medication_document') AND l.target_id=r.id))`).get(reportId,memberId);
+  if (report) trashReportWithActor(actor,reportId);
+}
+
+function trashReportWithActor(actor: string | null, reportId: string) {
   const report = getDatabase()
     .prepare(
       "SELECT member_id AS memberId, status FROM reports WHERE id = ? AND status <> 'trashed'",
@@ -2549,7 +2568,6 @@ export function trashReport(user: RequestUser, reportId: string) {
     .get(reportId) as { memberId: string; status: string } | undefined;
   if (!report)
     throw createError({ statusCode: 404, statusMessage: "报告不存在" });
-  assertMemberManage(user, report.memberId);
   const db = getDatabase();
   runInTransaction(db, () => {
     // Stop append work before changing report status; the existing lease checks fence late results.
@@ -2587,7 +2605,7 @@ export function trashReport(user: RequestUser, reportId: string) {
     `,
     ).run(
       createId("audit"),
-      user.id,
+      actor,
       reportId,
       JSON.stringify({
         memberId: report.memberId,
@@ -3634,6 +3652,7 @@ export function mergeDuplicateReport(
         "UPDATE processing_job_events SET report_id = ? WHERE job_id IN (SELECT id FROM processing_jobs WHERE page_id = ?)",
       ).run(targetReportId, page.id);
     });
+    mergeReportWorkflow(db, sourceReportId, targetReportId);
     db.prepare(
       `
       UPDATE reports
@@ -3711,6 +3730,8 @@ export function updateReportFields(
   assertMemberManage(user, report.memberId);
   assertNoPageAppend(reportId);
   const reportType = textInput(input.reportType, 40);
+  if (Object.hasOwn(input, 'reportType') && !reportType)
+    throw createError({ statusCode: 400, statusMessage: "报告类型不能为空" });
   if (reportType && !allowedReportTypes.has(reportType))
     throw createError({ statusCode: 400, statusMessage: "报告类型无效" });
   const bodyPart = textInput(input.bodyPart, 120);
@@ -3724,7 +3745,7 @@ export function updateReportFields(
         },
       ])
     : "[]";
-  const updates = [
+  const suppliedUpdates = [
     {
       fieldKey: "title",
       column: "title",
@@ -3854,6 +3875,10 @@ export function updateReportFields(
     value: string | null;
     overrideValue: unknown;
   }>;
+  // Classification and other focused editors submit only the fields they change.
+  // An omitted field must never clear existing report metadata or its evidence.
+  const updates = suppliedUpdates.filter(field => Object.hasOwn(input,
+    field.fieldKey === 'bodyParts' ? 'bodyPart' : field.fieldKey));
   const changedManualFields = updates
     .filter((field) => (report[field.column] ?? null) !== (field.value ?? null))
     .map((field) => ({ fieldKey: field.fieldKey, value: field.overrideValue }));
@@ -4039,6 +4064,13 @@ export function remapReportEvidencePageNumbers(
       }
       update.run(JSON.stringify(remapped.value), row.id);
     }
+  }
+
+  const formulas = db.prepare('SELECT id,formula_json AS formulaJson FROM report_medications WHERE report_id=? AND formula_json IS NOT NULL')
+    .all(reportId) as Array<{id:string;formulaJson:string}>;
+  for (const row of formulas) {
+    const remapped = remapEvidenceValue(parseJson(row.formulaJson, null), pageNumbers);
+    db.prepare('UPDATE report_medications SET formula_json=? WHERE id=?').run(JSON.stringify(remapped.value), row.id);
   }
 
   const extractionRows = db
@@ -6037,10 +6069,21 @@ export function updateTrendPin(
   return { memberId, indicatorKey, unit: unitKey || null, pinned };
 }
 
-export function listReminders(user: RequestUser, memberId?: string) {
+export function listReminders(user: RequestUser, memberId?: string, process?:HealthProcessDetail) {
   if (!user.authenticated) return [];
   if (memberId) assertMemberAccess(user, memberId);
-  return getDatabase()
+  if(process&&process.memberId!==memberId)throw createError({statusCode:403,statusMessage:'历程所属成员不一致'});
+  const db=getDatabase();
+  // Resolve anchor precedence exactly as reminderRecordContext does, before loading other members' plans.
+  const selected=process?db.prepare(`SELECT DISTINCT re.id FROM reminders re
+    LEFT JOIN health_record_reminders plan ON plan.reminder_id=re.id AND plan.member_id=re.member_id
+    LEFT JOIN health_vaccinations vaccine ON vaccine.reminder_id=re.id AND vaccine.member_id=re.member_id AND vaccine.deleted_at IS NULL
+    WHERE re.member_id=? AND
+      (CASE WHEN plan.reminder_id IS NOT NULL THEN (CASE WHEN plan.anchor_kind='medication_document' THEN 'report' ELSE plan.anchor_kind END)||':'||plan.anchor_id
+        WHEN vaccine.id IS NOT NULL THEN 'vaccination:'||vaccine.id
+        WHEN re.report_id IS NOT NULL THEN 'report:'||re.report_id ELSE NULL END)
+        IN (SELECT value FROM json_each(?))`).all(memberId!,JSON.stringify(process.records.map(record=>processRecordKey(record.ref)))).map(row=>String(row.id)):null;
+  const rows = db
     .prepare(
       `
     SELECT re.id, re.member_id AS memberId, CASE WHEN r.id IS NULL THEN NULL ELSE re.report_id END AS reportId, re.title,
@@ -6051,10 +6094,26 @@ export function listReminders(user: RequestUser, memberId?: string) {
     JOIN member_permissions mp ON mp.member_id = re.member_id AND mp.user_id = ?
     LEFT JOIN reports r ON r.id = re.report_id AND r.status <> 'trashed'
     WHERE (? IS NULL OR re.member_id = ?)
+      AND (? IS NULL OR re.id IN (SELECT value FROM json_each(?)))
     ORDER BY re.status = 'pending' DESC, re.due_at
   `,
     )
-    .all(user.id, memberId || null, memberId || null);
+    .all(user.id, memberId || null, memberId || null,selected?JSON.stringify(selected):null,JSON.stringify(selected||[])) as Array<{
+      id: string; memberId: string; reportId: string | null; title: string; dueAt: string;
+      status: 'pending' | 'completed' | 'dismissed'; source: 'manual' | 'report_suggestion';
+      reportTitle: string | null; reportHospitalName: string | null; reportIssuedAt: string | null;
+    }>;
+  const memberships=new Map<string,Map<string,HealthProcessSummary[]>>();
+  if(process){const {records,links,highlights,fingerprint,editToken,...summary}=process;
+    memberships.set(process.memberId,new Map(records.map(record=>[processRecordKey(record.ref),[summary]])));
+  }
+  return rows.map(row => ({ ...row, ...reminderRecordContext(user,String(row.id),String(row.memberId),()=>{
+    if(!memberships.has(row.memberId))memberships.set(row.memberId,recordProcessSummaryMap(user,row.memberId));
+    return memberships.get(row.memberId)!;
+  }),
+    vaccinationId: (getDatabase().prepare('SELECT id FROM health_vaccinations WHERE reminder_id=? AND member_id=? AND deleted_at IS NULL').get(row.id,row.memberId)?.id as string|undefined)||null,
+    completedVaccinationId: (getDatabase().prepare('SELECT id FROM health_vaccinations WHERE completed_reminder_id=? AND member_id=? AND deleted_at IS NULL').get(row.id,row.memberId)?.id as string|undefined)||null
+  }));
 }
 
 export function createReminder(
@@ -6066,7 +6125,7 @@ export function createReminder(
     throw createError({ statusCode: 400, statusMessage: "请选择提醒所属成员" });
   assertMemberManage(user, memberId);
   const title = textInput(input.title, 180);
-  const dueAt = dateInput(input.dueAt);
+  const dueAt = healthDateInput(input.dueAt, '提醒日期');
   if (!title || !dueAt)
     throw createError({
       statusCode: 400,
@@ -6083,6 +6142,7 @@ export function createReminder(
       throw createError({ statusCode: 400, statusMessage: "关联报告无效" });
   }
   const id = createId("reminder");
+  runInTransaction(getDatabase(), () => {
   getDatabase()
     .prepare(
       `
@@ -6091,6 +6151,7 @@ export function createReminder(
   `,
     )
     .run(id, memberId, reportId, title, dueAt, user.id);
+  saveReminderRecord(user,id,memberId,input.relatedRecord);
   getDatabase()
     .prepare(
       `
@@ -6104,6 +6165,7 @@ export function createReminder(
       id,
       JSON.stringify({ memberId, reportId }),
     );
+  });
   return {
     id,
     memberId,
@@ -6112,6 +6174,7 @@ export function createReminder(
     dueAt,
     status: "pending",
     source: "manual",
+    ...reminderRecordContext(user,id,memberId),
   };
 }
 
@@ -6119,6 +6182,7 @@ export function updateReminderStatus(
   user: RequestUser,
   reminderId: string,
   status: string,
+  input: { dueAt?: unknown } = {},
 ) {
   if (!["pending", "completed", "dismissed"].includes(status))
     throw createError({ statusCode: 400, statusMessage: "提醒状态无效" });
@@ -6128,6 +6192,18 @@ export function updateReminderStatus(
   if (!reminder)
     throw createError({ statusCode: 404, statusMessage: "提醒不存在" });
   assertMemberManage(user, reminder.memberId);
+  const sourceVaccination = getDatabase().prepare('SELECT id,administered_at AS administeredAt FROM health_vaccinations WHERE reminder_id=? AND deleted_at IS NULL').get(reminderId) as {id:string;administeredAt:string}|undefined;
+  const completedVaccination = getDatabase().prepare('SELECT 1 FROM health_vaccinations WHERE completed_reminder_id=? AND deleted_at IS NULL').get(reminderId);
+  if (completedVaccination && (status !== 'completed' || input.dueAt !== undefined))
+    throw createError({statusCode:409,statusMessage:'该提醒已关联实际接种，请在接种详情中更正或撤销'});
+  const dueAt = input.dueAt === undefined ? null : healthDateInput(input.dueAt, '提醒日期');
+  if (input.dueAt !== undefined && !dueAt)
+    throw createError({ statusCode: 400, statusMessage: '提醒日期不能为空' });
+  if (sourceVaccination && dueAt && dueAt.slice(0,10)<sourceVaccination.administeredAt.slice(0,10))
+    throw createError({statusCode:400,statusMessage:'下一剂日期不能早于本次接种'});
+  runInTransaction(getDatabase(), () => {
+  if (dueAt) getDatabase().prepare('UPDATE reminders SET due_at=? WHERE id=?').run(dueAt, reminderId);
+  if (dueAt && sourceVaccination) getDatabase().prepare('UPDATE health_vaccinations SET next_due_at=?,revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(dueAt, sourceVaccination.id);
   getDatabase()
     .prepare(
       "UPDATE reminders SET status = ?, confirmed_at = CASE WHEN ? = 'pending' THEN NULL ELSE CURRENT_TIMESTAMP END WHERE id = ?",
@@ -6146,7 +6222,8 @@ export function updateReminderStatus(
       reminderId,
       JSON.stringify({ status, memberId: reminder.memberId }),
     );
-  return { id: reminderId, status };
+  });
+  return { id: reminderId, status, ...reminderRecordContext(user,reminderId,reminder.memberId) };
 }
 
 export function listAppNotifications(user: RequestUser, memberId?: string) {
@@ -6353,6 +6430,7 @@ const auditActionTitles: Record<string, string> = {
   "maintenance.regenerate_pdf_previews": "重新生成 PDF 单页图",
   "maintenance.normalize_indicators": "重新归一化历史指标",
   "maintenance.rebuild_morphology_tracking": "重新关联历史形态发现",
+  "morphology.create": "补充形态记录",
   "morphology.update": "校对形态发现",
   "morphology.link": "关联形态变化",
   "morphology.separate": "建立独立形态变化",
@@ -6370,6 +6448,67 @@ const auditActionTitles: Record<string, string> = {
   "system.diagnostics_export": "导出系统诊断包",
   "dictionary.update": "更新指标字典",
   "dictionary.rollback": "回滚指标字典",
+  "report.page.rotate": "旋转报告页面",
+  "report.examination.confirm": "确认检查项目",
+  "report.examination.duplicate": "调整重复检查项目",
+  "report.member.assign": "调整报告归属",
+  "report.duplicate_decision": "确认重复报告关系",
+  "report.duplicate_decision_undo": "撤销重复报告判断",
+  "report.duplicate_merge": "合并重复报告",
+  "report.duplicate_batch": "批量整理重复报告",
+  "report.duplicate_batch_undo": "撤销批量报告整理",
+  "report.duplicate_operation_failed": "报告整理失败",
+  "observation.manual_create": "手动添加指标",
+  "observation.manual_update": "校对指标",
+  "observation.manual_delete": "删除手动指标",
+  "maintenance.govern_indicator": "处理未匹配指标",
+  "maintenance.undo_indicator_governance": "撤销指标处理",
+  "maintenance.enable_indicator_alias": "启用指标别名",
+  "maintenance.disable_indicator_alias": "停用指标别名",
+  "auth.local_admin_bootstrap": "创建本地管理员",
+  "auth.local_account_created": "创建本地账号",
+  "auth.local_account_deleted": "删除本地账号",
+  "auth.local_account_disabled": "停用本地账号",
+  "auth.local_account_enabled": "启用本地账号",
+  "auth.local_account_display_name_changed": "修改账号显示名称",
+  "auth.local_account_password_reset": "重置本地账号密码",
+  "auth.local_account_renamed": "修改本地账号名称",
+  "auth.local_password_changed": "修改本地密码",
+  "auth.local_password_first_changed": "首次修改本地密码",
+  "event.create": "整理同次资料",
+  "episode.symptom.create": "新增症状记录",
+  "episode.symptom.correct": "编辑症状记录",
+  "episode.symptom.retract": "撤销症状记录",
+  "episode.symptom.record": "记录症状变化",
+  "episode.symptom.record.correct": "更正症状变化",
+  "episode.symptom.record.retract": "撤销症状变化",
+  "medication.start": "开始用药",
+  "medication.adjust": "调整用药",
+  "medication.pause": "暂停用药",
+  "medication.resume": "恢复用药",
+  "medication.stop": "停止用药",
+  "medication.intake.create": "添加服药补充",
+  "medication.intake.edit": "编辑服药补充",
+  "vaccination.create": "新增接种记录",
+  "vaccination.update": "编辑接种记录",
+  "vaccination.trash": "接种记录移入回收站",
+  "vaccination.restore": "恢复接种记录",
+  "vaccination.purge": "永久删除接种记录",
+  "record.link.attach": "关联健康记录",
+  "record.link.detach": "解除健康记录关联",
+  "process.record.remove": "移出历程记录",
+  "process.trash": "健康历程移入回收站",
+  "process.restore": "恢复健康历程",
+  "process.purge": "永久删除健康历程",
+  "symptom.trash": "症状记录移入回收站",
+  "symptom.restore": "恢复症状记录",
+  "symptom.purge": "永久删除症状记录",
+  "medication.trash": "用药记录移入回收站",
+  "medication.restore": "恢复用药记录",
+  "medication.purge": "永久删除用药记录",
+  "intake.trash": "服药补充移入回收站",
+  "intake.restore": "恢复服药补充",
+  "intake.purge": "永久删除服药补充",
 };
 
 const auditTargetLabels: Record<string, string> = {
@@ -6386,6 +6525,10 @@ const auditTargetLabels: Record<string, string> = {
   user_audit_log: "用户操作日志",
   system_log: "系统日志",
   indicator_dictionary: "指标字典",
+  vaccination: "接种记录", medication: "用药记录", intake: "服药补充", symptom: "症状记录",
+  health_record: "健康记录", health_record_process: "健康历程", health_event: "资料分组", health_episode: "症状记录",
+  report_pair: "报告关系", indicator_issue: "指标匹配问题", indicator_alias: "指标别名",
+  report_duplicate_operation: "报告整理任务",
   user: "用户账号",
 };
 
@@ -6403,6 +6546,7 @@ const auditStatusLabels: Record<string, string> = {
   ready: "已归档",
   failed: "识别失败",
   trashed: "回收站",
+  active: "进行中", ended: "已结束", resolved: "已缓解", paused: "已暂停", stopped: "已停止", unknown: "未记录",
 };
 
 function shortAuditId(value: string) {
@@ -6424,7 +6568,7 @@ function collectAuditReferenceIds(
   const morphologyFindingIds = new Set<string>();
   const backupIds = new Set<string>();
   for (const row of rows) {
-    const detail = parseJson<Record<string, unknown>>(row.detailJson, {});
+    const detail = readUserAuditDetail(row.detailJson);
     if (row.targetId) {
       if (row.targetType === "report") reportIds.add(row.targetId);
       else if (row.targetType === "report_page") pageIds.add(row.targetId);
@@ -6523,6 +6667,16 @@ function userAuditDescription(
   const reminderName = (id: string) =>
     names.reminders.get(id)?.title || shortAuditId(id);
   const parts: string[] = [];
+  if ((action === 'record.link.attach' || action === 'record.link.detach') && Array.isArray(detail.records)) {
+    const count=detail.records.filter(record=>record&&typeof record==='object'&&typeof record.id==='string').length;
+    if(count)parts.push(`${action==='record.link.attach'?'关联':'解除关联'} ${count} 条记录`);
+  }
+  if (['process.trash','process.restore','process.purge'].includes(action)) parts.push('仅调整健康历程，原始记录保留');
+  if (action === 'process.record.remove') parts.push('移出当前历程，原记录保留');
+  if (action.startsWith('episode.symptom.') && typeof detail.change==='string') {
+    const labels:Record<string,string>={worsened:'加重',unchanged:'无变化',improved:'好转',resolved:'已缓解'};
+    if(Object.hasOwn(labels,detail.change))parts.push(`症状${labels[detail.change]}`);
+  }
   if (typeof detail.memberId === "string")
     parts.push(`成员 ${memberName(detail.memberId)}`);
   if (typeof detail.reportId === "string")
@@ -6637,7 +6791,7 @@ export function listUserOperationAuditLogs(
       u.display_name AS actorName, a.detail_json AS detailJson, a.created_at AS createdAt
     FROM audit_logs a
     LEFT JOIN users u ON u.id = a.actor_user_id
-    WHERE a.actor_user_id = ? AND (
+    WHERE a.actor_user_id = ? AND a.action <> '${processAiAuditAction}' AND (
       ? IS NULL
       OR a.created_at < ?
       OR (a.created_at = ? AND a.id < ?)
@@ -6665,6 +6819,7 @@ export function listUserOperationAuditLogs(
   const hasMore = rows.length > safeLimit;
   const pageRows = hasMore ? rows.slice(0, safeLimit) : rows;
   const refs = collectAuditReferenceIds(pageRows);
+  const healthTarget = loadHealthUserAuditTargets(user,pageRows);
   const names = {
     users: rowsById<{ id: string; displayName: string }>(
       "users",
@@ -6778,17 +6933,18 @@ export function listUserOperationAuditLogs(
     return shortAuditId(targetId);
   };
   const items = pageRows.map((item) => {
-    const detail = parseJson<Record<string, unknown>>(item.detailJson, {});
+    const detail = readUserAuditDetail(item.detailJson);
+    const health = healthTarget(item);
     return {
       id: item.id,
       action: item.action,
       title: userAuditTitle(item.action, detail),
       description: userAuditDescription(item.action, detail, names),
-      targetLabel: item.targetType
+      targetLabel: health?.label || (item.targetType
         ? auditTargetLabels[item.targetType] || "其他对象"
-        : "系统",
+        : "系统"),
       targetId: item.targetId,
-      targetName: targetName(item.targetType, item.targetId, detail),
+      targetName: health?.name || targetName(item.targetType, item.targetId, detail),
       actorName: item.actorName,
       createdAt: item.createdAt,
       detail,
@@ -6815,7 +6971,7 @@ export function clearUserOperationAuditLogs(user: RequestUser) {
   const db = getDatabase();
   db.exec("BEGIN IMMEDIATE");
   try {
-    const result = db.prepare("DELETE FROM audit_logs").run();
+    const result = db.prepare("DELETE FROM audit_logs WHERE action <> ?").run(processAiAuditAction);
     const deletedCount = Number(result.changes);
     db.prepare(`
       INSERT INTO audit_logs (id, actor_user_id, action, target_type, target_id, detail_json)
@@ -6845,7 +7001,7 @@ export function getAiAuditSummary(
   const summary = getDatabase()
     .prepare(
       `
-    WITH ai_rows AS (
+    WITH process_ai_rows AS (${processAiAuditRowsSql(user)}), ai_rows AS (
       SELECT j.id, 'report_extraction' AS source, j.status,
         COALESCE(NULLIF((SELECT COUNT(*) FROM ai_extraction_attempts aa WHERE aa.job_id = j.id), 0), j.attempts) AS attempts,
         e.prompt_tokens AS promptTokens, e.completion_tokens AS completionTokens, e.elapsed_ms AS elapsedMs
@@ -6856,6 +7012,8 @@ export function getAiAuditSummary(
       SELECT a.id, a.source, a.status, a.attempts,
         a.prompt_tokens AS promptTokens, a.completion_tokens AS completionTokens, a.elapsed_ms AS elapsedMs
       FROM ai_audit_events a WHERE a.report_id IN(SELECT scoped_report.id FROM reports scoped_report WHERE ${memberAccessSql(user,'scoped_report.member_id')})
+      UNION ALL
+      SELECT id,source,status,attempts,promptTokens,completionTokens,elapsedMs FROM process_ai_rows
     )
     SELECT
       COUNT(*) AS jobCount,
@@ -6884,7 +7042,7 @@ export function getAiAuditSummary(
   const rows = getDatabase()
     .prepare(
       `
-    WITH ai_rows AS (
+    WITH process_ai_rows AS (${processAiAuditRowsSql(user)}), ai_rows AS (
       SELECT j.id, 'report_extraction' AS source, j.report_id AS reportId, r.title AS reportTitle, r.member_id AS memberId,
         j.status,
         COALESCE(NULLIF((SELECT COUNT(*) FROM ai_extraction_attempts aa WHERE aa.job_id = j.id), 0), j.attempts) AS attempts,
@@ -6919,6 +7077,8 @@ export function getAiAuditSummary(
         NULL AS documentContentType, NULL AS routedContentTypes
       FROM ai_audit_events a
       JOIN reports r ON r.id = a.report_id WHERE ${memberAccessSql(user,'r.member_id')}
+      UNION ALL
+      SELECT * FROM process_ai_rows
     )
     SELECT * FROM ai_rows
     WHERE (
@@ -6997,6 +7157,7 @@ export function buildMemberExportManifest(user: RequestUser, memberId: string) {
   return {
     exportedAt: new Date().toISOString(),
     memberId,
+    healthWorkflow: exportMemberHealthWorkflow(user, memberId),
     reports: reports.map((report) => ({
       id: report.id,
       title: report.title,
@@ -7214,10 +7375,6 @@ const backupIncludedDirectories = [
   "secrets",
 ] as const;
 
-function sqlString(value: string) {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
 function timestampForFilename(date = new Date()) {
   const [datePart, timePart = ""] = date.toISOString().split("T");
   const [clock = "", milliseconds = "000Z"] = timePart.split(".");
@@ -7409,15 +7566,7 @@ function createBackupFileManifest(stagingRoot: string): BackupManifestFile[] {
 }
 
 function copyDatabaseSnapshot(snapshotPath: string) {
-  const db = getDatabase();
-  checkpointDatabase();
-  mkdirSync(dirname(snapshotPath), { recursive: true });
-  try {
-    db.exec(`VACUUM INTO ${sqlString(snapshotPath)}`);
-  } catch {
-    copyFileSync(getDatabasePath(), snapshotPath);
-  }
-  chmodSync(snapshotPath, 0o600);
+  writeDatabaseSnapshot(getDatabase(), snapshotPath);
 }
 
 function createTarArchive(sourceDirectory: string, archivePath: string) {
@@ -7758,6 +7907,27 @@ function validateBackupDatabase(
         result.errors.push(`备份数据库缺少核心表：${required}`);
     }
 
+    // Older archives legitimately have no Event/Episode tables. If the new
+    // structure is present, require the whole group so partial archives fail
+    // before replacing current data.
+    const eventTables = ['health_events','health_event_resources','health_episodes'];
+    if (eventTables.some(name => tables.has(name))) {
+      for (const name of eventTables) {
+        if (!tables.has(name)) result.errors.push(`备份数据库缺少资料分组或症状表：${name}`);
+      }
+      if (eventTables.every(name => tables.has(name))) {
+        const invalidReportLinks = database.prepare(`
+          SELECT COUNT(*) AS count FROM health_event_resources er
+          JOIN health_events e ON e.id=er.event_id
+          LEFT JOIN reports r ON r.id=er.resource_id
+          WHERE er.resource_type='report' AND (r.id IS NULL OR r.member_id<>e.member_id)
+        `).get() as { count: number };
+        if (invalidReportLinks.count)
+          result.errors.push('备份数据库存在跨成员的资料分组关联');
+      }
+    }
+
+    result.errors.push(...validateHealthWorkflowDatabase(database));
     let actualSchemaVersion = 0;
     if (tables.has("schema_migrations")) {
       const versions = (

@@ -1,6 +1,8 @@
+import { assertReportWriteVersion,bumpReportWriteVersion } from './report-write-version';
+import { runHealthWorkflowRequest } from './health-workflow-request.service';
 import { assertNoPageAppend } from "./page-append-lock.service";
 import { createError } from "h3";
-import { rollbackAfterError, getDatabase } from "../database/client";
+import { rollbackAfterError, getDatabase, runInTransaction } from "../database/client";
 import {
   reportStructuredSectionKeys,
   type ReportStructuredSectionKey
@@ -107,9 +109,18 @@ function appendAudit(
     id,
     JSON.stringify({ reportId, sectionKey })
   );
+  bumpReportWriteVersion(reportId);
 }
 
-export function createReportStructuredSection(
+export function createReportStructuredSection(user:RequestUser,reportId:string,input:Record<string,unknown>) {
+ const report=reportForManage(user,reportId);
+ return runHealthWorkflowRequest(user,report.memberId,'report.section.create',{...input,reportId},()=>createReportStructuredSectionRecord(user,reportId,input),saved=>{
+  if(!getDatabase().prepare('SELECT 1 FROM report_structured_sections WHERE id=? AND report_id=? AND is_deleted=0').get(saved.id,reportId))throw createError({statusCode:409,statusMessage:'已保存内容发生变化，请刷新报告核对'});
+  return saved;
+ });
+}
+
+function createReportStructuredSectionRecord(
   user: RequestUser,
   reportId: string,
   input: Record<string, unknown>
@@ -118,8 +129,8 @@ export function createReportStructuredSection(
   const values = sectionValues(input, true);
   const id = createId("section");
   const db = getDatabase();
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  return runInTransaction(db,()=>{
+    assertReportWriteVersion(reportId,input.expectedSourceVersion);
     db.prepare(`
       INSERT INTO report_structured_sections (
         id, report_id, section_key, section_title, content_text,
@@ -127,12 +138,8 @@ export function createReportStructuredSection(
       ) VALUES (?, ?, ?, ?, ?, '[]', 'manual', '["*"]', 0)
     `).run(id, reportId, values.key, values.title, values.content);
     appendAudit(user, "create", id, reportId, values.key);
-    db.exec("COMMIT");
-  } catch (error) {
-    rollbackAfterError(db);
-    throw error;
-  }
-  return { id, reportId };
+    return { id, reportId };
+  });
 }
 
 export function updateReportStructuredSection(
@@ -159,6 +166,7 @@ export function updateReportStructuredSection(
   const db = getDatabase();
   db.exec("BEGIN IMMEDIATE");
   try {
+    assertReportWriteVersion(section.reportId,input.expectedSourceVersion);
     db.prepare(`UPDATE report_structured_sections SET ${assignments.join(", ")},
       source = 'manual', manual_fields_json = '["*"]', is_deleted = 0,
       updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...args, id);

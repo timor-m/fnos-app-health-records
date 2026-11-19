@@ -23,7 +23,134 @@ def ocr_line(text, confidence, x1, y1, x2, y2, variant=None):
     return line
 
 
+def dispensing_fixture(angle=270):
+    title_x = 550 if angle == 270 else 10
+    baseline = [ocr_line('药材调剂单（代煎）', .99, title_x, 20, title_x+25, 260)]
+    baseline += [ocr_line(text, .99, 110+i*65, 30, 130+i*65, 160)
+                 for i, text in enumerate(['药材甲', '6g', '18g', '药材乙', '24g'])]
+    upright = [ocr_line('药材调剂单（代煎）', .99, 10, 10, 500, 35)]
+    upright += [ocr_line(text, .99, x, y, x+90, y+25)
+                for y, row in [(80, ['药材甲', '6g', '18g']), (120, ['药材乙', '8g', '24g'])]
+                for x, text in zip([10, 130, 240], row)]
+    return baseline, upright
+
+
 class TableRetryTest(unittest.TestCase):
+    def test_dispensing_turn_runs_once_without_generic_enhancement_and_restores_coordinates(self):
+        from PIL import Image
+        import tempfile
+        from unittest.mock import patch
+        for angle in (90, 270):
+            baseline, upright = dispensing_fixture(angle)
+            for enhance in (False, True):
+                with self.subTest(angle=angle, enhance=enhance), tempfile.TemporaryDirectory() as root:
+                    path = Path(root)/'scan.png'
+                    image = Image.new('RGB', (600, 900), 'white')
+                    image.putpixel((0, 0), (255, 0, 0))
+                    image.save(path)
+                    calls = []
+                    def engine(value):
+                        calls.append(Path(value).name)
+                        rows = baseline if len(calls) == 1 else upright
+                        if len(calls) == 2:
+                            with Image.open(value) as turned:
+                                self.assertEqual(turned.size, (900, 600))
+                                self.assertEqual(turned.getpixel((899, 0) if angle == 90 else (0, 599)), (255, 0, 0))
+                        return [(line['box'], line['text'], line['confidence']) for line in rows], None
+                    with patch.object(worker, 'photo_perspective_variant', return_value=None), \
+                         patch.object(worker, 'enhance_page_lines', side_effect=lambda p,l:l):
+                        lines, meta = worker.recognize_image(engine, path, None, enhance_tables=enhance)
+                    self.assertEqual(len(calls), 2)
+                    self.assertEqual(meta['source'], 'quarter_turn_dispensing')
+                    self.assertEqual(meta['rotation'], angle)
+                    self.assertIn('8g', [line['text'] for line in lines])
+                    for line, expected in zip(lines, upright):
+                        self.assertTrue(all(0 <= x <= 600 and 0 <= y <= 900 for x,y in line['box']))
+                        self.assertEqual(worker.rotate_point_box(worker.line_rect(line), angle, 600, 900), list(worker.line_rect(expected)))
+
+    def test_dispensing_turn_preserves_primary_ocr_on_failure_no_gain_or_text_loss(self):
+        from PIL import Image
+        import tempfile
+        baseline, upright = dispensing_fixture()
+        no_gain = [line for line in upright if line['text'] != '8g']
+        for candidate in [None, baseline, no_gain, upright[:2]]:
+            with self.subTest(candidate_length=len(candidate) if candidate else 0), tempfile.TemporaryDirectory() as root:
+                path = Path(root)/'scan.png'; Image.new('RGB', (600,900), 'white').save(path)
+                calls = []
+                def engine(value):
+                    calls.append(value)
+                    if len(calls) > 1 and candidate is None:
+                        raise ValueError('synthetic optional failure')
+                    rows = baseline if len(calls) == 1 else candidate
+                    return [(line['box'], line['text'], line['confidence']) for line in rows], None
+                lines, _ = worker.recognize_image(engine, path, None, enhance_tables=False)
+                self.assertEqual(len(calls), 2)
+                self.assertEqual([line['text'] for line in lines], [line['text'] for line in baseline])
+                self.assertEqual([line['box'] for line in lines], [line['box'] for line in baseline])
+
+    def test_mixed_image_keeps_existing_laboratory_direction_path_without_an_extra_dispensing_pass(self):
+        from PIL import Image
+        import tempfile
+        from unittest.mock import patch
+        sideways = [ocr_line(text, .99, 10+i*30, 20, 28+i*30, 200)
+                    for i,text in enumerate(['项目名称','结果','合成项目','合成项目','合成项目','合成项目','合成项目','药材调剂单（代煎）'])]
+        upright = [ocr_line('项目名称', .99, 20, 10, 140, 30), ocr_line('结果', .99, 220, 10, 280, 30)]
+        upright += [ocr_line('合成项目', .99, 20, 60+i*30, 140, 80+i*30) for i in range(4)]
+        calls = []
+        def engine(value):
+            calls.append(Path(value).name)
+            rows = upright if Path(value).name == 'turn-270.png' else sideways
+            return [(line['box'],line['text'],line['confidence']) for line in rows], None
+        with tempfile.TemporaryDirectory() as root:
+            path=Path(root)/'mixed.png'; Image.new('RGB',(300,500),'white').save(path)
+            with patch.object(worker,'photo_perspective_variant',return_value=None), \
+                 patch.object(worker,'retry_missing_header_cells',side_effect=lambda e,p,l,**kw:(l,[])), \
+                 patch.object(worker,'retry_suspicious_table_rows',side_effect=lambda e,p,l,**kw:(l,[])), \
+                 patch.object(worker,'enhance_page_lines',side_effect=lambda p,l:l):
+                _,meta=worker.recognize_image(engine,path,None)
+        self.assertEqual(len(calls),3)
+        self.assertNotIn('upright.png',calls)
+        self.assertEqual(meta['source'],'quarter_turn_table')
+
+    def test_dispensing_turn_does_not_guess_for_upright_unrelated_or_ambiguous_documents(self):
+        baseline, upright = dispensing_fixture()
+        self.assertEqual(worker.dispensing_quarter_turn(upright), 0)
+        for heading in ['检验报告', '医疗收费票据 调剂单号 药材', '药品说明书 调剂单 代煎']:
+            self.assertEqual(worker.dispensing_quarter_turn([{**baseline[0], 'text': heading}, *baseline[1:]]), 0)
+        centered = ocr_line('药材调剂单（代煎）', .99, 260, 20, 285, 260)
+        self.assertEqual(worker.dispensing_quarter_turn([centered, *baseline[1:]]), 0)
+
+    def test_scanned_pdf_dispensing_uses_pixel_turn_and_keeps_original_page_space(self):
+        import fitz
+        import tempfile
+        import io
+        from PIL import Image
+        from unittest.mock import patch
+        baseline, upright = dispensing_fixture()
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root)/'scan.pdf'
+            png = io.BytesIO(); Image.new('RGB', (600,900), 'white').save(png, format='PNG')
+            with fitz.open() as document:
+                page = document.new_page(width=200, height=300)
+                page.insert_image(page.rect, stream=png.getvalue()); document.save(source)
+            original = source.read_bytes()
+            calls = []
+            def engine(value):
+                calls.append(value)
+                rows = baseline if len(calls) == 1 else upright
+                return [(line['box'], line['text'], line['confidence']) for line in rows], None
+            with patch.object(worker, 'enhance_page_lines', side_effect=lambda p,l,*args:l), \
+                 patch.object(worker, 'pdf_render_scale', return_value=3):
+                lines, meta, coord = worker.recognize_input(engine, source, None, 1)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(meta['source'], 'pdf_render')
+            self.assertEqual(meta['ocr']['source'], 'quarter_turn_dispensing')
+            self.assertEqual(coord, {'coordWidth':200., 'coordHeight':300.})
+            self.assertIn('8g', [line['text'] for line in lines])
+            self.assertEqual(source.read_bytes(), original)
+            for line in lines:
+                self.assertTrue(all(0 <= x <= 200 and 0 <= y <= 300 for x,y in line['box']))
+
     def test_prefixed_flag_cells_use_upright_pixel_consensus_and_protect_unresolved_values(self):
         import cv2
         import numpy as np

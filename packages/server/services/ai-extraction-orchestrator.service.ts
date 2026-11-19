@@ -30,6 +30,7 @@ import {
   type AiExtractionInput,
   type AiExtractionResult,
   type AiMorphologyFinding,
+  type AiMedication,
   type AiObservation,
   aiExtractionPromptVersion,
 } from "./ai-extraction.service";
@@ -1472,6 +1473,18 @@ function validateResultEvidence(
   const medications =
     unit.route === "narrative"
       ? result.fields.medications.flatMap((item) => {
+          if (item.formula) {
+            const ingredients = item.formula.ingredients.map(ingredient => ({
+              ...ingredient,
+              evidence: exactEvidenceForClinicalFact(plan, unit, ingredient.evidence, [ingredient.name])
+                .filter(entry => compactEvidence(entry.quote).includes(compactEvidence(ingredient.name))),
+            }));
+            // A formula must not silently lose a constituent or invent an herb.
+            if (ingredients.some(ingredient => !ingredient.evidence.length)) return [];
+            const evidence = uniqueBy(ingredients.flatMap(ingredient => ingredient.evidence),
+              entry => `${entry.pageNumber}:${entry.quote}`);
+            return [{ ...item, formula: { ...item.formula, ingredients }, evidence }];
+          }
           const evidence = exactEvidenceForClinicalFact(
             plan,
             unit,
@@ -1760,6 +1773,24 @@ function deduplicateObservationsBySource(
   return merged;
 }
 
+/** A missing-spec row can join its explicitly numbered adjacent-page continuation only. */
+export function deduplicateMedicationContinuations(plan:AiExtractionPlan,medications:AiMedication[]){
+ const rows:Array<AiMedication|null>=medications.map(item=>({...item,evidence:[...item.evidence]}));
+ const keys=['genericName','specification','dosageForm','dose','doseUnit','frequency','route','duration','quantity','quantityUnit','instructions'] as const;
+ const number=(text:string)=>text.normalize('NFKC').match(/^\s*(\d{1,3})(?:[\s、.)]|$)/)?.[1];
+ for(let index=0;index<rows.length;index++){
+  const item=rows[index];if(!item||item.specification||item.formula)continue;
+  const continuation=item.evidence.filter(e=>number(e.quote)&&!compactEvidence(e.quote).includes(compactEvidence(item.medicationName))&&plan.pages.some(page=>page.pageNumber===e.pageNumber&&/续表|接上页|接前页/.test(page.text)));
+  if(!continuation.length)continue;
+  const candidates=rows.map((source,sourceIndex)=>({source,sourceIndex})).filter(({source,sourceIndex})=>source&&!source.formula&&sourceIndex!==index&&source.specification&&source.context===item.context&&compactEvidence(source.medicationName)===compactEvidence(item.medicationName)&&keys.every(key=>!source[key]||!item[key]||compactEvidence(source[key]!)===compactEvidence(item[key]!))&&source.evidence.some(e=>compactEvidence(e.quote).includes(compactEvidence(item.medicationName))&&continuation.some(next=>next.pageNumber===e.pageNumber+1&&number(next.quote)===number(e.quote))));
+  if(candidates.length!==1)continue;
+  const {source,sourceIndex}=candidates[0];const merged={...source!};
+  for(const key of keys)merged[key]=source![key]||item[key];
+  merged.evidence=uniqueBy([...source!.evidence,...item.evidence],e=>e.pageNumber+':'+compactEvidence(e.quote));
+  rows[sourceIndex]=merged;rows[index]=null;
+ }
+ return rows.filter((item):item is AiMedication=>item!==null);
+}
 function withSourceDeduplication(
   plan: AiExtractionPlan,
   result: AiExtractionResult,
@@ -1768,9 +1799,14 @@ function withSourceDeduplication(
     plan,
     withoutSupersededOcrObservations(plan, result.fields.observations),
   );
-  if (observations.length === result.fields.observations.length) return result;
+  const medications=deduplicateMedicationContinuations(plan,result.fields.medications).filter(item => item.formula ||
+    !result.fields.medications.some(formula => formula.formula && formula.context === item.context &&
+      formula.formula.ingredients.some(ingredient => compactEvidence(ingredient.name) === compactEvidence(item.medicationName) &&
+        ingredient.evidence.some(source => item.evidence.some(entry => source.pageNumber === entry.pageNumber && compactEvidence(source.quote) === compactEvidence(entry.quote))))));
+  if (observations.length === result.fields.observations.length&&medications.length===result.fields.medications.length) return result;
   const normalized = normalizeAiExtraction({
     ...result.fields,
+    medications,
     observations,
     evidence: result.evidence,
     confidence: result.confidence,
@@ -3477,6 +3513,7 @@ export function mergeAiExtractionResults(
         compactEvidence(item.quantity || ""),
         compactEvidence(item.quantityUnit || ""),
         compactEvidence(item.instructions || ""),
+        item.formula ? JSON.stringify(item.formula) : "",
       ].join("\u0000"),
   );
   mergedSource.procedures = uniqueBy(

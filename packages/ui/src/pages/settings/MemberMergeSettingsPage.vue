@@ -8,15 +8,15 @@ import { useAppContext } from '../../composables/useAppContext';
 type Candidate={id:string;displayName:string;creatorName:string;selfName:string|null;reportCount:number};
 type Account={userId:string;displayName:string;permission:'viewer'|'manager';canManageSharing:boolean;usable:boolean};
 type SelfAccount={userId:string;memberId:string;displayName:string;usable:boolean};
-type Field='display_name'|'birth_date'|'sex'|'blood_type_abo'|'blood_type_rh';
-const labels:Record<Field,string>={display_name:'姓名',birth_date:'出生日期',sex:'性别',blood_type_abo:'ABO 血型',blood_type_rh:'Rh 血型'};
+type Field='display_name'|'birth_date'|'sex'|'blood_type_abo'|'blood_type_rh'|'care_allergies'|'care_history'|'care_medications';
+const labels:Record<Field,string>={display_name:'姓名',birth_date:'出生日期',sex:'性别',blood_type_abo:'ABO 血型',blood_type_rh:'Rh 血型',care_allergies:'过敏及不良反应',care_history:'重要病史',care_medications:'长期用药'};
 const fields=Object.keys(labels) as Field[];
 const display=(field:Field,value:string|null)=>field==='sex'?({male:'男',female:'女',unknown:'未知'}[value||'unknown']||value):(value||'未填写');
 const app=useAppContext();
 const items=ref<Candidate[]>([]),total=ref(0),page=ref(1),q=ref(''),loading=ref(false),busy=ref(false),error=ref('');
 const source=ref<Candidate|null>(null),target=ref<Candidate|null>(null);
 const selection=ref<{source:Record<Field,string|null>;target:Record<Field,string|null>;sourceAccounts:Account[];targetAccounts:Account[];selfAccounts:SelfAccount[]}|null>(null);
-const choices=ref<Record<Field,'source'|'target'>>({display_name:'target',birth_date:'target',sex:'target',blood_type_abo:'target',blood_type_rh:'target'});
+const choices=ref<Record<Field,'source'|'target'>>({display_name:'target',birth_date:'target',sex:'target',blood_type_abo:'target',blood_type_rh:'target',care_allergies:'target',care_history:'target',care_medications:'target'});
 const grants=ref<Array<Account & {included:boolean}>>([]);
 const preview=ref<{token:string;reportCount:number;warning:string;resolvedFields:Record<Field,string|null>;selfResolution:{retained:SelfAccount|null;released:SelfAccount[]}}|null>(null),result=ref<{reportCount:number}|null>(null),confirmed=ref(false);
 const selfUserId=ref('');
@@ -86,12 +86,12 @@ onMounted(()=>{if(app.session.value?.isAdmin)void load();});
  </section>
 </template>
 <style scoped>
-.merge-page { display: grid; gap: 14px; font-size: 13px; line-height: 1.6; }
+.merge-page { display: grid; gap: 14px; font-size: 14px; line-height: 1.6; }
 .panel { min-width: 0; padding: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-l, 14px); }
 p { margin: 6px 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
-h3, legend { margin: 0; padding: 0; color: var(--ink); font-size: 14px; font-weight: 600; }
+h3, legend { margin: 0; padding: 0; color: var(--ink); font-size: 16px; font-weight: 600; }
 strong { font-size: 14px; font-weight: 600; }
-small { color: var(--muted); font-size: 11px; }
+small { color: var(--muted); font-size: 12px; }
 .notice { display: flex; align-items: flex-start; gap: 9px; padding: 11px 14px; border-radius: 10px; background: var(--brand-soft); color: var(--brand-strong); }
 .notice svg { flex-shrink: 0; margin-top: 2px; }
 .notice p { margin: 0; color: inherit; }
@@ -102,14 +102,14 @@ small { color: var(--muted); font-size: 11px; }
 .direction-card strong, .direction-card small, code { display: block; }
 .direction-card strong { margin-top: 3px; }
 .swap-button { flex: 0 0 42px; flex-direction: column; gap: 2px; width: 42px; min-height: 48px; padding: 5px 0; color: var(--brand-strong); }
-.swap-button span { font-size: 10px; line-height: 1.4; }
-code { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.swap-button span { font-size: 12px; line-height: 1.4; }
+code { margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .toolbar, .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .toolbar { margin-top: 16px; font-size: 12px; color: var(--muted); }
 form.toolbar { margin-top: 0; margin-bottom: 8px; }
 .toolbar input { flex: 1; min-width: 140px; }
 .toolbar .primary { margin-left: auto; }
-button, input:not([type=checkbox]) { min-height: 34px; padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-size: 12px; line-height: 1.5; }
+button, input:not([type=checkbox]) { min-height: 34px; padding: 7px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-size: 14px; line-height: 1.5; }
 button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; cursor: pointer; transition: background .15s, border-color .15s; }
 button:hover:not(:disabled) { background: var(--brand-soft); border-color: var(--brand); }
 button:disabled { opacity: .45; cursor: not-allowed; }
@@ -119,19 +119,19 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--brand); out
 button[aria-pressed=true] { background: var(--brand-soft); border-color: var(--brand); color: var(--brand-strong); }
 .candidate { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--line); }
 .candidate>div:first-child { min-width: 0; }
-.candidate p { margin: 5px 0 0; font-size: 11px; }
+.candidate p { margin: 5px 0 0; font-size: 12px; }
 .actions { flex-shrink: 0; }
 fieldset { min-width: 0; padding: 0; margin: 0; border: 0; }
 .field { display: grid; grid-template-columns: 90px minmax(0, 1fr); align-items: center; gap: 12px; padding: 7px 0; }
 .field:first-of-type { margin-top: 8px; }
 .field>span { color: var(--muted); font-size: 12px; }
 .field .form-select { width: 100%; min-width: 0; }
-:deep(.form-select-trigger) { height: 34px; min-height: 34px; padding: 0 11px; border-radius: 8px; font-size: 12px; }
+:deep(.form-select-trigger) { height: 34px; min-height: 34px; padding: 0 11px; border-radius: 8px; font-size: 14px; }
 .permissions-title { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
 .section-hint { margin: 5px 0 8px; }
 .grant { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
 .grant>label:first-child { flex: 1; min-width: 180px; font-weight: 500; }
-.grant small { display: block; margin: 3px 0 0 23px; font-size: 10px; font-weight: 400; overflow-wrap: anywhere; }
+.grant small { display: block; margin: 3px 0 0 23px; font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
 .permission-select { width: 110px; flex-shrink: 0; }
 .sharing-option, .confirm-check { display: flex; align-items: flex-start; gap: 7px; font-size: 12px; line-height: 1.7; }
 input[type=checkbox] { width: 14px; height: 14px; margin: 3px 6px 0 0; vertical-align: top; accent-color: var(--brand); flex-shrink: 0; }

@@ -15,7 +15,7 @@ function editorState(options: { note?: ReportNote; request?: (...args: any[]) =>
   const events: unknown[][] = [];
   const disposers: Array<() => void> = [];
   const bindings = { computed, ref, randomId, defineProps: () => ({ reportId: 'fixture', note: options.note || null }), defineEmits: () => (...args: unknown[]) => events.push(args),
-    onBeforeUnmount: (fn: () => void) => disposers.push(fn), onMounted: () => {}, useScrollLock: () => {}, useConfirm: () => ({ ask: () => {} }),
+    onBeforeUnmount: (fn: () => void) => disposers.push(fn), onMounted: () => {}, useScrollLock: () => {}, useUnsavedRecord: () => ({ reset: () => {}, confirmLeave: async () => true }),
     request: options.request || (async () => ({})), requestUpload: options.upload || (async () => ({ uploadToken: 'fixture' })), apiUrl: (path: string) => `http://localhost/api/${path}`,
     reportNoteLimits, maxUploadFileBytes, window: { innerHeight: 800 }, document: { activeElement: null } };
   const state = new Function(...Object.keys(bindings), transpile(source + '\nreturn { content, images, save, selectFiles, upload, move, preview, viewer, error, saving, busy, createId };', { target: ScriptTarget.ES2022 }))(...Object.values(bindings));
@@ -70,8 +70,8 @@ test('UI uses member capability, text-safe rendering, shared viewer and flexible
   assert.match(panel, /v-if="canManage"/); assert.match(panel, /v-else-if="!notes.length"/);
   assert.match(panel, /v-for="note in notes"/); assert.match(panel, /v-if="note.assets.length"/);
   assert.match(panel, /\{\{ note.contentText \}\}/); assert.doesNotMatch(panel, /v-html/);
-  assert.match(panel, /ImageViewer/); assert.match(editor, /ImageViewer/); assert.match(editor, /confirm.ask/);
-  assert.match(editor, /report-note-editor-body/); assert.match(editor, /footer class="form-actions report-note-editor-actions"/);
+  assert.match(panel, /ImageViewer/); assert.match(editor, /ImageViewer/); assert.match(editor, /useUnsavedRecord/); assert.match(editor, /leave.confirmLeave/);
+  assert.match(editor, /report-note-editor-body/); assert.match(editor, /footer class="form-actions report-note-editor-actions record-form-actions"/);
   assert.match(editor, /visualViewport/); assert.match(editor, /@drop.prevent/);
   assert.match(styles, /\.modal-panel.report-note-editor[^}]*height: auto[^}]*max-height:/);
   assert.match(styles, /\.report-note-editor-actions button[^}]*border-radius: var\(--radius-m\)/);

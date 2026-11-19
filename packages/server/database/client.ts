@@ -1,12 +1,19 @@
 import {ensureReportCombinationDraft,needsReportCombinationDraft} from './report-combination-draft';
 import {ensureTrendSnapshotDraft, needsTrendSnapshotDraft} from './trend-snapshot-draft';
 import { isMainThread } from 'node:worker_threads';
+import {ensureDoctorContextDraft,needsDoctorContextDraft} from './doctor-context-draft';
+import { needsHealthRecordProcessDraft } from './health-record-process-draft';
+import { healthCategoryNeedsRepair, ensureHealthCategoryColumns } from './health-category-draft';
 import { ensureMemberMergeDraft } from "./member-merge-draft";
+import { ensureHealthProcessDraft, needsHealthProcessRepair } from './health-process-draft';
+import { ensureHealthWorkflowDraft, needsHealthWorkflowDraft } from './health-workflow-draft';
+import { ensureHealthUploadSchema, needsHealthUploadRepair } from './health-upload-draft';
+import { ensureMedicationDraftSchema, medicationDraftNeedsRepair } from './medication-draft';
 import { ensureReportDuplicateDraft } from "./report-duplicate-draft";
 import { ensurePageAppendDraft } from "./page-append-draft";
 import { ensurePageOrientationDraft } from "./page-orientation-draft";
 import { ensureMemberSharingDraft } from "./member-sharing-draft";
-import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
@@ -28,10 +35,10 @@ import {
   tableColumnNames
 } from "./migrations";
 import { schemaSql, schemaVersion } from "./schema";
+import { writeDatabaseSnapshot } from './snapshot';
 
 let database: DatabaseSync | null = null;
 let openedDatabasePath: string | null = null;
-
 const databaseCloseListeners = new Set<() => void>();
 export function onDatabaseClosing(listener: () => void) {
   databaseCloseListeners.add(listener);
@@ -180,22 +187,13 @@ function backfillAppliedMigrationRows(db: DatabaseSync, currentVersion: number) 
   }
 }
 
-function sqlString(value: string) {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
 function backupDatabaseBeforeMigration(db: DatabaseSync, storageDir: string, databasePath: string, fromVersion: number, toVersion: number) {
   if (!existsSync(databasePath)) return null;
   const backupDir = join(storageDir, "backups", "db");
   mkdirSync(backupDir, { recursive: true });
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "-");
-  const backupPath = join(backupDir, `pre-migration-v${fromVersion}-to-v${toVersion}-${stamp}.sqlite`);
-  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-  try {
-    db.exec(`VACUUM INTO ${sqlString(backupPath)}`);
-  } catch {
-    copyFileSync(databasePath, backupPath);
-  }
+  const backupPath = join(backupDir, `pre-migration-v${fromVersion}-to-v${toVersion}-${stamp}-${randomUUID()}.sqlite`);
+  writeDatabaseSnapshot(db, backupPath);
   return backupPath;
 }
 
@@ -259,45 +257,63 @@ export function rollbackAfterError(db: DatabaseSync) {
   }
 }
 
+const transactionDepths = new WeakMap<DatabaseSync, number>();
 export function runInTransaction<T>(db: DatabaseSync, action: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
+  const depth = transactionDepths.get(db) || 0;
+  const savepoint = `health_records_nested_${depth}`;
+  db.exec(depth ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
+  transactionDepths.set(db, depth + 1);
   try {
     const result = action();
-    db.exec("COMMIT");
+    db.exec(depth ? `RELEASE SAVEPOINT ${savepoint}` : 'COMMIT');
     return result;
   } catch (error) {
-    rollbackAfterError(db);
+    if (depth) {
+      try { db.exec(`ROLLBACK TO SAVEPOINT ${savepoint}; RELEASE SAVEPOINT ${savepoint}`); }
+      catch { /* Preserve the original failure if SQLite already rolled back. */ }
+    } else rollbackAfterError(db);
     throw error;
+  } finally {
+    if (depth) transactionDepths.set(db, depth);
+    else transactionDepths.delete(db);
   }
 }
 
 function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
   const { appVersion } = getAppConfig();
   if (isFreshDatabase(db)) {
-    db.exec(schemaSql);
-    ensureClinicalFactColumns(db);
-    ensureIndicatorDictionaryColumns(db);
-    ensureMemberBloodTypeColumns(db);
-    ensureObservationDisplayFlagColumns(db);
-    ensureIndicatorGovernanceSchema(db);
-    ensureLocalAccountColumns(db);
-    ensureMemberSharingDraft(db);
-    ensureMemberMergeDraft(db);
-    ensurePageAppendDraft(db);
-    ensurePageOrientationDraft(db);
-    ensureReportDuplicateDraft(db);
-    ensureReportCombinationDraft(db);
-    ensureTrendSnapshotDraft(db);
-    ensureObservationFieldOverrideSchema(db);
-    ensureOcrCoordSpaceColumns(db);
-    ensureReportDuplicateGovernanceSchema(db);
-    repairReportDisplayMetadata(db);
-    repairIncompatibleAiReportSections(db);
-    ensureMigrationMetadataColumns(db);
-    const upgradeId = beginUpgradeHistory(db, null, appVersion, 0);
-    for (const migration of databaseMigrations) recordMigration(db, migration.version, 0);
-    writeJsonSetting(db, "system.last_app_version", appVersion);
-    completeUpgradeHistory(db, upgradeId);
+    runInTransaction(db, () => {
+      ensureHealthCategoryColumns(db);
+      db.exec(schemaSql);
+      ensureClinicalFactColumns(db);
+      ensureIndicatorDictionaryColumns(db);
+      ensureMemberBloodTypeColumns(db);
+      ensureObservationDisplayFlagColumns(db);
+      ensureIndicatorGovernanceSchema(db);
+      ensureLocalAccountColumns(db);
+      ensureMemberSharingDraft(db);
+      ensureMemberMergeDraft(db);
+      ensurePageAppendDraft(db);
+      ensurePageOrientationDraft(db);
+      ensureReportDuplicateDraft(db);
+      ensureReportCombinationDraft(db);
+      ensureHealthProcessDraft(db);
+      ensureHealthWorkflowDraft(db);
+      ensureDoctorContextDraft(db);
+      ensureTrendSnapshotDraft(db);
+      ensureHealthUploadSchema(db);
+      ensureMedicationDraftSchema(db);
+      ensureObservationFieldOverrideSchema(db);
+      ensureOcrCoordSpaceColumns(db);
+      ensureReportDuplicateGovernanceSchema(db);
+      repairReportDisplayMetadata(db);
+      repairIncompatibleAiReportSections(db);
+      ensureMigrationMetadataColumns(db);
+      const upgradeId = beginUpgradeHistory(db, null, appVersion, 0);
+      for (const migration of databaseMigrations) recordMigration(db, migration.version, 0);
+      writeJsonSetting(db, "system.last_app_version", appVersion);
+      completeUpgradeHistory(db, upgradeId);
+    });
     return;
   }
 
@@ -322,16 +338,13 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
 
   const pendingMigrations = databaseMigrations.filter((migration) => migration.version > currentVersion);
   // Complete older v17 test drafts without renumbering their existing records.
-  if (!tableExists(db, "member_merges") || !tableExists(db, "feedback_sync_state") || !tableExists(db, "feedback_notifications") || !tableExists(db, "feedback_notification_reads") || !tableExists(db, "examination_duplicate_decisions") || !tableExists(db, "report_examinations") || !tableExists(db, "observation_examinations") || !tableExists(db, "morphology_finding_examinations") || !tableExists(db, "report_examination_state") || !tableExists(db, "report_duplicate_runtime") || !tableColumnNames(db,"report_duplicate_runtime").has("continue_job_id") || !tableExists(db, "report_page_appends") || !tableColumnNames(db,"report_page_appends").has("confirmation_hash") || !tableColumnNames(db,"report_page_appends").has("input_hash") || !tableColumnNames(db,"report_page_append_files").has("error_message") || !tableExists(db, "file_gc_members") || !tableColumnNames(db, "member_permissions").has("can_manage_sharing") || !tableColumnNames(db, "report_pages").has("ocr_rotation") || pendingMigrations.length || !tableExists(db, "indicator_groups") || !tableExists(db, "indicator_group_members") || !tableExists(db, "report_notes") || !tableExists(db, "report_note_assets") || !tableExists(db, "upload_receipts")
-    || !tableExists(db, "institution_trend_auto_rules") || !tableExists(db, "institution_trend_auto_decisions") || needsTrendSnapshotDraft(db) || needsReportCombinationDraft(db)) {
+  const needsStructureRepair = !tableExists(db, "member_merges") || !tableExists(db, "feedback_sync_state") || !tableExists(db, "feedback_notifications") || !tableExists(db, "feedback_notification_reads") || !tableExists(db, "examination_duplicate_decisions") || !tableExists(db, "report_examinations") || !tableExists(db, "observation_examinations") || !tableExists(db, "morphology_finding_examinations") || !tableExists(db, "report_examination_state") || !tableExists(db, "report_duplicate_runtime") || !tableColumnNames(db,"report_duplicate_runtime").has("continue_job_id") || !tableExists(db, "report_page_appends") || !tableColumnNames(db,"report_page_appends").has("confirmation_hash") || !tableColumnNames(db,"report_page_appends").has("input_hash") || !tableColumnNames(db,"report_page_append_files").has("error_message") || !tableExists(db, "file_gc_members") || !tableColumnNames(db, "member_permissions").has("can_manage_sharing") || !tableColumnNames(db, "report_pages").has("ocr_rotation") || pendingMigrations.length > 0 || !tableExists(db, "indicator_groups") || !tableExists(db, "indicator_group_members") || !tableExists(db, "report_notes") || !tableExists(db, "report_note_assets") || !tableExists(db, "upload_receipts")
+    || !tableExists(db, "institution_trend_auto_rules") || !tableExists(db, "institution_trend_auto_decisions")
+    || !tableExists(db, "health_events") || !tableExists(db, "health_event_resources")
+    || !tableExists(db, "health_episodes") || needsHealthProcessRepair(db) || needsHealthWorkflowDraft(db) || needsHealthUploadRepair(db) || medicationDraftNeedsRepair(db) || healthCategoryNeedsRepair(db) || needsHealthRecordProcessDraft(db) || needsDoctorContextDraft(db) || needsTrendSnapshotDraft(db) || needsReportCombinationDraft(db);
+  if (needsStructureRepair) {
     backupDatabaseBeforeMigration(db, storageDir, databasePath, currentVersion, schemaVersion);
   }
-
-  if (!hasMigrationTable) {
-    db.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
-  }
-  ensureMigrationMetadataColumns(db);
-  backfillAppliedMigrationRows(db, currentVersion);
 
   const lastAppVersion = readJsonSetting<string>(db, "system.last_app_version");
   const needsUpgradeRecord = pendingMigrations.length > 0 || lastAppVersion !== appVersion;
@@ -340,38 +353,59 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
     : null;
 
   try {
-    for (const migration of pendingMigrations) {
-      const started = Date.now();
-      runInTransaction(db, () => {
-        migration.up(db);
-        recordMigration(db, migration.version, Date.now() - started);
-      });
-    }
-    db.exec(schemaSql);
-    ensureClinicalFactColumns(db);
-    ensureIndicatorDictionaryColumns(db);
-    ensureMemberBloodTypeColumns(db);
-    ensureObservationDisplayFlagColumns(db);
-    ensureIndicatorGovernanceSchema(db);
-    ensureLocalAccountColumns(db);
-    ensureMemberSharingDraft(db);
-    ensureMemberMergeDraft(db);
-    ensurePageAppendDraft(db);
-    ensurePageOrientationDraft(db);
-    ensureReportDuplicateDraft(db);
-    ensureReportCombinationDraft(db);
-    ensureTrendSnapshotDraft(db);
-    ensureObservationFieldOverrideSchema(db);
-    ensureOcrCoordSpaceColumns(db);
-    ensureReportDuplicateGovernanceSchema(db);
-    repairReportDisplayMetadata(db);
-    repairIncompatibleAiReportSections(db);
-    ensureMigrationMetadataColumns(db);
-    if (needsUpgradeRecord && !upgradeId && tableExists(db, "app_upgrade_history")) {
-      upgradeId = beginUpgradeHistory(db, lastAppVersion, appVersion, currentVersion);
-    }
-    writeJsonSetting(db, "system.last_app_version", appVersion);
-    if (upgradeId) completeUpgradeHistory(db, upgradeId);
+    // One commit covers numbered migrations, additive drafts and their completion marker.
+    // A crash or SQLITE_FULL must leave the old usable structure, not a half-upgraded database.
+    runInTransaction(db, () => {
+      if (!hasMigrationTable) {
+        db.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+      }
+      ensureMigrationMetadataColumns(db);
+      backfillAppliedMigrationRows(db, currentVersion);
+      for (const migration of pendingMigrations) {
+        const started = Date.now();
+        runInTransaction(db, () => {
+          migration.up(db);
+          recordMigration(db, migration.version, Date.now() - started);
+        });
+      }
+      ensureHealthCategoryColumns(db);
+      db.exec(schemaSql);
+      ensureClinicalFactColumns(db);
+      ensureIndicatorDictionaryColumns(db);
+      ensureMemberBloodTypeColumns(db);
+      ensureObservationDisplayFlagColumns(db);
+      ensureIndicatorGovernanceSchema(db);
+      ensureLocalAccountColumns(db);
+      ensureMemberSharingDraft(db);
+      ensureMemberMergeDraft(db);
+      ensurePageAppendDraft(db);
+      ensurePageOrientationDraft(db);
+      ensureReportDuplicateDraft(db);
+      ensureReportCombinationDraft(db);
+      ensureHealthProcessDraft(db);
+      ensureHealthWorkflowDraft(db);
+      ensureDoctorContextDraft(db);
+      ensureTrendSnapshotDraft(db);
+      ensureHealthUploadSchema(db);
+      ensureMedicationDraftSchema(db);
+      ensureObservationFieldOverrideSchema(db);
+      ensureOcrCoordSpaceColumns(db);
+      ensureReportDuplicateGovernanceSchema(db);
+      repairReportDisplayMetadata(db);
+      repairIncompatibleAiReportSections(db);
+      ensureMigrationMetadataColumns(db);
+      if (needsUpgradeRecord && !upgradeId && tableExists(db, "app_upgrade_history")) {
+        upgradeId = beginUpgradeHistory(db, lastAppVersion, appVersion, currentVersion);
+      }
+      if (needsStructureRepair) {
+        const checks = db.prepare('PRAGMA quick_check').all();
+        if (checks.length !== 1 || checks[0].quick_check !== 'ok' || db.prepare('PRAGMA foreign_key_check').get()) {
+          throw new Error('Database upgrade integrity check failed.');
+        }
+      }
+      writeJsonSetting(db, "system.last_app_version", appVersion);
+      if (upgradeId) completeUpgradeHistory(db, upgradeId);
+    });
   } catch (error) {
     try {
       if (upgradeId) failUpgradeHistory(db, upgradeId, error);

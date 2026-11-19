@@ -69,7 +69,7 @@ function saveEditedImage(file:File){
 .attachment-add { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; border-style: dashed; color: var(--brand); font-size: 12px; }
 .attachment-remove { position: absolute; right: 4px; top: 4px; width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; background: var(--surface); color: var(--ink); cursor: pointer; }
 .attachment-expanded { display: grid; justify-items: center; gap: 10px; margin-bottom: 12px; }
-.attachment-expanded img { max-width: 100%; max-height: 50dvh; object-fit: contain; border-radius: 8px; }
+.attachment-expanded img { max-width: 100%; max-height: 50vh; max-height: 50dvh; object-fit: contain; border-radius: 8px; }
 .attachment-section .attachment-error { color: var(--danger); }
 .attachment-edit { position: absolute; bottom: 5px; left: 5px; right: 5px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); min-height: 30px; font-size: 11px; cursor: pointer; }
 .attachment-section .attachment-grid { grid-template-columns: repeat(3, minmax(0, 120px)); gap: 8px; margin: 8px 0; }

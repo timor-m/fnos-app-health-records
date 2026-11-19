@@ -5,6 +5,7 @@ export const duplicateEvidencePolicy = {
     r1: { coverage: .90, maxUnknown: 2, unknownRatio: .10, anchors: 4 },
     r2: { coverage: .95, maxUnknown: 1, unknownRatio: .05, same: 10, anchors: 6 },
     post: { coverage: .8, unknownRatio: .2, same: 3, narrativeCharacters: 60 },
+    photo: { coverage: .8, unknownRatio: .2, anchors: 3 },
 } as const;
 export type EvidenceState = 'exact' | 'equivalent' | 'compatible' | 'uncertain' | 'conflict' | 'missing';
 export type DuplicateClassification = 'exact_duplicate' | 'strong_duplicate' | 'possible_duplicate' | 'different' | 'insufficient' | 'related_variant';
@@ -17,6 +18,7 @@ export type DuplicateFact = {
     lines?: string[];
     raw?: string;
     quality?: number | null;
+    anchorValue?: string;
 };
 export type DuplicateEvidenceSnapshot = {
     reportId: string;
@@ -39,6 +41,10 @@ export type DuplicateEvidenceSnapshot = {
     narrativeReliable: boolean;
     extractionId: string | null;
     usable: boolean;
+    photoItems?: DuplicateFact[];
+    photoUnknown?: number;
+    photoRows?: DuplicateFact[];
+    photoRowUnknown?: number;
 };
 export type DuplicateFieldComparison = {
     key: string;
@@ -94,12 +100,12 @@ function timeState(a?: string, b?: string): EvidenceState {
     const x = clean(a), y = clean(b);
     return x === y ? 'exact' : x.startsWith(y) || y.startsWith(x) ? 'compatible' : 'conflict';
 }
-export function evaluateDuplicatePair(a: DuplicateEvidenceSnapshot, b: DuplicateEvidenceSnapshot, stage: 'ocr_pre' | 'ai_post' = 'ocr_pre'): DuplicateEvaluation {
+function evaluateEvidencePair(a: DuplicateEvidenceSnapshot, b: DuplicateEvidenceSnapshot, stage: 'ocr_pre' | 'ai_post', advisoryOnly = false): DuplicateEvaluation {
     const e: DuplicateEvaluation = { ruleVersion: currentReportDuplicateRuleVersion, ruleId: 'insufficient', stage, leftVersion: a.version, rightVersion: b.version, classification: 'insufficient', sameCount: 0, uncertainCount: 0, conflictCount: 0, missingCount: 0, anchors: 0, coverage: [0, 0], risks: [...new Set([...a.risks, ...b.risks])], support: [], fields: [], preGateEligible: false, reason: '证据不足，正常整理不受影响' };
     const finish = (classification: DuplicateClassification, ruleId: string, reason: string, eligible = false) => ({ ...e, classification, ruleId, reason, preGateEligible: eligible });
     if (a.memberId !== b.memberId)
         return finish('different', 'member', '不属于同一成员');
-    if (a.sourceComplete && b.sourceComplete && a.sourceSignature && a.sourceSignature === b.sourceSignature) {
+    if (!advisoryOnly && a.sourceComplete && b.sourceComplete && a.sourceSignature && a.sourceSignature === b.sourceSignature) {
         e.stage = 'original';
         e.support = ['完整原件集合一致'];
         return finish('exact_duplicate', 'R0', '上传原件内容完全一致', true);
@@ -128,7 +134,10 @@ export function evaluateDuplicatePair(a: DuplicateEvidenceSnapshot, b: Duplicate
         const right = b.items.filter(x => x.key === key).slice().sort((x, y) => canonicalResult(x.value).localeCompare(canonicalResult(y.value)));
         // Consume exact equivalents first, preserving multiplicity of repeated measurements.
         for (const x of [...left]) {
-            const i = right.findIndex(y => sameResult(x.value, y.value));
+            const i = right.findIndex(y => sameResult(x.value, y.value)||advisoryOnly&&x.anchor&&y.anchor
+                &&(!x.value.split('|')[1]||!y.value.split('|')[1])
+                &&[2,3].every(i=>!x.value.split('|')[i]||!y.value.split('|')[i]||x.value.split('|')[i]===y.value.split('|')[i])
+                &&canonicalResult(x.anchorValue||x.value.split('|')[0])===canonicalResult(y.anchorValue||y.value.split('|')[0]));
             if (i < 0)
                 continue;
             const y = right.splice(i, 1)[0];
@@ -189,12 +198,12 @@ export function evaluateDuplicatePair(a: DuplicateEvidenceSnapshot, b: Duplicate
     const auxiliary = a.identifiers.some(x => x.type !== 'report' && ['sample', 'exam', 'barcode'].includes(x.type) && b.identifiers.some(y => x.type === y.type && x.value === y.value));
     const r1Time = weakEvent || e.anchors >= 10 && auxiliary;
     const short = n > 0 && n <= 3 && strongEvent && e.sameCount === n && e.uncertainCount === 0;
-    if (sameId && ((coverage >= r1.coverage && unknown1 && e.anchors >= r1.anchors && r1Time) || short))
+    if (!advisoryOnly && sameId && ((coverage >= r1.coverage && unknown1 && e.anchors >= r1.anchors && r1Time) || short))
         return finish('strong_duplicate', short ? 'R1.short' : 'R1', '报告身份与结果内容充分匹配', true);
-    if (issuer && scope && strongEvent && coverage >= r2.coverage && e.uncertainCount <= r2.maxUnknown && e.uncertainCount <= n * r2.unknownRatio && e.sameCount >= r2.same && e.anchors >= r2.anchors)
+    if (!advisoryOnly && issuer && scope && strongEvent && coverage >= r2.coverage && e.uncertainCount <= r2.maxUnknown && e.uncertainCount <= n * r2.unknownRatio && e.sameCount >= r2.same && e.anchors >= r2.anchors)
         return finish('strong_duplicate', 'R2', '检查事件与高覆盖结果内容匹配', true);
     const post = duplicateEvidencePolicy.post;
-    if (stage === 'ai_post' && issuer && scope && (sameId || strongEvent)) {
+    if (!advisoryOnly && stage === 'ai_post' && issuer && scope && (sameId || strongEvent)) {
         const narrativeMatch = narrativeA.length >= post.narrativeCharacters && narrativeA === narrativeB && a.narrativeReliable && b.narrativeReliable;
         if (narrativeMatch && n === 0) {
             e.support.push('完整所见及结论匹配');
@@ -203,5 +212,47 @@ export function evaluateDuplicatePair(a: DuplicateEvidenceSnapshot, b: Duplicate
         if (coverage >= post.coverage && e.sameCount >= post.same && e.uncertainCount <= n * post.unknownRatio)
             return finish('possible_duplicate', 'R3.results', '整理已完成，请核对是否重复');
     }
+    // Rephotographed originals may omit issuer/number and receive different AI titles.
+    // This tier is advisory only; it must never make an upload eligible for a pause.
+    const photo = duplicateEvidencePolicy.photo;
+    const idConflict = idsA.length > 0 && idsB.length > 0
+        && JSON.stringify([...new Set(idsA.map(x=>x.value))].sort()) !== JSON.stringify([...new Set(idsB.map(x=>x.value))].sort());
+    const issuerConflict = !!a.issuer && !!b.issuer && a.issuer !== b.issuer;
+    const issuedConflict = timeState(a.times.issued,b.times.issued) === 'conflict';
+    const anchors = e.fields.filter(f => ['exact','equivalent'].includes(f.state)
+        && f.left?.anchor && f.right?.anchor && f.left.value.split('|').length === 4 && (!!f.left.value.split('|')[1]||advisoryOnly));
+    const distinctKeys = new Set(anchors.map(f=>f.key)).size;
+    const distinctValues = new Set(anchors.map(f=>canonicalResult(f.left!.anchorValue||f.left!.value.split('|')[0]))).size;
+    if (stage === 'ai_post' && weakEvent && !idConflict && !issuerConflict && !issuedConflict
+        && coverage >= photo.coverage && e.uncertainCount <= n * photo.unknownRatio
+        && distinctKeys >= photo.anchors && distinctValues >= photo.anchors) {
+        const partialUnits=anchors.some(f=>!f.left!.value.split('|')[1]||!f.right!.value.split('|')[1]);
+        if(advisoryOnly&&partialUnits){
+            e.support.push('报告时间相容，已有解析及原文支持多项不同项目和数值匹配，部分单位尚待核对');
+            return finish('possible_duplicate','R3.photo.ai','已有解析的报告时间、多项项目及数值相近，请核对是否重复');
+        }
+        e.support.push('报告时间相容，多项不同指标的数值及单位匹配');
+        return finish('possible_duplicate', 'R3.photo', '报告时间与多项结果一致，可能是同一报告的不同照片，请核对');
+    }
     return e;
+}
+export function evaluateDuplicatePair(a: DuplicateEvidenceSnapshot, b: DuplicateEvidenceSnapshot, stage: 'ocr_pre' | 'ai_post' = 'ocr_pre'): DuplicateEvaluation {
+    const strict=evaluateEvidencePair(a,b,stage);
+    if(stage!=='ai_post'||strict.preGateEligible||strict.conflictCount>0)return strict;
+    if(a.photoItems&&b.photoItems){
+        const advisory=evaluateEvidencePair({...a,items:a.photoItems,unknown:a.photoUnknown||0},
+            {...b,items:b.photoItems,unknown:b.photoUnknown||0},stage,true);
+        if(['R3.photo','R3.photo.ai'].includes(advisory.ruleId))return advisory;
+        if(advisory.conflictCount>0)return strict;
+    }
+    const hasClinicalContext=(snapshot:DuplicateEvidenceSnapshot)=>(snapshot.photoItems||snapshot.items).some(f=>{
+        const [,section,method]=f.key.split('|');
+        return !!method||/(尿|粪|便|痰|血清|血浆|全血|脑脊液|胸水|腹水|左|右|空腹|餐后|随机|负荷|运动|urine|stool|serum|plasma|wholeblood|left|right|fasting|postprandial)/.test(section||'');
+    });
+    if(a.photoRows&&b.photoRows&&!hasClinicalContext(a)&&!hasClinicalContext(b)){
+        const rows=evaluateEvidencePair({...a,items:a.photoRows,unknown:a.photoRowUnknown||0},
+            {...b,items:b.photoRows,unknown:b.photoRowUnknown||0},stage,true);
+        if(rows.ruleId==='R3.photo')return {...rows,ruleId:'R3.photo.rows',reason:'报告时间与多行表格原文一致，可能是同一报告的不同照片，请核对'};
+    }
+    return strict;
 }

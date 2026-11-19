@@ -3,7 +3,8 @@ export type AiTaskKey =
   | "report_summary"
   | "health_explanation"
   | "morphology_extraction"
-  | "duplicate_assistance";
+  | "duplicate_assistance"
+  | "health_process_summary";
 
 export type AiTaskDefinition = {
   key: AiTaskKey;
@@ -15,6 +16,14 @@ export type AiTaskDefinition = {
 };
 
 export const aiTaskRegistry: Record<AiTaskKey, AiTaskDefinition> = {
+  health_process_summary: {
+    key: 'health_process_summary',
+    label: '健康历程整理',
+    description: '整理已关联记录的标题、摘要、阶段与关键节点，不改变原始记录或关联',
+    modelRole: 'text',
+    responseMode: 'json_object',
+    implemented: true
+  },
   report_extraction: {
     key: "report_extraction",
     label: "报告结构化整理",

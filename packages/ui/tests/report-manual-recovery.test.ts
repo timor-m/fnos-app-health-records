@@ -4,7 +4,7 @@ import {ref} from 'vue';
 const state = vi.hoisted(()=>({permission:'manager',ask:vi.fn(),toast:vi.fn()}));
 vi.mock('../src/composables/useAppContext',()=>({useAppContext:()=>({
   session:ref({authenticated:true,id:'synthetic-manager'}),allMembers:ref([{id:'m1',permission:state.permission}]),
-  selectedMemberId:ref('m1'),refreshReminderCount:vi.fn()
+  selectedMemberId:ref('m1'),selectedMember:ref({id:'m1',permission:state.permission}),refreshReminderCount:vi.fn()
 })}));
 vi.mock('../src/composables/useConfirm',()=>({useConfirm:()=>({ask:state.ask,state:ref(null),cancel:vi.fn()})}));
 vi.mock('../src/composables/useToast',()=>({useToast:()=>({show:state.toast})}));

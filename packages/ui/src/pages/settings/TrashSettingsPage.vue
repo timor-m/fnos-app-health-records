@@ -5,7 +5,9 @@ import SubPageHeader from "../../components/SubPageHeader.vue";
 import EmptyState from "../../components/EmptyState.vue";
 import { ApiRequestError, request } from "../../utils/api";
 import { formatDatabaseTimeWithYear } from "../../utils/time";
-import type { CursorPage, ReportSummary, TrashCleanupSummary } from "../../types/api";
+import type { TrashCleanupSummary } from "../../types/api";
+import { healthTrashLabels, type HealthTrashEntry, type HealthTrashPage } from "../../../../shared/health-record-trash";
+import { formatMedicationDate } from "../../utils/medication-date";
 import { useAppContext } from "../../composables/useAppContext";
 import { useConfirm } from "../../composables/useConfirm";
 import { useRefreshOnActivate } from "../../composables/useRefreshOnActivate";
@@ -17,7 +19,7 @@ const toast = useToast();
 const confirmDialog = useConfirm();
 const loading = ref(false);
 const loadingMore = ref(false);
-const reports = ref<ReportSummary[]>([]);
+const reports = ref<HealthTrashEntry[]>([]);
 const nextCursor = ref<string | null>(null);
 const hasMore = ref(false);
 const error = ref("");
@@ -45,9 +47,9 @@ function schedule() {
 function isDenied(cause:unknown) { return cause instanceof ApiRequestError && [401,403,404].includes(cause.status); }
 function deny() { revoked=true; invalidate(); clearData(); error.value='当前账号已无法访问该成员的回收站，请重新确认权限。'; }
 function trashUrl(memberId:string,cursor?:string|null) {
- const params=new URLSearchParams({trash:'1',memberId,limit:String(PAGE_SIZE)});
+ const params=new URLSearchParams({memberId,limit:String(PAGE_SIZE)});
  if(cursor) params.set('cursor',cursor);
- return `reports?${params}`;
+ return `health-records/trash?${params}`;
 }
 async function load(more=false) {
  const memberId=app.selectedMemberId.value;
@@ -57,15 +59,15 @@ async function load(more=false) {
  if(more) loadingMore.value=true; else loading.value=true;
  const manager=canManage.value;
  const results=await Promise.allSettled([
-   request<CursorPage<ReportSummary>>(trashUrl(memberId,more?nextCursor.value:null),{signal:controller.signal}),
+   request<HealthTrashPage>(trashUrl(memberId,more?nextCursor.value:null),{signal:controller.signal}),
    manager?request<TrashCleanupSummary>(`reports/trash-cleanup?memberId=${encodeURIComponent(memberId)}`,{signal:controller.signal}):Promise.resolve(null)
  ]);
  if(token!==generation) return;
  if(results.some(result=>result.status==='rejected' && isDenied(result.reason))) {deny();return;}
  const [list,state]=results;
  if(list.status==='fulfilled') {
-   const seen=new Set(reports.value.map(report=>report.id));
-   reports.value=more?[...reports.value,...list.value.items.filter(report=>!seen.has(report.id))]:list.value.items;
+   const seen=new Set(reports.value.map(report=>`${report.kind}:${report.id}`));
+   reports.value=more?[...reports.value,...list.value.items.filter(report=>!seen.has(`${report.kind}:${report.id}`))]:list.value.items;
    nextCursor.value=list.value.nextCursor; hasMore.value=list.value.hasMore; error.value='';
  } else { reports.value=[]; hasMore.value=false; error.value='回收站暂时无法获取，请稍后重试。'; }
  cleanup.value=state.status==='fulfilled'?state.value:null;
@@ -75,26 +77,31 @@ async function load(more=false) {
  now.value=Date.now(); busy=false; loading.value=false; loadingMore.value=false; schedule();
 }
 function loadMore() { return load(true); }
-async function perform(report:ReportSummary,permanent:boolean) {
+async function perform(report:HealthTrashEntry,permanent:boolean) {
  if(restoringId.value || !canManage.value || revoked || report.memberId!==app.selectedMemberId.value) return;
  const token=generation; restoringId.value=report.id;
+ const isVaccination=report.kind==='vaccination';
+ const standalone=['symptom','medication','intake','process'].includes(report.kind);
+ const label=report.kind==='report'?'报告':healthTrashLabels[report.kind];
  try {
-   const result=await request<{pendingFileCount?:number|null}>(`reports/${encodeURIComponent(report.id)}${permanent?'?permanent=1':'/restore'}`,{method:permanent?'DELETE':'POST'});
+   const result=standalone?await request<{pendingFileCount?:number|null;reminderNeedsReview?:boolean;omittedRecordCount?:number}>('health-records/trash',{method:'POST',body:JSON.stringify({kind:report.kind,id:report.id,revision:report.revision,operation:permanent?'purge':'restore'})}):await request<{pendingFileCount?:number|null;reminderNeedsReview?:boolean;omittedRecordCount?:number}>(`${isVaccination?'vaccinations':'reports'}/${encodeURIComponent(report.id)}${permanent?'?permanent=1':'/restore'}`,{method:permanent?'DELETE':'POST',...(isVaccination?{body:JSON.stringify({revision:report.revision})}:{})});
    if(token!==generation) return;
-   toast.show(permanent?(result.pendingFileCount !== 0?'报告已永久删除，部分文件等待后台清理。':'报告已永久删除。'):'报告已恢复');
+   toast.show(permanent?(report.kind==='report'&&result.pendingFileCount !== 0?'报告已永久删除，部分文件等待后台清理。':`${label}已永久删除。`):result.omittedRecordCount?`健康历程已恢复，${result.omittedRecordCount} 条原记录已不可用，未纳入恢复`:result.reminderNeedsReview?'接种记录已恢复，请在详情核对下一剂提醒':`${label}已恢复`);
+   app.notifyDataChanged(); void app.refreshReminderCount();
    invalidate(); // Discard any pre-operation list/status request.
    restoringId.value='';
    await load(); // Query errors are displayed separately, never as deletion failures.
  } catch(cause) {
    if(token!==generation) return;
-   if(isDenied(cause)) deny();
+   if(cause instanceof ApiRequestError && [401,403].includes(cause.status)) deny();
+   else if(cause instanceof ApiRequestError && cause.status===404) { invalidate(); await load(); }
    toast.show(cause instanceof Error?cause.message:permanent?'删除失败，请稍后重试':'恢复失败，请稍后重试');
  } finally { if(token===generation) restoringId.value=''; }
 }
-function restore(report:ReportSummary) { return perform(report,false); }
-function purge(report:ReportSummary) {
+function restore(report:HealthTrashEntry) { return perform(report,false); }
+function purge(report:HealthTrashEntry) {
  const token=generation;
- confirmDialog.ask({title:'永久删除报告',message:`永久删除「${report.title}」？永久删除后无法恢复，将立即尝试删除关联文件；仍被其他报告引用的文件会保留，清理失败的文件由后台重试。`,confirmText:'永久删除',danger:true,run:async()=>{if(token===generation) await perform(report,true);}});
+ confirmDialog.ask({title:`永久删除${report.kind==='report'?'报告':healthTrashLabels[report.kind]}`,message:report.kind==='process'?`永久删除「${report.title}」？仅删除历程分组与整理信息，无法恢复；其中的原始记录及附件全部保留。`:report.kind!=='report'?`永久删除「${report.title}」？${report.kind==='medication'?'这段用药及包含的服药补充将无法恢复':report.kind==='symptom'?'这条症状及其变化历史将无法恢复':'这条记录将无法恢复'}，上传的原件和其他记录会保留。`:`永久删除「${report.title}」？永久删除后无法恢复，将立即尝试删除关联文件；仍被其他报告引用的文件会保留，清理失败的文件由后台重试。`,confirmText:'永久删除',danger:true,run:async()=>{if(token===generation) await perform(report,true);}});
 }
 function contextChanged() { invalidate(); clearData(); restoringId.value=''; revoked=false; void load(); }
 watch(()=>[app.selectedMemberId.value,app.session.value?.id,app.session.value?.authenticated,canManage.value,app.accessVersion.value],contextChanged,{immediate:true});
@@ -108,7 +115,7 @@ onBeforeUnmount(()=>{active=false;invalidate();document.removeEventListener('vis
 
 <template>
   <section class="settings-page">
-    <SubPageHeader title="回收站" description="报告移入回收站后保留 30 天，期间可以恢复。手动永久删除会立即尝试清理关联文件，失败项由后台重试；到期自动删除沿用延迟清理。" />
+    <SubPageHeader title="回收站" description="移入回收站后保留 30 天，可恢复或永久删除。" />
     <p v-if="canManage && cleanupError" class="inline-panel-error" role="alert">清理状态暂时无法获取。{{ cleanupErrorReason || "请稍后重试。" }}</p>
     <section v-if="canManage && cleanup && cleanup.status !== 'none'" class="settings-band trash-cleanup-status" role="status">
       <header><Trash2 :size="20" /><div><h3>{{ cleanupLabels[cleanup.status] }}</h3><p>关联文件待清理：{{ cleanup.pendingFileCount }} 个<span v-if="cleanup.retryingFileCount">，其中 {{ cleanup.retryingFileCount }} 个等待重试</span></p></div></header>
@@ -121,11 +128,12 @@ onBeforeUnmount(()=>{active=false;invalidate();document.removeEventListener('vis
     </section>
     <p v-if="error" class="inline-panel-error">{{ error }}</p>
     <div v-if="loading" class="loading-list"><span v-for="index in 3" :key="index"></span></div>
-    <EmptyState v-else-if="!reports.length && !error" title="回收站为空" description="移入回收站的报告会显示在这里。" />
+    <EmptyState v-else-if="!reports.length && !error" title="回收站为空" description="移入回收站的记录会显示在这里。" />
     <template v-else>
       <div class="data-list trash-report-list">
-        <article v-for="report in reports" :key="report.id">
-          <div class="trash-report-content"><strong>{{ report.title }}</strong><span>{{ report.reportIssuedAt || "日期待确认" }} · {{ report.hospitalName || "医院待整理" }}</span>
+        <article v-for="report in reports" :key="`${report.kind}:${report.id}`">
+          <div class="trash-report-content"><strong>{{ report.title }}</strong><span>{{ healthTrashLabels[report.kind] }}<template v-if="report.doseNumber"> · {{/^\d+$/.test(report.doseNumber)?`第 ${report.doseNumber} 剂`:report.doseNumber}}</template> · {{ formatMedicationDate(report.date) || "日期待确认" }}<template v-if="report.institution"> · {{ report.institution }}</template></span>
+            <span v-if="report.kind==='process'">仅移除历程，原始记录和附件保留</span>
             <span>移入回收站：{{ formatDatabaseTimeWithYear(report.deletedAt, '历史删除时间未记录') }}</span>
           </div>
           <div class="trash-report-footer">
@@ -133,13 +141,13 @@ onBeforeUnmount(()=>{active=false;invalidate();document.removeEventListener('vis
               <Clock3 :size="14" aria-hidden="true" />
               <span v-if="report.purgeAfter && Date.parse(report.purgeAfter) <= now">保留期已到，等待后台永久删除</span>
               <span v-else-if="report.purgeAfter">{{ new Date(report.purgeAfter).toLocaleDateString('zh-CN') }} 后永久删除</span>
-              <span v-else>历史保留期限未记录</span>
+              <span v-else>保留期限未记录，可恢复或手动删除</span>
             </span>
           <div v-if="canManage" class="row-actions trash-report-actions">
-            <button type="button" :disabled="restoringId === report.id" v-if="app.allMembers.value.some(member=>member.id===report.memberId && member.permission==='manager')" @click="restore(report)">
+            <button type="button" :disabled="Boolean(restoringId)" v-if="app.allMembers.value.some(member=>member.id===report.memberId && member.permission==='manager')" @click="restore(report)">
               <LoaderCircle v-if="restoringId === report.id" class="spin-icon" :size="15" /><RotateCcw v-else :size="15" />恢复
             </button>
-            <button class="danger-action" type="button" :disabled="restoringId === report.id" v-if="app.allMembers.value.some(member=>member.id===report.memberId && member.permission==='manager')" @click="purge(report)">永久删除</button>
+            <button class="danger-action" type="button" :disabled="Boolean(restoringId)" v-if="app.allMembers.value.some(member=>member.id===report.memberId && member.permission==='manager')" @click="purge(report)">永久删除</button>
           </div>
           </div>
         </article>

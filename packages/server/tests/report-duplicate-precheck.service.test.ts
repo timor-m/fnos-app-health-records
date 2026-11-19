@@ -10,7 +10,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { closeDatabaseForTests, getDatabase } from "../database/client.ts";
 import type { RequestUser } from "../domain/request-user.ts";
-import { findLocalDuplicateEvidence, pauseDuplicateIfEligible, getDuplicatePause, runDuplicatePostcheck } from "../services/report-duplicate-precheck.service.ts";
+import { findLocalDuplicateEvidence, pauseDuplicateIfEligible, getDuplicatePause, runDuplicatePostcheck, getSavedDuplicateHint } from "../services/report-duplicate-precheck.service.ts";
+import { getOverview } from '../services/health-overview.service';
 import { createUpload } from "../services/upload.service.ts";
 
 const manager: RequestUser = {
@@ -121,12 +122,144 @@ function completeAi(reportId:string) {
  for(const [i,f] of buildDuplicateSnapshot(reportId)!.items.entries()) db.prepare("INSERT INTO observations(id,report_id,item_name,result_text,numeric_value,unit,evidence_json) VALUES(?,?,?,?,?,?,?)").run(`ai-obs-${reportId}-${i}`,reportId,f.key.split('|')[0],f.value.split('|')[0],Number(f.value.split('|')[0]),f.value.split('|')[1],JSON.stringify([{pageNumber:f.page||1,lineIds:f.lines||[]}]));
  markDuplicateResultCurrent(reportId);
 }
+test('photo advisories flow from OCR and extraction to persisted overview hints without pausing',()=>withDatabase(()=>{
+ const lines=baseLines.filter((_,i)=>[3,5,6,7,8,9].includes(i));
+ const a=addOcrReport(101,lines),b=addOcrReport(102,lines);
+ getDatabase().prepare('UPDATE reports SET title=? WHERE id=?').run('合成不同照片标题',b);
+ completeAi(a);completeAi(b);
+ const matches=findLocalDuplicateEvidence(b);assert.equal(matches[0]?.evaluation.ruleId,'R3.photo');
+ assert.equal(matches[0].pauseEligible,false);assert.deepEqual(pauseDuplicateIfEligible(b),[]);
+ assert.equal(getDuplicatePause(b),null);
+ assert.equal(getSavedDuplicateHint(b,'duplicate-member'),undefined);
+ runDuplicatePostcheck(b);
+ assert.deepEqual(getSavedDuplicateHint(b,'duplicate-member'),'possible');
+ assert.equal(getSavedDuplicateHint(b,'foreign-member'),undefined);
+ assert.deepEqual(getOverview(manager,'duplicate-member').recentRecords.find(item=>item.resourceId===b)?.duplicateHint,'possible');
+ setReportDuplicateDecision(manager,{reportId:a,candidateReportId:b,decision:'distinct'});
+ assert.equal(getSavedDuplicateHint(b,'duplicate-member'),undefined);
+}));
+test('split-cell quotations and generated sections retain reliable advisory evidence after recheck',()=>withDatabase(()=>{
+ const panel=[['总胆固醇','7.13','mmol/L'],['甘油三酯','2.47','mmol/L'],['低密度脂蛋白','3.61','mmol/L'],['高密度脂蛋白','1.64','mmol/L'],['载脂蛋白B','0.93','g/L']];
+ const lines=['采样时间：2026-01-01 09:00',...panel.flatMap(([name,value,unit])=>[name,`${value} ${unit}`])];
+ const a=addOcrReport(111,lines),b=addOcrReport(112,lines);const db=getDatabase();
+ for(const id of [a,b]){
+  completeAi(id);db.prepare('DELETE FROM observations WHERE report_id=?').run(id);
+  const page=db.prepare('SELECT id FROM report_pages WHERE report_id=?').get(id) as {id:string};
+  for(const [index,[name,value,unit]] of panel.entries()){
+   db.prepare('INSERT INTO observations(id,report_id,item_name,normalized_name,section_name,result_text,numeric_value,unit,evidence_json) VALUES(?,?,?,?,?,?,?,?,?)')
+    .run(`split-${id}-${index}`,id,name,name,id===a?null:'合成AI分组',value,Number(value),unit,
+     JSON.stringify([{pageId:page.id,pageNumber:1,quote:`${name} | ${value} ${unit}`} ]));
+  }
+ }
+ const left=buildDuplicateSnapshot(a)!,right=buildDuplicateSnapshot(b)!;
+ assert.equal(left.photoItems?.filter(f=>f.reliable).length,5);
+ assert.equal(right.photoItems?.filter(f=>f.reliable).length,5);
+ assert.equal(evaluateDuplicatePair(left,right,'ai_post').ruleId,'R3.photo');
+ assert.equal(evaluateDuplicatePair(left,right,'ai_post').preGateEligible,false);
+ runDuplicatePostcheck(b,false);assert.equal(getSavedDuplicateHint(b,'duplicate-member'),'possible');
+ // Actual specimen context and method remain significant, unlike generated headings.
+ db.prepare("UPDATE observations SET section_name='尿液' WHERE report_id=?").run(b);
+ assert.notEqual(evaluateDuplicatePair(buildDuplicateSnapshot(a)!,buildDuplicateSnapshot(b)!,'ai_post').ruleId,'R3.photo');
+ db.prepare("UPDATE observations SET section_name=NULL,method='合成另一方法' WHERE report_id=?").run(b);
+ assert.notEqual(evaluateDuplicatePair(buildDuplicateSnapshot(a)!,buildDuplicateSnapshot(b)!,'ai_post').ruleId,'R3.photo');
+}));
+test('saved AI column groups compare with individual AI rows without requiring quoted units',()=>withDatabase(()=>{
+ const panel=[['总胆固醇','7.13','mmol/L'],['甘油三酯','2.47','mmol/L'],['低密度脂蛋白','3.61','mmol/L'],['高密度脂蛋白','1.64','mmol/L'],['载脂蛋白B','0.93','g/L']];
+ const names=panel.map(p=>p[0]).join(' '),values=panel.map(p=>p[1]).join(' ');
+ const a=addOcrReport(117,['采样时间：2026-01-01 09:00',...panel.flatMap(([n,v])=>[n,v]),'mmol/L']);
+ const b=addOcrReport(118,['采样时间：2026-01-01 09:00',...panel.flatMap(([n,v])=>[n,v])]);
+ const db=getDatabase();
+ const ocr=db.prepare('SELECT id,lines_json AS lines FROM ocr_results WHERE page_id IN (SELECT id FROM report_pages WHERE report_id=?)').get(a) as {id:string;lines:string};
+ const raw=JSON.parse(ocr.lines);raw[raw.length-1].confidence=.88;
+ db.prepare('UPDATE ocr_results SET lines_json=? WHERE id=?').run(JSON.stringify(raw),ocr.id);
+ for(const id of [a,b]){
+  completeAi(id);db.prepare('DELETE FROM observations WHERE report_id=?').run(id);
+  const rows=id===a?[[names,values,'混合参考区间与单位']]:panel;
+  for(const [i,[name,value,unit]] of rows.entries()){
+   db.prepare('INSERT INTO observations(id,report_id,item_name,result_text,numeric_value,unit,evidence_json) VALUES(?,?,?,?,?,?,?)')
+    .run(`ai-column-${id}-${i}`,id,name,value,id===a?null:Number(value),unit,JSON.stringify([{pageNumber:1,quote:`${name} | ${value}${id===a?' | mmol/L':''}`} ]));
+  }
+ }
+ const left=buildDuplicateSnapshot(a)!,right=buildDuplicateSnapshot(b)!;
+ assert.equal(left.photoItems?.length,5);assert.equal(left.photoItems?.filter(f=>f.reliable).length,5);
+ const e=evaluateDuplicatePair(left,right,'ai_post');assert.equal(e.ruleId,'R3.photo.ai');assert.equal(e.preGateEligible,false);
+ runDuplicatePostcheck(b,false);assert.equal(getSavedDuplicateHint(b,'duplicate-member'),'possible');
+ db.prepare("UPDATE observations SET result_text='7.13 2.47 3.61 1.64',numeric_value=NULL WHERE report_id=?").run(a);
+ assert.notEqual(evaluateDuplicatePair(buildDuplicateSnapshot(a)!,right,'ai_post').classification,'possible_duplicate');
+ const weak={...left,photoItems:left.photoItems!.map(f=>({...f,reliable:false}))};
+ assert.notEqual(evaluateDuplicatePair(weak,right,'ai_post').classification,'possible_duplicate');
+ const changed={...right,photoItems:right.photoItems!.map((f,i)=>i===0?{...f,value:'9.99|mmol/l||',anchorValue:'9.99'}:f)};
+ assert.notEqual(evaluateDuplicatePair(left,changed,'ai_post').classification,'possible_duplicate');
+}));
+test('literal table rows detect partial AI extractions without choosing ambiguous result columns',()=>withDatabase(()=>{
+ const panel=[['总胆固醇','7.13','6.25','mmol/L','0-5.2'],['甘油三酯','2.47','2.05','mmol/L','0-1.7'],['低密度脂蛋白','3.61','3.05','mmol/L','0-3.4'],['高密度脂蛋白','1.64','1.21','mmol/L','1-2'],['载脂蛋白B','0.93','0.81','g/L','0.6-1.1']];
+ const a=addOcrReport(115,[]),b=addOcrReport(116,[]),db=getDatabase();
+ for(const id of [a,b]){
+  const cells=[['项目','结果','结果','单位','参考范围'],...panel];
+  const lines=[{id:'sample-time',text:'采样时间：2026-01-01 09:00',confidence:.99,box:[0,0,1500,30]},
+   ...cells.flatMap((row,r)=>row.map((text,c)=>({id:`cell-${r}-${c}`,text,confidence:.99,box:[c*350,(r+1)*70,c*350+240,(r+1)*70+30]})))];
+  db.prepare('UPDATE ocr_results SET lines_json=? WHERE page_id IN (SELECT id FROM report_pages WHERE report_id=?)').run(JSON.stringify(lines),id);
+  completeAi(id);db.prepare('DELETE FROM observations WHERE report_id=?').run(id);
+  const page=db.prepare('SELECT id FROM report_pages WHERE report_id=?').get(id) as {id:string};
+  for(const [i,[name,value,,unit]] of panel.slice(0,id===a?1:5).entries()){
+   db.prepare('INSERT INTO observations(id,report_id,item_name,result_text,numeric_value,unit,section_name,evidence_json) VALUES(?,?,?,?,?,?,?,?)')
+    .run(`partial-${id}-${i}`,id,name,value,Number(value),unit,id===a?null:'合成显示分组',JSON.stringify([{pageNumber:1,pageId:page.id,quote:`${name} | ${value}`} ]));
+  }
+ }
+ const left=buildDuplicateSnapshot(a)!,right=buildDuplicateSnapshot(b)!;
+ assert.equal(left.photoRows?.filter(f=>f.reliable).length,5);
+ assert.equal(right.photoRows?.filter(f=>f.reliable).length,5);
+ const evaluation=evaluateDuplicatePair(left,right,'ai_post');
+ assert.equal(evaluation.ruleId,'R3.photo.rows');assert.equal(evaluation.preGateEligible,false);
+ runDuplicatePostcheck(b,false);assert.equal(getSavedDuplicateHint(b,'duplicate-member'),'possible');
+ db.prepare("UPDATE observations SET method='合成另一方法' WHERE report_id=?").run(b);
+ assert.notEqual(evaluateDuplicatePair(buildDuplicateSnapshot(a)!,buildDuplicateSnapshot(b)!,'ai_post').classification,'possible_duplicate');
+ db.prepare('UPDATE observations SET method=NULL WHERE report_id=?').run(b);
+ const changed={...right,photoRows:right.photoRows!.map((f,i)=>i===0?{...f,value:'9.91;6.25;0-5.2|mmol/l||'}:f)};
+ assert.notEqual(evaluateDuplicatePair(left,changed,'ai_post').classification,'possible_duplicate');
+}));
+test('page-ID references and stored table row IDs are scoped to their actual source page',()=>withDatabase(()=>{
+ const a=addOcrReport(113,baseLines);completeAi(a);const db=getDatabase();
+ const page=db.prepare('SELECT id FROM report_pages WHERE report_id=?').get(a) as {id:string};
+ const rows=db.prepare('SELECT id,evidence_json AS evidence FROM observations WHERE report_id=?').all(a) as Array<{id:string;evidence:string}>;
+ for(const [index,row] of rows.entries()){
+  const original=JSON.parse(row.evidence)[0];
+  const evidence=index%2?{pageId:page.id,table:{rowSourceLineIds:original.lineIds}}:{pageId:page.id,lineIds:original.lineIds};
+  db.prepare('UPDATE observations SET evidence_json=? WHERE id=?').run(JSON.stringify([evidence]),row.id);
+ }
+ assert.ok(buildDuplicateSnapshot(a)!.items.every(f=>f.reliable));
+ db.prepare('UPDATE observations SET evidence_json=? WHERE report_id=?').run(JSON.stringify([{pageId:'foreign-page',pageNumber:1,lineIds:['line_6']}]),a);
+ assert.ok(buildDuplicateSnapshot(a)!.items.every(f=>!f.reliable));
+}));
+test('saved badges expire when source, target, rules or active processing changes',()=>withDatabase(()=>{
+ const a=addOcrReport(103,baseLines),b=addOcrReport(104,baseLines);completeAi(a);completeAi(b);runDuplicatePostcheck(b);
+ const db=getDatabase();
+ assert.deepEqual(getSavedDuplicateHint(b,'duplicate-member'),'high');
+ db.prepare('UPDATE reports SET source_version=source_version+1 WHERE id=?').run(a);
+ assert.equal(getSavedDuplicateHint(b,'duplicate-member'),undefined);
+ runDuplicatePostcheck(b);assert.ok(getSavedDuplicateHint(b,'duplicate-member'));
+ db.prepare("UPDATE processing_jobs SET status='processing' WHERE id=?").run(`ai-${a}`);
+ assert.equal(getSavedDuplicateHint(b,'duplicate-member'),undefined);
+ db.prepare("UPDATE processing_jobs SET status='completed' WHERE id=?").run(`ai-${a}`);
+ db.prepare("UPDATE report_pages SET sha256='synthetic-new-original' WHERE report_id=?").run(a);
+ assert.equal(getSavedDuplicateHint(b,'duplicate-member'),undefined);
+ runDuplicatePostcheck(b);
+ db.prepare("UPDATE reports SET status='trashed' WHERE id=?").run(a);
+ assert.equal(getSavedDuplicateHint(b,'duplicate-member'),undefined);
+ db.prepare("UPDATE reports SET status='ready' WHERE id=?").run(a);runDuplicatePostcheck(b);
+ db.prepare("UPDATE report_duplicate_runtime SET post_json=json_set(post_json,'$.ruleVersion','obsolete-rule') WHERE report_id=?").run(b);
+ assert.equal(getSavedDuplicateHint(b,'duplicate-member'),undefined);
+ runDuplicatePostcheck(b);db.prepare('UPDATE reports SET source_version=source_version+1 WHERE id=?').run(b);
+ assert.equal(getSavedDuplicateHint(b,'duplicate-member'),undefined);
+}));
 test("gate pauses only against usable result; target trash expires pause",()=>withDatabase(()=>{
  const a=addOcrReport(10,baseLines),b=addOcrReport(11,baseLines);
  assert.equal(pauseDuplicateIfEligible(b).length,0);completeAi(a);
  assert.equal(pauseDuplicateIfEligible(b).length,1);assert.equal(getDuplicatePause(b)?.valid,true);
+ assert.deepEqual(getSavedDuplicateHint(b,'duplicate-member'),'high');
  getDatabase().prepare("UPDATE reports SET status='trashed' WHERE id=?").run(a);
  assert.equal(getDuplicatePause(b)?.valid,false);
+ assert.equal(getSavedDuplicateHint(b,'duplicate-member'),undefined);
 }));
 test("distinct affects precheck, pair display and folding; history survives OCR rerun",()=>withDatabase(()=>{
  const a=addOcrReport(12,baseLines),b=addOcrReport(13,baseLines);completeAi(a);

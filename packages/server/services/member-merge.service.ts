@@ -1,4 +1,5 @@
 import {discardMemberTrendSnapshots} from './trend-snapshot-runner.service';
+import {doctorBackgroundColumns} from '../database/doctor-context-draft';
 import { createHash, randomBytes } from 'node:crypto';
 import { createError } from 'h3';
 import { getDatabase, runInTransaction } from '../database/client';
@@ -10,21 +11,23 @@ import { isStorageMaintenanceActive } from './maintenance-runner.service';
 import { isStorageNormalizationActive } from './indicator-normalization-task.service';
 import { activeStorageRequests, storageMigrationPaused } from '../utils/storage-migration-state';
 import { rebuildMorphologyTrackingForMember } from './morphology-finding.service';
+import { validateHealthWorkflowDatabase } from './health-workflow-integrity.service';
 
 type Grant = {userId:string;permission:'viewer'|'manager';canManageSharing:boolean};
-type Choices = Record<'display_name'|'birth_date'|'sex'|'blood_type_abo'|'blood_type_rh', 'source'|'target'>;
+type Choices = Record<'display_name'|'birth_date'|'sex'|'blood_type_abo'|'blood_type_rh'|'care_allergies'|'care_history'|'care_medications', 'source'|'target'>;
 type Input = {sourceId:string;targetId:string;grants:Grant[];choices:Choices;selfUserId:string|null};
-const fields = ['display_name','birth_date','sex','blood_type_abo','blood_type_rh'] as const;
+const fields = ['display_name','birth_date','sex','blood_type_abo','blood_type_rh',...doctorBackgroundColumns] as const;
 const simpleTables = ['reports','reminders','app_notifications','institution_trend_projects','report_duplicate_decisions','report_duplicate_history','report_duplicate_operations','upload_receipts'];
 // Historical installations may retain these tables. Move events before reports
 // to satisfy the report/event ownership trigger without dropping any safeguards.
-const optionalTables = ['health_episodes','health_events'];
+const optionalTables = ['health_vaccinations','health_episodes','health_events','medication_courses','medication_intakes','health_upload_archives','health_workflow_requests','health_record_processes','health_record_process_trash','health_record_process_nodes','health_record_links','health_record_reminders'];
 function existingOptionalTables() {
  const db=getDatabase();
  return optionalTables.filter(name=>Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)));
 }
 const pairTables = ['member_user_preferences','user_trend_pins','file_gc_members'];
-// Derived snapshots are discarded rather than moved or fingerprinted.
+// Derived snapshots are discarded after ownership changes, never moved or used
+// in preview fingerprints. Their background refresh is not a business edit.
 const trendSnapshotTables = ['trend_snapshot_members','trend_snapshot_entries','trend_snapshot_series','trend_snapshot_contributions','trend_snapshot_dirty_reports'];
 const knownTables = new Set([...simpleTables,...optionalTables,...pairTables,...trendSnapshotTables,'member_permissions','member_permission_versions']);
 const plans = new Map<string,{actorId:string;expires:number;input:Input;fingerprint:string}>();
@@ -36,7 +39,7 @@ export function requireMergeAdministrator(user:RequestUser) {
  if (!db.prepare('SELECT id FROM users WHERE id=? AND is_gateway_admin=1').get(user.id) || db.prepare('SELECT 1 FROM identity_recovery_pending WHERE user_id=?').get(user.id) || db.prepare('SELECT 1 FROM local_accounts WHERE user_id=? AND disabled_at IS NOT NULL').get(user.id)) fail(403,'当前账号不可用');
 }
 function member(id:string) {
- const row=getDatabase().prepare(`SELECT id,display_name,birth_date,sex,blood_type_abo,blood_type_rh,created_by,created_at,updated_at FROM health_members WHERE id=? AND deleted_at IS NULL`).get(id);
+ const row=getDatabase().prepare(`SELECT id,display_name,birth_date,sex,blood_type_abo,blood_type_rh,care_allergies,care_history,care_medications,created_by,created_at,updated_at FROM health_members WHERE id=? AND deleted_at IS NULL`).get(id);
  if (!row) fail(409,'所选档案已删除或合并，请重新选择');
  return row;
 }
@@ -66,12 +69,28 @@ function fingerprint(source:string,target:string) {
  const db=getDatabase();
  const data:unknown[]=[member(source),member(target),accounts(source),accounts(target),selfAccounts(source,target)];
  for(const name of [...simpleTables,...existingOptionalTables(),...pairTables,'member_permissions','member_permission_versions']) data.push(db.prepare(`SELECT * FROM ${name} WHERE member_id IN (?,?) ORDER BY rowid`).all(source,target));
+ // Relation edits and symptom history do not necessarily change a parent's timestamp.
+ // Include their own rows so a confirmed plan cannot silently absorb later child changes.
+ const childQueries:Record<string,string>={
+  health_record_process_metadata:'SELECT child.* FROM health_record_process_metadata child JOIN health_record_processes parent ON parent.id=child.process_id',
+  health_event_resources:'SELECT child.* FROM health_event_resources child JOIN health_events parent ON parent.id=child.event_id',
+  health_process_symptoms:'SELECT child.* FROM health_process_symptoms child JOIN health_episodes parent ON parent.id=child.episode_id',
+  health_process_symptom_updates:'SELECT child.* FROM health_process_symptom_updates child JOIN health_process_symptoms s ON s.id=child.symptom_id JOIN health_episodes parent ON parent.id=s.episode_id',
+  health_process_symptom_revisions:'SELECT child.* FROM health_process_symptom_revisions child JOIN health_episodes parent ON parent.id=child.episode_id',
+  medication_course_changes:'SELECT child.* FROM medication_course_changes child JOIN medication_courses parent ON parent.id=child.course_id',
+  health_upload_items:'SELECT child.* FROM health_upload_items child JOIN reports parent ON parent.id=child.report_id'
+ };
+ for(const [name,query] of Object.entries(childQueries)) {
+  if(!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)) continue;
+  const owner='parent.member_id';
+  data.push([name,db.prepare(`${query} WHERE ${owner} IN (?,?) ORDER BY child.rowid`).all(source,target)]);
+ }
  data.push(db.prepare('SELECT * FROM account_preferences WHERE self_member_id IN (?,?) OR default_member_id IN (?,?) ORDER BY user_id').all(source,target,source,target));
  return hash(data);
 }
 function parse(raw:unknown):Input {
  if(!raw || typeof raw!=='object') fail(400,'合并参数无效');
- const x=raw as Input;
+ const x={...raw as Input,choices:{...(raw as Input).choices}};
  if(typeof x.sourceId!=='string' || typeof x.targetId!=='string' || !x.sourceId || !x.targetId || x.sourceId.length>100 || x.targetId.length>100 || x.sourceId===x.targetId) fail(400,'请选择两个不同成员档案');
  if(!Array.isArray(x.grants) || !x.grants.length || x.grants.length>100 || new Set(x.grants.map(g=>g?.userId)).size!==x.grants.length) fail(400,'请选择有效的最终授权');
  const allowed=new Set([...accounts(x.sourceId),...accounts(x.targetId)].map(a=>String(a.userId)));
@@ -82,6 +101,7 @@ function parse(raw:unknown):Input {
  const selfUserId=x.selfUserId===undefined?(selves[0]?.userId??null):x.selfUserId;
  if(selfUserId!==null && (typeof selfUserId!=='string' || !selves.some(a=>a.userId===selfUserId && a.usable))) fail(400,'本人账号无效或不可用，请重新选择');
  if(selfUserId!==null && !x.grants.some(g=>g.userId===selfUserId)) fail(409,'必须保留本人关联账号的访问权限');
+ if(x.choices)for(const key of doctorBackgroundColumns)if(x.choices[key]===undefined&&!member(x.sourceId)[key]&&!member(x.targetId)[key])x.choices[key]='target';
  if(!x.choices || fields.some(f=>!['source','target'].includes(x.choices[f]))) fail(400,'请确认基本信息保留方式');
  return {sourceId:x.sourceId,targetId:x.targetId,selfUserId,grants:x.grants.map(g=>({userId:g.userId,permission:g.permission,canManageSharing:g.canManageSharing})).sort((a,b)=>a.userId.localeCompare(b.userId)),choices:Object.fromEntries(fields.map(f=>[f,x.choices[f]])) as Choices};
 }
@@ -149,7 +169,8 @@ export function executeMemberMerge(user:RequestUser,token:unknown) {
   db.prepare('UPDATE reports SET source_version=source_version+1,updated_at=CURRENT_TIMESTAMP WHERE member_id=?').run(target);
   discardMemberTrendSnapshots([source,target],db);
   rebuildMorphologyTrackingForMember(target);
-  if(Number(db.prepare('SELECT COUNT(*) AS n FROM reports WHERE member_id=?').get(target)!.n)!==before || db.prepare('PRAGMA foreign_key_check').get()) fail(409,'合并校验未通过，已回滚');
+  if(Number(db.prepare('SELECT COUNT(*) AS n FROM reports WHERE member_id=?').get(target)!.n)!==before || db.prepare('PRAGMA foreign_key_check').get()
+    || validateHealthWorkflowDatabase(db).length) fail(409,'合并校验未通过，已回滚');
   db.prepare('INSERT INTO member_merges(id,actor_id,source_id,target_id,backup_id,report_count) VALUES(?,?,?,?,?,?)').run(id,user.id,source,target,backup.id,sourceCount);
  });
  plans.delete(token);return getMemberMerge(user,id);

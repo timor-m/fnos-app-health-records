@@ -42,6 +42,10 @@ test('manual morphology uses real report pages, respects member permissions and 
   db.prepare("UPDATE reports SET status='ready' WHERE id='report'").run();
   assert.equal((await req('/reports/report/morphology',input)).status,200);
   const finding=db.prepare("SELECT id FROM morphology_findings WHERE report_id='report'").get() as {id:string};
+  const version=Number(db.prepare("SELECT source_version AS v FROM reports WHERE id='report'").get()!.v);
+  assert.ok(version>1, 'manual creation increments the existing report write version');
+  assert.equal((await req('/morphology/'+finding.id,{expectedSourceVersion:version-1,sizeLength:99},'PUT')).status,409);
+  assert.equal(Number(db.prepare('SELECT size_length AS n FROM morphology_findings WHERE id=?').get(finding.id)!.n),8);
   assert.equal(getReportDetail(user,'report').morphologyFindings[0].rawText,input.rawText);
   user={...user,id:'viewer'};
   assert.equal((await req('/morphology/'+finding.id,{sizeLength:99},'PUT')).status,403);

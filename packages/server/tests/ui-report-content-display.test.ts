@@ -59,11 +59,11 @@ test("governance directly reuses the indicator editor without cascading report d
   assert.match(styles, /\.observation-direct-review > header, \.observation-direct-review \.observation-all-list \{ display: none;/);
   assert.doesNotMatch(styles, /grid-template-areas: "source editor"/);
   assert.match(reportDetail, /if \(target\) openObservationEditor\(target\)/);
-  assert.match(records, /<ReportDetailSheet v-if="mobileDetailOpen && selected"/);
+  assert.match(records, /<ReportDetailSheet v-if="route.path === '\/records' && mobileDetailOpen && selected"/);
   assert.doesNotMatch(reportDetail, /initialObservationId/);
   assert.doesNotMatch(governance, /report-detail-sheet-backdrop/);
   const sheet = read("packages/ui/src/components/ReportDetailSheet.vue");
-  assert.match(sheet, /role="dialog" aria-modal="true" aria-label="报告详情"/);
+  assert.match(sheet, /role="dialog" aria-modal="true" aria-label="档案详情"/);
   assert.match(sheet, /@updated="emit\('updated'\)"/);
 });
 
@@ -73,7 +73,7 @@ test("observation editor prioritizes result fields and groups optional metadata"
   assert.match(reportDetail, /<summary>更多信息/);
   assert.match(styles, /\.observation-editor-form \.observation-core-fields,[\s\S]*?grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\)/);
   assert.match(styles, /\.observation-editor-fields \{[^}]*align-content: start;[^}]*overflow-y: auto/);
-  assert.match(styles, /\.observation-edit-panel\.is-open \{[^}]*height: auto; max-height: 88dvh/);
+  assert.match(styles, /\.observation-edit-panel\.is-open \{[^}]*height: auto; max-height: 88vh; max-height: 88dvh/);
   assert.doesNotMatch(styles, /\.observation-edit-panel \.observation-editor-form \.form-actions > button \{[^}]*border-radius/);
 });
 
@@ -101,7 +101,7 @@ test("touch observation editing opens above the review workspace", () => {
 });
 
 test("touch observation review hides the desktop source comparison column", () => {
-  assert.match(styles, /\.modal-panel\.observation-all-modal \{ width: 100%; height: auto; max-height: 88dvh;/);
+  assert.match(styles, /\.modal-panel\.observation-all-modal \{ width: 100%; height: auto; max-height: 88vh; max-height: 88dvh;/);
   assert.match(styles, /\.observation-all-modal > header \.observation-all-actions \{ flex: 0 0 auto; flex-flow: row nowrap;/);
   assert.match(styles, /\.observation-all-layout \{[^}]*grid-template-areas:\s*"list";/);
   assert.match(styles, /\.observation-source-panel \{\s*display:\s*none;/);

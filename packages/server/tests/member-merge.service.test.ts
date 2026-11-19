@@ -1,3 +1,7 @@
+import {linkProcessRecords,recordProcesses,getRecordProcess} from '../services/health-record-process.service';
+import { createVaccination,getVaccination } from '../services/vaccination.service';
+import { createHealthEpisode } from '../services/health-episode.service';
+import { validateHealthWorkflowDatabase } from '../services/health-workflow-integrity.service';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {mkdtempSync,rmSync,readdirSync,mkdirSync,writeFileSync} from 'node:fs';
@@ -99,19 +103,11 @@ test('attachments and manual fields retain their IDs and content after merge',()
 }));
 
 
-test('legacy events and episodes move before reports without disabling ownership triggers or losing links',()=>fixture(()=>{
+test('events and episodes move before reports without disabling ownership triggers or losing links',()=>fixture(()=>{
  const db=getDatabase();
- db.exec(`CREATE TABLE health_events(id TEXT PRIMARY KEY,member_id TEXT NOT NULL REFERENCES health_members(id),title TEXT);
- CREATE TABLE health_episodes(id TEXT PRIMARY KEY,member_id TEXT NOT NULL REFERENCES health_members(id),title TEXT);
- CREATE TABLE health_event_resources(id TEXT PRIMARY KEY,event_id TEXT REFERENCES health_events(id),resource_type TEXT,resource_id TEXT);
- CREATE TABLE health_episode_events(id TEXT PRIMARY KEY,episode_id TEXT REFERENCES health_episodes(id),event_id TEXT REFERENCES health_events(id));
- CREATE TRIGGER health_event_report_member_change BEFORE UPDATE OF member_id ON reports
- WHEN EXISTS(SELECT 1 FROM health_event_resources er JOIN health_events e ON e.id=er.event_id WHERE er.resource_type='report' AND er.resource_id=OLD.id AND e.member_id<>NEW.member_id)
- BEGIN SELECT RAISE(ABORT,'detach report from events before changing member'); END;
- INSERT INTO health_events VALUES('event','source','fixture');
- INSERT INTO health_episodes VALUES('episode','source','fixture');
- INSERT INTO health_event_resources VALUES('resource','event','report','report-source');
- INSERT INTO health_episode_events VALUES('link','episode','event');`);
+ db.exec(`INSERT INTO health_events(id,member_id,event_type,title) VALUES('event','source','other','fixture');
+ INSERT INTO health_episodes(id,member_id,episode_type,title) VALUES('episode','source','other','fixture');
+ INSERT INTO health_event_resources(id,event_id,resource_type,resource_id) VALUES('resource','event','report','report-source');`);
  const p=previewMemberMerge(admin,input());db.exec("UPDATE health_events SET title='updated fixture' WHERE id='event'");
  assert.throws(()=>executeMemberMerge(admin,p.token),/变化/);
  const links=db.prepare('SELECT * FROM health_event_resources').all();
@@ -126,7 +122,6 @@ test('legacy events and episodes move before reports without disabling ownership
  assert.equal(db.prepare("SELECT member_id FROM health_episodes WHERE id='episode'").get()!.member_id,'target');
  assert.equal(db.prepare("SELECT member_id FROM reports WHERE id='report-source'").get()!.member_id,'target');
  assert.deepEqual(db.prepare('SELECT * FROM health_event_resources').all(),links);
- assert.equal(db.prepare('SELECT COUNT(*) n FROM health_episode_events').get()!.n,1);
  assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name='health_event_report_member_change'").get());
  assert.equal(db.prepare('PRAGMA foreign_key_check').get(),undefined);
 }));
@@ -174,4 +169,22 @@ test('unexpected preference constraint failure rolls back instead of dropping so
  const p=previewMemberMerge(admin,input());assert.throws(()=>executeMemberMerge(admin,p.token),/preference constraint/);
  assert.ok(db.prepare("SELECT * FROM member_user_preferences WHERE member_id='source'").get());
  assert.equal(db.prepare("SELECT member_id FROM reports WHERE id='report-source'").get()!.member_id,'source');
+}));
+
+test('five-category vaccination ownership, reminders and direct document/process links survive member merge',()=>fixture(()=>{
+ const episode=createHealthEpisode(ordinary,{memberId:'source',episodeType:'other',title:'合成过程'});
+ const vaccine=createVaccination(ordinary,{memberId:'source',vaccineName:'合成疫苗',administeredAt:'2026-01-01',nextDueAt:'2026-02-01',sourceReportId:'report-source',episodeId:episode.id});
+ const process=linkProcessRecords(ordinary,{kind:'report',id:'report-source'},[{kind:'vaccination',id:vaccine.id}])[0];
+ const plan=previewMemberMerge(admin,input());executeMemberMerge(admin,plan.token);
+ assert.equal(getVaccination(ordinary,vaccine.id).memberId,'target');
+ assert.equal(getDatabase().prepare('SELECT member_id FROM reminders WHERE id=?').get(vaccine.reminderId!)?.member_id,'target');
+ assert.equal(getDatabase().prepare('SELECT COUNT(*) AS n FROM health_record_links').get()?.n,1);assert.equal(getRecordProcess(ordinary,process.id).memberId,'target');
+ assert.deepEqual(validateHealthWorkflowDatabase(getDatabase()),[]);
+}));
+test('member merge explicitly selects health background and detects background changes after preview',()=>fixture(()=>{
+ const db=getDatabase();db.exec("UPDATE health_members SET care_allergies='Synthetic source allergy',care_history='Synthetic source history' WHERE id='source'; UPDATE health_members SET care_allergies='Synthetic target allergy' WHERE id='target'");
+ assert.throws(()=>previewMemberMerge(admin,input()),e=>(e as {statusCode:number}).statusCode===400);
+ const data={...input(),choices:{...choices,care_allergies:'source',care_history:'source',care_medications:'target'}};
+ const preview=previewMemberMerge(admin,data);assert.equal(preview.resolvedFields.care_allergies,'Synthetic source allergy');db.exec("UPDATE health_members SET care_history='Synthetic updated history' WHERE id='source'");assert.throws(()=>executeMemberMerge(admin,preview.token));
+ const fresh=previewMemberMerge(admin,data);executeMemberMerge(admin,fresh.token);const target=db.prepare("SELECT care_allergies,care_history FROM health_members WHERE id='target'").get()!;assert.equal(target.care_allergies,'Synthetic source allergy');assert.equal(target.care_history,'Synthetic updated history');
 }));

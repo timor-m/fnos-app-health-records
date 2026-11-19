@@ -1,3 +1,4 @@
+import { parseMedicationFormula } from '../../shared/medication-formula';
 import { createHash } from 'node:crypto';
 
 const fields = {
@@ -12,6 +13,9 @@ const prefix = 'source-medication-v1:';
 export function medicationSourceIdentity(row: Record<string, unknown>) {
   const parts = Object.entries(fields).map(([key, column]) => String(row[key] ?? row[column] ?? '')
     .normalize('NFKC').toLowerCase().replace(/\s+/g, ''));
+  const formula = row.formula ?? (typeof row.formula_json === 'string' ? JSON.parse(row.formula_json) : null);
+  const parsed = parseMedicationFormula(formula);
+  if (parsed) parts.push(JSON.stringify({ ...parsed, ingredients: parsed.ingredients.map(({ evidence, ...ingredient }) => ingredient) }));
   return prefix + createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 }
 

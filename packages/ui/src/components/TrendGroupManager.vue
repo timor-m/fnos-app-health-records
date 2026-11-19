@@ -129,6 +129,6 @@ function remove(group:ManagedTrendGroup){
   .manager-list-empty .manager-empty { margin: 0; }
 }
 @media (max-width: 760px) {
-  .trend-group-manager { width: 100vw; height: min(720px, 94vh); height: min(720px, 94dvh); max-height: 94dvh; border-radius: 8px 8px 0 0; align-self: end; }
+  .trend-group-manager { width: 100vw; height: min(720px, 94vh); height: min(720px, 94dvh); max-height: 94vh; max-height: 94dvh; border-radius: 8px 8px 0 0; align-self: end; }
 }
 </style>

@@ -803,3 +803,18 @@ test('examination draft upgrade backs up legacy rows without inferring dates or 
   assert.ok(readdirSync(join(storageDir,'backups','db')).length>=1);
  }finally{closeDatabaseForTests();delete process.env.STORAGE_DIR;rmSync(storageDir,{recursive:true,force:true});}
 });
+
+test('attached temperature startup repair backs up missing structure, preserves old rows and is idempotent without a schema bump',()=>{
+ const storageDir=mkdtempSync(join(tmpdir(),'health-temperature-schema-'));const previous=process.env.STORAGE_DIR;process.env.STORAGE_DIR=storageDir;
+ try{
+  let db=getDatabase();const before=getDatabaseStatus().schemaVersion;
+  db.prepare("INSERT INTO users(id,display_name) VALUES('temperature-user','合成账号')").run();
+  db.exec('ALTER TABLE health_process_symptom_updates DROP COLUMN temperature_value');
+  closeDatabaseForTests();db=getDatabase();
+  assert.ok(db.prepare('PRAGMA table_info(health_process_symptom_updates)').all().some(column=>column.name==='temperature_value'));
+  assert.ok(db.prepare("SELECT id FROM users WHERE id='temperature-user'").get());
+  assert.equal(getDatabaseStatus().schemaVersion,before);
+  const backups=readdirSync(join(storageDir,'backups','db'));assert.ok(backups.length>=1);
+  closeDatabaseForTests();getDatabase();assert.equal(readdirSync(join(storageDir,'backups','db')).length,backups.length);
+ }finally{closeDatabaseForTests();if(previous===undefined)delete process.env.STORAGE_DIR;else process.env.STORAGE_DIR=previous;rmSync(storageDir,{recursive:true,force:true});}
+});

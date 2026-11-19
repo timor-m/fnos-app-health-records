@@ -24,9 +24,20 @@ it('opts into an adaptive height cap without changing the default selects and li
   wrapper=mount(FormSelect,{props:{modelValue:'a',options:[{value:'a',label:'合成选项'}]}});
   await wrapper.get('button').trigger('click');await nextTick();
   const panel=document.querySelector<HTMLElement>('.form-select-panel')!;
-  expect(panel.style.maxHeight).toBe('');
+  expect(panel.style.maxHeight).toBe('240px');
   await wrapper.setProps({panelMaxHeight:'90vh'});await nextTick();
   expect(panel.style.maxHeight).toBe('min(90vh, calc(100vh - 142px - 12px))');expect(panel.style.height).toBe('');
   mobile=true;window.dispatchEvent(new Event('resize'));await nextTick();
   expect(panel.style.maxHeight).toBe('90vh');expect(panel.style.top).toBe('');
+});
+
+it('opens upward near the bottom so common values remain reachable on desktop', async () => {
+  vi.stubGlobal('innerWidth', 1000); vi.stubGlobal('innerHeight', 700);
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(400, 610, 100, 40));
+  wrapper = mount(FormSelect, { props: { modelValue: '', options: [{ value: 'a', label: '合成常用值' }] } });
+  await wrapper.get('button').trigger('click'); await nextTick();
+  const panel = document.querySelector<HTMLElement>('.form-select-panel')!;
+  expect(panel.style.bottom).toBe('96px'); expect(panel.style.top).toBe('');
+  expect(panel.style.maxHeight).toBe('240px');
 });

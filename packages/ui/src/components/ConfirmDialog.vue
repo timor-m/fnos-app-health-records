@@ -1,42 +1,37 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { CircleAlert, LoaderCircle } from "@lucide/vue";
 import { useConfirm } from "../composables/useConfirm";
 import { useScrollLock } from "../composables/useScrollLock";
 
 const confirmDialog = useConfirm();
 const open = computed(() => Boolean(confirmDialog.state.value));
-const panel = ref<HTMLElement>();
-let previousFocus: HTMLElement | null = null;
+const panel = ref<HTMLElement | null>(null);
+let returnFocus: HTMLElement | null = null;
 useScrollLock(open);
-function focusableElements() {
-  return Array.from(panel.value?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)') || []);
-}
-function restoreFocus() {
-  if (previousFocus?.isConnected && !previousFocus.closest('[inert]')) previousFocus.focus();
-}
-watch(open, async value => {
-  if (value) previousFocus = document.activeElement as HTMLElement | null;
-  await nextTick();
-  if (value && open.value) (focusableElements()[0] || panel.value)?.focus();
-  else if (!open.value) restoreFocus();
-}, { immediate: true });
-onBeforeUnmount(restoreFocus);
-function keydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') {
-    event.preventDefault();
-    confirmDialog.cancel();
-    return;
+watch(open, async visible => {
+  if (visible) {
+    returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    await nextTick();
+    if (open.value) panel.value?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({preventScroll:true});
+  } else {
+    if (returnFocus?.isConnected && !returnFocus.closest('[inert]')) returnFocus.focus({preventScroll:true});
+    returnFocus = null;
   }
-  if (event.key !== 'Tab') return;
-  const items = focusableElements(), first = items[0], last = items.at(-1);
-  if (!first) { event.preventDefault(); panel.value?.focus(); }
-  else if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.value)) {
-    event.preventDefault(); last?.focus();
-  } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === panel.value)) {
-    event.preventDefault(); first.focus();
-  }
+}, {immediate:true});
+function onKeydown(event: KeyboardEvent) {
+  if (!open.value || !panel.value) return;
+  if (event.key==='Escape') { event.preventDefault(); event.stopImmediatePropagation(); confirmDialog.cancel(); return; }
+  if (event.key!=='Tab') return;
+  event.stopPropagation();
+  const controls=[...panel.value.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled)')];
+  const first=controls[0]; const last=controls[controls.length - 1];
+  if (!first) { event.preventDefault(); panel.value.focus(); return; }
+  if (event.shiftKey && (document.activeElement===first || !panel.value.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
+  else if (!event.shiftKey && (document.activeElement===last || !panel.value.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
 }
+onMounted(()=>window.addEventListener('keydown',onKeydown,true));
+onBeforeUnmount(()=>{window.removeEventListener('keydown',onKeydown,true);if(returnFocus?.isConnected)returnFocus.focus({preventScroll:true});});
 async function changeChoice(event: Event) {
   const input=event.target as HTMLInputElement;
   await confirmDialog.choose(input.checked);
@@ -46,7 +41,7 @@ async function changeChoice(event: Event) {
 
 <template>
   <Teleport to="body">
-    <div v-if="confirmDialog.state.value" class="modal-backdrop report-edit-backdrop confirm-backdrop" @click.self="confirmDialog.cancel" @keydown.stop="keydown">
+    <div v-if="confirmDialog.state.value" class="modal-backdrop report-edit-backdrop confirm-backdrop" @click.self="confirmDialog.cancel">
       <section ref="panel" class="modal-panel confirm-modal" role="alertdialog" aria-modal="true" :aria-label="confirmDialog.state.value.title" tabindex="-1">
         <header>
           <div><CircleAlert :size="20" /><h3>{{ confirmDialog.state.value.title }}</h3></div>

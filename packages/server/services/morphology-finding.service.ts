@@ -1,3 +1,4 @@
+import { assertReportWriteVersion,bumpReportWriteVersion } from './report-write-version';
 import { assertNoPageAppend } from "./page-append-lock.service";
 import { createHash } from "node:crypto";
 import { createError } from "h3";
@@ -1178,10 +1179,12 @@ export function createMorphologyFinding(user: RequestUser, reportId: string, inp
   const manualFields = [...changed, "created"];
   db.exec("BEGIN IMMEDIATE");
   try {
+    assertReportWriteVersion(reportId, input.expectedSourceVersion);
     db.prepare(`INSERT INTO morphology_findings (id, report_id, ${updates.map(update => update.split(" =")[0]).join(", ")}, source, manual_fields_json)
       VALUES (?, ?, ${values.map(() => "?").join(", ")}, 'manual', ?)`)
       .run(id, reportId, ...values, JSON.stringify(manualFields));
     refreshFindingExamination(id, reportId, sourcePages);
+    bumpReportWriteVersion(reportId);
     appendAudit(user, "morphology.create", id, { memberId: report.memberId });
     db.exec("COMMIT");
   } catch (error) { rollbackAfterError(db); throw error; }
@@ -1199,10 +1202,12 @@ export function updateMorphologyFinding(user: RequestUser, findingId: string, in
   const db = getDatabase();
   db.exec("BEGIN IMMEDIATE");
   try {
+    assertReportWriteVersion(finding.reportId,input.expectedSourceVersion);
     db.prepare(`UPDATE morphology_findings SET ${updates.join(", ")}, source = 'manual',
       manual_fields_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
       .run(...values, JSON.stringify([...manualFields]), findingId);
     if (changed.has("evidence")) refreshFindingExamination(findingId, finding.reportId, sourcePages);
+    bumpReportWriteVersion(finding.reportId);
     appendAudit(user, "morphology.update", findingId, { memberId: finding.memberId, fields: [...changed] });
     db.exec("COMMIT");
   } catch (error) {

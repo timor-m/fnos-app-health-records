@@ -152,7 +152,7 @@ onMounted(refresh);
 .archive-storage-body { padding: 20px; display: grid; gap: 18px; }
 .archive-cleanup { display: flex; align-items: center; gap: 16px; border-top: 1px solid var(--line); padding-top: 16px; }
 .archive-cleanup > div { flex: 1; min-width: 0; }
-.archive-cleanup strong { font-size: 13px; font-weight: 500; }
+.archive-cleanup strong { font-size: 14px; font-weight: 500; }
 .archive-cleanup button { flex-shrink: 0; white-space: nowrap; }
 .archive-storage-panel p { line-height: 1.65; overflow-wrap: anywhere; }
 .archive-capacity { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; background: var(--fill-2); border-radius: var(--radius-m); }
@@ -164,11 +164,11 @@ onMounted(refresh);
 .archive-directories { margin: 0; display: grid; gap: 16px; }
 .archive-directories > div { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 16px; }
 .archive-directories > div + div { border-top: 1px solid var(--line); padding-top: 16px; }
-.archive-directories dt { font-size: 13px; color: var(--ink); }
+.archive-directories dt { font-size: 12px; color: var(--ink); }
 .archive-directories dt span { display: block; margin-top: 5px; font-size: 12px; color: var(--muted); }
-.archive-directories dd { margin: 0; font-size: 13px; line-height: 1.7; color: var(--ink-2); overflow-wrap: anywhere; }
+.archive-directories dd { margin: 0; font-size: 14px; line-height: 1.7; color: var(--ink-2); overflow-wrap: anywhere; }
 .archive-migration-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 16px; }
-.archive-target { min-width: 0; display: grid; gap: 8px; font-size: 13px; }
+.archive-target { min-width: 0; display: grid; gap: 8px; font-size: 14px; }
 .archive-migration-form button { white-space: nowrap; }
 .archive-safety { border-top: 1px solid var(--line); padding-top: 14px; font-size: 12px; color: var(--muted); }
 .archive-safety summary { cursor: pointer; width: fit-content; }

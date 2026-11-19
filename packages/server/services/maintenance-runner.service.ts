@@ -1,3 +1,5 @@
+import {purgeExpiredHealthProcesses} from './health-process-trash.service';
+import { purgeExpiredVaccinations, purgeExpiredStandaloneRecords } from './health-record-trash.service';
 import { scheduleMaintenance, maintenanceTick, maintenanceRunning, maintenanceGcFinished, maintenanceFailed } from "../utils/maintenance-state";
 import { rollbackAfterError, getDatabase } from "../database/client";
 import { getAppConfig } from '../utils/runtime-config';
@@ -198,6 +200,9 @@ export async function runMaintenanceCycle() {
     const observationDisplayFlags = runObservationDisplayFlagBackfillIfNeeded();
     const duplicateOperations = recoverTimedOutDuplicateReportOperations(duplicateOperationTimeoutMinutes());
     const recycleBin = purgeExpiredReports();
+    const vaccinationRecycleBin = purgeExpiredVaccinations();
+    const recordRecycleBin = purgeExpiredStandaloneRecords();
+    const processRecycleBin = purgeExpiredHealthProcesses();
     let orphanScan: ReturnType<typeof scanOrphanStorageFiles> | null = null;
     if (Date.now() - lastOrphanScanAt() >= orphanScanIntervalMs) {
       orphanScan = scanOrphanStorageFiles();
@@ -206,17 +211,20 @@ export async function runMaintenanceCycle() {
     const fileGc = runFileGarbageCollection();
     gcFinished = true;
     maintenanceGcFinished(Date.now());
-    if (indicatorNormalization || observationDisplayFlags || duplicateOperations.recovered || recycleBin.deleted || recycleBin.failed || fileGc.deleted || fileGc.failed || orphanScan?.queued) {
-      await writeLog(recycleBin.failed || fileGc.failed ? "warn" : "info", "maintenance cycle completed", {
+    if (indicatorNormalization || observationDisplayFlags || duplicateOperations.recovered || recycleBin.deleted || recycleBin.failed || vaccinationRecycleBin.deleted || vaccinationRecycleBin.failed || recordRecycleBin.deleted || recordRecycleBin.failed || processRecycleBin.deleted || processRecycleBin.failed || fileGc.deleted || fileGc.failed || orphanScan?.queued) {
+      await writeLog(recycleBin.failed || vaccinationRecycleBin.failed || recordRecycleBin.failed || processRecycleBin.failed || fileGc.failed ? "warn" : "info", "maintenance cycle completed", {
         indicatorNormalization,
         observationDisplayFlags,
         duplicateOperations,
         recycleBin,
+        vaccinationRecycleBin,
+        recordRecycleBin,
+      processRecycleBin,
         fileGc,
         orphanScan
       });
     }
-    return { skipped: false as const, indicatorNormalization, observationDisplayFlags, duplicateOperations, recycleBin, fileGc, orphanScan };
+    return { skipped: false as const, indicatorNormalization, observationDisplayFlags, duplicateOperations, recycleBin, vaccinationRecycleBin, recordRecycleBin, processRecycleBin, fileGc, orphanScan };
   } catch (error) {
     if (!gcFinished) maintenanceFailed();
     throw error;

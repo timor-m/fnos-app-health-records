@@ -27,7 +27,9 @@ import {
 } from "./observation-reference.service";
 import {
   classifyReportContent,
+  hasDispensingMedicationContent,
   hasMedicationContent,
+  hasVaccinationContent,
   hasMedicationContinuation,
   classifyReportDocument,
   mergeContentClassifications,
@@ -2828,6 +2830,39 @@ function inlineNumericValuePattern(unitPattern: RegExp) {
 
 type PatientSex = "male" | "female";
 
+/** Rejoin explicit identity labels only; never infer a name from nearby text. */
+export function patientIdentityTexts(lines: Array<{ text?: unknown; box?: unknown }>) {
+  const textOf = (index: number) => String(lines[index]?.text || "").normalize("NFKC").trim()
+    .replace(/姓\s+名/g, "姓名").replace(/性\s+别/g, "性别");
+  const sameField = (first: number, second: number) => {
+    const a = boxRect(lines[first]?.box), b = boxRect(lines[second]?.box);
+    if (!a || !b) return lines[first]?.box == null && lines[second]?.box == null;
+    const horizontal = b.right - b.left >= rectHeight(b);
+    const overlap = horizontal ? Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
+      : Math.min(a.right, b.right) - Math.max(a.left, b.left);
+    const crossSize = horizontal ? Math.min(rectHeight(a), rectHeight(b)) : Math.min(a.right-a.left, b.right-b.left);
+    const gap = horizontal ? Math.max(0, Math.max(a.left,b.left)-Math.min(a.right,b.right))
+      : Math.max(0, Math.max(a.top,b.top)-Math.min(a.bottom,b.bottom));
+    const glyph = Math.max(Math.min(a.right-a.left,rectHeight(a)), Math.min(b.right-b.left,rectHeight(b)));
+    return overlap >= crossSize*.5 && gap <= glyph*6;
+  };
+  const texts: string[] = [];
+  for (let index=0; index<lines.length; index++) {
+    let text = textOf(index);
+    const suffix = text === "姓" ? /^名\s*[:：|｜]/ : text === "性" ? /^别\s*[:：|｜]/ : null;
+    const staffLabel = /(?:医师|医生|药师|审核人|发药人|调剂人|联系人|家属|监护人)[:：]?$/.test(textOf(index-1).replace(/\s+/g,""));
+    if (suffix?.test(textOf(index+1)) && sameField(index,index+1)
+      && !(staffLabel && sameField(index-1,index+1))) {
+      text += textOf(++index);
+    }
+    if (/^性别\s*[:：|｜]?$/.test(text) && /^[男女]$/.test(textOf(index+1)) && sameField(index,index+1)) {
+      text += textOf(++index);
+    }
+    texts.push(text);
+  }
+  return texts;
+}
+
 /*
  * 成员档案未填性别时，从报告前两页 OCR 文本推断：
  * 显式“性别：男”，或性别单元格（独立行或表格行内的 男/女 格）+
@@ -2844,9 +2879,7 @@ export function patientSexFromOcrText(
     } catch {
       continue;
     }
-    const texts = lines
-      .map((line) => String(line.text || "").trim())
-      .filter(Boolean);
+    const texts = patientIdentityTexts(lines).filter(Boolean);
     const explicit = texts
       .map((text) => text.match(/性别\s*[:：|｜]?\s*(男|女)/))
       .find((match): match is RegExpMatchArray => Boolean(match));
@@ -5445,7 +5478,7 @@ function unitFromRanges(
       // 体检报告里被误判为门诊/住院的检查表格页不再整页送入 narrative 单元。
       const narrativeWholePage =
         route === "narrative" &&
-        (page.medicationContent || page.classification.contentTypes.some(
+        (page.medicationContent || hasVaccinationContent(page.text) || page.classification.contentTypes.some(
           (type) =>
             [
               "outpatient",
@@ -6325,11 +6358,14 @@ export function rebuildOcrPages(
     // only when an apparent table has almost no usable rows. An explicit header
     // and a material gain in verified rows are required to replace the baseline.
     const hasHeadings = rawCoverageLines.filter(line => /项目|名称|结果|参考范围/.test(String(line.text || ''))).length >= 2;
-    if (rects.length >= 6 && hasHeadings && (tall >= rects.length * .6 || scalarCount(annotated.lines) < 3)) {
+    const dispensing = hasDispensingMedicationContent(rawCoverageLines.map(line => line.text || "").join("\n"));
+    const sidewaysDispensing = dispensing && tall >= rects.length * .6;
+    if (rects.length >= 6 && ((hasHeadings && (tall >= rects.length * .6 || scalarCount(annotated.lines) < 3)) || sidewaysDispensing)) {
       const width = Math.max(...rects.map(rect => rect.right));
       const height = Math.max(...rects.map(rect => rect.bottom));
-      const score = (lines: PlannedOcrLine[]) => scalarCount(lines)
-        + lines.reduce((sum, line) => sum + localObservationsForLine(line).length * 4, 0);
+      const score = (lines: PlannedOcrLine[]) => sidewaysDispensing
+        ? lines.reduce((sum, line) => sum + [...line.text.matchAll(/[\u3400-\u9fff]{2,}(?:\s*[|｜]\s*|\s+)\d+(?:\.\d+)?\s*(?:mg|g|克)(?![A-Za-z/／])/gi)].length, 0)
+        : scalarCount(lines) + lines.reduce((sum, line) => sum + localObservationsForLine(line).length * 4, 0);
       const baselineScore = score(annotated.lines);
       for (const angle of tall >= rects.length * .6 ? [90, 270] : [180]) {
         const oriented = rawCoverageLines.map(line => {
@@ -6341,8 +6377,8 @@ export function rebuildOcrPages(
           return { ...line, box };
         });
         const candidate = rebuild(oriented);
-        if (!candidate.lines.some(line => line.boundary === 'table_header')
-          || scalarCount(candidate.lines) < 2 || score(candidate.lines) < baselineScore + 2
+        if ((!sidewaysDispensing && (!candidate.lines.some(line => line.boundary === 'table_header') || scalarCount(candidate.lines) < 2))
+          || score(candidate.lines) < baselineScore + 2
           || score(candidate.lines) <= score(annotated.lines)) continue;
         annotated = candidate;
         layoutRotated = true;
@@ -6400,6 +6436,24 @@ export function rebuildOcrPages(
           .flatMap(raw => { const rect = boxRect(raw.box); return rect ? [rect] : []; });
         return source.length ? { ...line, box: [Math.min(...source.map(r => r.left)), Math.min(...source.map(r => r.top)),
           Math.max(...source.map(r => r.right)), Math.max(...source.map(r => r.bottom))] } : line;
+      });
+    }
+    if (hasDispensingMedicationContent(lines.map(line => line.text).join("\n"))) {
+      lines = lines.map(line => {
+        // Only standalone dispensing quantities: retain laboratory ratios and
+        // explicit result/reference tables in mixed documents.
+        const laboratoryContext = /检验|化验|参考|结果/.test(
+          `${line.reportSectionName || ""} ${line.sectionName || ""} ${line.tableHeaderText || ""} ${line.text}`,
+        );
+        const dose = /\d+(?:\.\d+)?\s*(?:mg|g|ml|μg|ug|毫克|克|毫升)(?![A-Za-zμ/／])/i.test(line.text) ||
+          /(?:剂数|袋数|付数)\s*[:：|]?\s*\d+/.test(line.text);
+        const metadata = line.candidateKind === "scalar" && !line.dictionaryFacts.length &&
+          /处方|单号|日期|\d+\s*岁/.test(line.text);
+        if (laboratoryContext || (!dose && !metadata)) return line;
+        return { ...line, candidate: false, candidateKind: null,
+          dictionaryFacts: [], role: "narrative" as const, contentRole: "narrative" as const,
+          candidateResolutionReason: null, localObservation: null, localObservations: [],
+          localObservationCandidates: [], expectedLocalObservationCount: 0 };
       });
     }
     const text = renderCompletePage({ pageNumber: row.pageNumber, lines });
@@ -7015,12 +7069,12 @@ export function planRebuiltOcrPages(
         );
   /*
    * 概览模式：指标仍逐行提取（与详细模式同一解析契约），并保留形态发现单元；
-   * 概览只保留明确用药页及相邻续页的叙事单元，避免临床记录的用药被跳过。
+   * 概览保留明确用药页及相邻续页、接种条目页的叙事单元，避免临床记录的用药被跳过。
    * 合并单元已在同一契约内输出形态发现，不再单独生成形态单元。
    */
   const narrativeBaseUnits = extractionDepth === "overview"
     ? baseUnits.map(unit => ({ ...unit, pageRanges: unit.pageRanges.filter(range =>
-        pages.find(page => page.pageId === range.pageId)?.medicationContent) }))
+        pages.some(page => page.pageId === range.pageId&&(page.medicationContent||hasVaccinationContent(page.text)))) }))
     : baseUnits;
   const narrativeUnits = packNarrativeUnits(narrativeBaseUnits, pages, documentClassification.primaryType);
   const morphologyUnits =

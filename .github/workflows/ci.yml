@@ -6,6 +6,8 @@ on:
 
 jobs:
   build:
+    # The Docker-only workflow validates feat-event without generating FPKs.
+    if: github.event_name != 'push' || github.ref != 'refs/heads/feat-event'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

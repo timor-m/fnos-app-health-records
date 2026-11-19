@@ -7,7 +7,7 @@ import type { ReportDetail as ReportDetailType } from "../types/api";
 
 type DuplicateCandidate = ReportDetailType["duplicateCandidates"][number];
 
-const props = defineProps<{ open: boolean; reportId: string | null }>();
+const props = defineProps<{ open: boolean; reportId: string | null; hideVaccinationConfirmation?: boolean; originalsOnly?: boolean }>();
 const emit = defineEmits<{ close: []; updated: [] }>();
 useScrollLock(computed(() => props.open));
 
@@ -42,12 +42,13 @@ function goBackToPreviousReport() {
   <Teleport to="body">
     <div v-if="props.open && currentReportId" class="modal-backdrop" @click.self="emit('close')">
       <section
-        class="modal-panel duplicate-detail-modal report-detail-modal"
+        class="modal-panel duplicate-detail-modal report-detail-modal record-sheet"
         :class="{ 'has-report-history': reportHistory.length > 0 }"
         role="dialog"
         aria-modal="true"
-        aria-label="报告详情"
+        aria-label="档案详情"
       >
+        <span class="sheet-grabber" aria-hidden="true"></span>
         <div v-if="reportHistory.length" class="report-history-bar">
           <button type="button" class="report-history-back" @click="goBackToPreviousReport">
             <ArrowLeft :size="15" />返回上一份报告
@@ -57,6 +58,8 @@ function goBackToPreviousReport() {
           :key="currentReportId"
           :report-id="currentReportId"
           variant="floating"
+          :hide-vaccination-confirmation="hideVaccinationConfirmation"
+          :originals-only="originalsOnly"
           @close="emit('close')"
           @updated="emit('updated')"
           @open-candidate="onOpenCandidate"
