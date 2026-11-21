@@ -62,8 +62,7 @@ for (const relativePath of [
   "app/server/serve.mjs",
   "app/server/server/trend-snapshot-worker.mjs",
   "app/ocr-worker/worker.py",
-  "wizard/install",
-  "wizard/config"
+  "wizard/uninstall"
 ]) {
   check(existsSync(join(packageDir, relativePath)), `Missing ${relativePath}`);
 }
@@ -160,13 +159,8 @@ check(!/servicePort|portServer|0\.0\.0\.0|SERVICE_PORT/.test(launcher), "fnOS la
 check(!existsSync(join(packageDir, "app/tools/write-runtime-config.mjs")), "obsolete port configuration must not be packaged");
 
 check(!existsSync(join(packageDir, "app/ui/index.cgi")), "gateway template must not include index.cgi");
-const installWizard = readJson("wizard/install");
-const configWizard = readJson("wizard/config");
-const wizardFields = (wizard) => Array.isArray(wizard)
-  ? wizard.flatMap((step) => Array.isArray(step.items) ? step.items.map((item) => item.field).filter(Boolean) : [])
-  : [];
-check(JSON.stringify(wizardFields(installWizard)) === JSON.stringify([]), "install wizard must not configure a TCP port");
-check(JSON.stringify(wizardFields(configWizard)) === JSON.stringify([]), "config wizard must not configure a TCP port");
+check(!existsSync(join(packageDir, "wizard/install")), "unused install wizard should not be generated");
+check(!existsSync(join(packageDir, "wizard/config")), "unused config wizard should not be generated");
 
 const appArchivePath = join(rootDir, "dist", "app.tgz");
 check(existsSync(appArchivePath), "Missing dist/app.tgz");

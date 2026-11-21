@@ -54,7 +54,7 @@
 
 用户设备落库记录在服务端首次启动时建立：
 
-- fnOS 安装向导说明统一网关访问方式，不配置独立端口，也不执行数据库迁移。
+- fnOS 安装不提供端口配置，也不执行数据库迁移。
 - fnOS 升级回调目前不执行数据库迁移。
 - 应用服务启动后，`packages/server/middleware/01-database.ts` 调用 `getDatabase()`。
 - `getDatabase()` 打开 SQLite，检查当前 schema 版本，并在业务 API 和后台任务可用前完成初始化或迁移。
@@ -231,7 +231,7 @@ npm run release:ci
 - `.fnos-build/package/manifest` 中 `version` 与 `package.json` 一致。
 - `.fnos-build/package/manifest` 中 `sub_version` 符合预期。
 - `ICON.PNG`、`ICON_256.PNG`、`ICON_512.PNG` 尺寸正确。
-- 安装与配置向导不含端口输入，安装包仅监听 Unix Socket。
+- 安装包不含端口配置向导，仅监听 Unix Socket。
 - 升级回调不误删数据。
 
 数据库专项验证：
@@ -274,7 +274,7 @@ fnOS 真机验证：
 
 - 新安装可启动。
 - 从上一版本升级可启动。
-- 端口配置保留。
+- 不需要配置或保留独立端口。
 - 数据目录保留。
 - 报告列表、详情、原图、OCR/AI 任务正常。
 - 应用停止后可恢复。

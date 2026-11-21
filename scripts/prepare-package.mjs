@@ -383,13 +383,6 @@ const uninstallWizard = [
   }
 ];
 
-const serviceSettingsItems = [{
-  type: "tips",
-  helpText: "通过飞牛应用入口访问健康档案，由飞牛网关验证登录身份。应用不开放独立 HTTP 端口。"
-}];
-const installWizard = [{ stepTitle: "访问方式", items: serviceSettingsItems }];
-const configWizard = [{ stepTitle: "访问方式", items: serviceSettingsItems }];
-
 const authorizedPathsCallback = () => `#!/bin/bash
 set -u
 
@@ -440,8 +433,6 @@ for (const [name, content] of Object.entries(callbackScripts)) {
 }
 
 writeFileSync(join(wizardDir, "uninstall"), `${JSON.stringify(uninstallWizard, null, 2)}\n`, "utf8");
-writeFileSync(join(wizardDir, "install"), `${JSON.stringify(installWizard, null, 2)}\n`, "utf8");
-writeFileSync(join(wizardDir, "config"), `${JSON.stringify(configWizard, null, 2)}\n`, "utf8");
 
 for (const path of [
   join(cmdDir, "main"),
