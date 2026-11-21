@@ -108,7 +108,7 @@ export function listMedicationDocuments(user: RequestUser, input: Input): Medica
     COALESCE(NULLIF(r.report_issued_at,''),NULLIF(r.reviewed_at,''),NULLIF(r.received_at,''),
       NULLIF(r.examined_at,''),NULLIF(r.sampled_at,''),NULLIF(r.ordered_at,'')) AS date
     FROM reports r WHERE ${visibleReports} ORDER BY date DESC,r.id`)
-    .all(memberId) as Array<Omit<MedicationDocument, keyof MedicationContext | 'medicationCount' | 'medicationNames'>>)
+    .all(memberId) as unknown as Array<Omit<MedicationDocument, keyof MedicationContext | 'medicationCount' | 'medicationNames'>>)
     .map(row => ({ ...row, medicationCount: 0, medicationNames: [] as string[] }));
   const byId = new Map(documents.map(document => [document.id, document]));
   const medications = db.prepare(`SELECT m.report_id AS reportId,m.medication_name AS medicationName,m.formula_json AS formulaJson

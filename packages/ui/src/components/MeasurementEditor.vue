@@ -7,6 +7,7 @@ import {
   measurementTemplateLabels,
   resolveMeasurementTemplate,
   type MeasurementCanonicalKey,
+  type MeasurementSampleInput,
   type MeasurementSession,
   type MeasurementTemplateId,
 } from '../../../shared/measurements';
@@ -135,7 +136,7 @@ function sample(canonicalKey: MeasurementCanonicalKey, value: string, unit?: str
 }
 
 function buildSamples() {
-  const samples = [];
+  const samples: MeasurementSampleInput[] = [];
   if (form.templateId === 'blood_pressure') {
     const systolic = sample('vital_systolic_bp', form.systolic);
     const diastolic = sample('vital_diastolic_bp', form.diastolic);
@@ -182,14 +183,14 @@ const templateManagedKeys: Record<MeasurementTemplateId, readonly MeasurementCan
 
 /** Keep indicators this form does not edit, so saving one template cannot drop the rest of the session. */
 function samplesForSave() {
-  const samples = buildSamples();
+  const samples: MeasurementSampleInput[] = buildSamples();
   if (!props.entry) return samples;
   const managed = new Set<string>(form.templateId === 'custom_single' ? [form.singleKey] : templateManagedKeys[form.templateId]);
   for (const item of props.entry.items) {
     if (item.origin === 'derived' || managed.has(item.canonicalKey) || !isMeasurementCanonicalKey(item.canonicalKey)) continue;
     samples.push({
       canonicalKey: item.canonicalKey,
-      value: item.numericValue,
+      value: String(item.numericValue),
       unit: item.unit,
       pairGroup: item.pairGroup,
       origin: 'entered' as const,

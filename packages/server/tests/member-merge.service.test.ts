@@ -31,8 +31,12 @@ test('administrator can list summaries and merge without being granted report ac
  const list=listMergeCandidates(admin);assert.equal(list.total,2);assert.ok(!JSON.stringify(list).includes('private fixture'));
  assert.throws(()=>assertMemberAccess(admin,'source'));
  const selection=getMergeSelection(admin,'source','target');assert.equal(selection.sourceAccounts.length,2);
+ db.exec(`INSERT INTO measurement_sessions(id,member_id,recorded_at,channel,created_by) VALUES('measure-source','source','2026-01-01T00:00:00','manual','owner');
+ INSERT INTO measurement_observations(id,session_id,member_id,canonical_key,display_name,result_text,numeric_value,unit) VALUES('obs-source','measure-source','source','body_temperature','fixture','36.5',36.5,'C');`);
  const preview=previewMemberMerge(admin,input());const result=executeMemberMerge(admin,preview.token);
  assert.equal(result.reportCount,1);assert.equal(db.prepare("SELECT member_id FROM reports WHERE id='report-source'").get()!.member_id,'target');
+ assert.equal(db.prepare("SELECT member_id FROM measurement_sessions WHERE id='measure-source'").get()!.member_id,'target');
+ assert.equal(db.prepare("SELECT member_id FROM measurement_observations WHERE id='obs-source'").get()!.member_id,'target');
  assert.equal(db.prepare("SELECT self_member_id FROM account_preferences WHERE user_id='owner'").get()!.self_member_id,'target');
  assert.equal(db.prepare("SELECT default_member_id FROM account_preferences WHERE user_id='viewer'").get()!.default_member_id,null);
  assert.throws(()=>assertMemberAccess(admin,'target'));assert.throws(()=>assertMemberAccess({...ordinary,id:'viewer'},'target'));assert.throws(()=>assertMemberAccess(ordinary,'source'));

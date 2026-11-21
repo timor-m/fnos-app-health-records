@@ -20,7 +20,7 @@ const fields = ['display_name','birth_date','sex','blood_type_abo','blood_type_r
 const simpleTables = ['reports','reminders','app_notifications','institution_trend_projects','report_duplicate_decisions','report_duplicate_history','report_duplicate_operations','upload_receipts'];
 // Historical installations may retain these tables. Move events before reports
 // to satisfy the report/event ownership trigger without dropping any safeguards.
-const optionalTables = ['health_vaccinations','health_episodes','health_events','medication_courses','medication_intakes','health_upload_archives','health_workflow_requests','health_record_processes','health_record_process_trash','health_record_process_nodes','health_record_links','health_record_reminders'];
+const optionalTables = ['health_vaccinations','health_episodes','health_events','medication_courses','medication_intakes','health_upload_archives','health_workflow_requests','health_record_processes','health_record_process_trash','health_record_process_nodes','health_record_links','health_record_reminders','measurement_sessions','measurement_observations'];
 function existingOptionalTables() {
  const db=getDatabase();
  return optionalTables.filter(name=>Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)));
