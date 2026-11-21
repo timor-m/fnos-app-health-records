@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 29,
+  "revision": 30,
   "indicators": [
     {
       "canonicalKey": "lipid_ldl_hdl_ratio",
@@ -5586,6 +5586,35 @@
         "寄生虫检查"
       ],
       "explanation": "粪便鞭虫卵的定性镜检结果，仅用于有无或阴阳性记录；虫卵计数和每克虫卵数不作为该项目的数值趋势。"
+    },
+    {
+      "canonicalKey": "cardiac_myoglobin",
+      "displayName": "肌红蛋白",
+      "categoryKey": "laboratory_other",
+      "order": 124,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "ng/mL",
+      "unitDimension": "mass_concentration",
+      "aliases": [
+        "肌红蛋白",
+        "血清肌红蛋白",
+        "Myoglobin",
+        "MYO"
+      ],
+      "allowedUnits": [
+        "ng/mL",
+        "μg/L",
+        "ug/L"
+      ],
+      "sectionHints": [
+        "心肌标志物",
+        "心肌酶",
+        "心脏标志物",
+        "生化"
+      ],
+      "explanation": "肌红蛋白定量结果，保留原报告的检测方法、单位和参考范围；不与肌钙蛋白或肌酸激酶同工酶混用。"
     }
   ],
   "extensions": [
@@ -6128,7 +6157,8 @@
     {
       "canonicalKey": "cbc_neutrophil_count",
       "aliases": [
-        "中性粒细胞总数"
+        "中性粒细胞总数",
+        "嗜中性粒细胞绝对数"
       ],
       "sectionHints": [
         "血常规",
@@ -6259,6 +6289,16 @@
         "天门冬氨酸/丙氨酸氨基转移酶比值"
       ],
       "sectionHints": []
+    },
+    {
+      "canonicalKey": "cbc_neutrophil_percentage",
+      "aliases": [
+        "嗜中性粒细胞百分比"
+      ],
+      "sectionHints": [
+        "血常规",
+        "全血细胞"
+      ]
     }
   ],
   "redirects": {}
