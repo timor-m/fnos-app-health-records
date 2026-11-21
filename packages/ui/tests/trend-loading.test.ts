@@ -6,7 +6,7 @@ import {snapshotOverview,snapshotPage,snapshotParts,sampleTrend,autoChartViewpor
 const {request,context}=vi.hoisted(()=>({request:vi.fn(),context:{app:null as any}}));
 vi.mock('../src/utils/api',async original=>({...await original<typeof import('../src/utils/api')>(),request,apiUrl:(path:string)=>path}));
 vi.mock('../src/composables/useAppContext',()=>({useAppContext:()=>context.app}));
-vi.mock('vue-router',()=>({useRoute:()=>({path:'/trends',query:{}})}));
+vi.mock('vue-router',()=>({useRoute:()=>({path:'/trends',query:{}}),useRouter:()=>({push:vi.fn(),replace:vi.fn()})}));
 beforeEach(()=>{
  vi.useFakeTimers();autoChartViewport();localStorage.clear();
  context.app={selectedMemberId:ref('member'),session:ref({isAdmin:false}),dataVersion:ref(0),

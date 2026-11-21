@@ -4,7 +4,7 @@
 
 ## 当前版本关系
 
-当前迭代版本为 **0.2.20（Unreleased）**，合入原 feat-event 的健康记录、症状、用药、接种与健康历程，并保留三角脚注名称兼容及定性指标身份保护。版本号已同步，尚未冻结、打 tag 或正式发布。O0007、O0008 的配套应用修复计划纳入 0.2.20；远程字典使用独立 r28 草案，尚未发布，剩余待确认项不视为已全部修复。
+当前迭代版本为 **0.3.1（Unreleased）**。已有用户安装过临时 0.3.0，因此当前包改为 0.3.1，便于后续覆盖升级。内容仍合入原 feat-event 的健康记录、症状、用药、接种与健康历程，并保留三角脚注名称兼容及定性指标身份保护。版本号已同步，尚未冻结、打 tag 或正式发布。O0007、O0008 的配套应用修复计划纳入 0.3.1；远程字典使用独立 r28 草案，尚未发布，剩余待确认项不视为已全部修复。
 
 **0.2.19 已封版**，包含报告补合并与撤销、识别失败后的手工补录与归档、校对保存可达性及抗体亚型匹配修复。发布产物以 `v0.2.19` tag、Docker 镜像及 GitHub Release 的实际结果为准；后续开发记入无编号 `Unreleased`，不自动递增下一版本。
 
@@ -25,17 +25,17 @@
 | 项 | 当前值 | 来源 |
 | --- | --- | --- |
 | 应用 ID | `fnos-app-health-records` | `template.config.json` |
-| 应用版本 | `0.2.20` | `package.json` |
-| fnOS manifest 版本 | `0.2.20` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
-| fnOS sub_version | `0.2.20.0` | `scripts/prepare-package.mjs` 生成 |
-| Docker 镜像版本 | 本轮目标 `0.2.20`（未发布），稳定版仍以已发布标签为准 | GitHub Tag 工作流从 `package.json` 生成 |
+| 应用版本 | `0.3.1` | `package.json` |
+| fnOS manifest 版本 | `0.3.1` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
+| fnOS sub_version | `0.3.1.0` | `scripts/prepare-package.mjs` 生成 |
+| Docker 镜像版本 | 本轮目标 `0.3.1`（未发布），稳定版仍以已发布标签为准 | GitHub Tag 工作流从 `package.json` 生成 |
 | Docker 镜像仓库 | `docker.io/timorm/fnos-app-health-records` | Docker Hub，可通过 `DOCKERHUB_IMAGE` 覆盖 |
 | 数据库 schema | `v19` | `packages/server/database/migrations.ts` 最后一个迁移版本 |
 | 数据库记录表 | `schema_migrations`、`app_upgrade_history` | 服务端首次启动时初始化或迁移 |
 
 发布前必须确认：当前应用版本支持的目标 schema 版本明确、可初始化新库、可从上一发布版本迁移。
 
-0.2.12、0.2.13 和 0.2.14 已发布。0.2.15 的变更记录已封板，目标数据库 schema 保持 v19，无新增结构或迁移；0.2.15 版本提交及 `v0.2.15` tag 已存在，实际发布状态以 GitHub Release 为准。健康事件与持续健康历程已从 feat-event 合入当前 main 的 `0.2.20 - Unreleased`，本次合并不升应用版本，schema 编号仍为 v19。其结构草案须在发版前对照上一正式发布基线核对兼容性，不因新增表自动升号；正式发布后新开发先使用无编号 `Unreleased`。
+0.2.12、0.2.13 和 0.2.14 已发布。0.2.15 的变更记录已封板，目标数据库 schema 保持 v19，无新增结构或迁移；0.2.15 版本提交及 `v0.2.15` tag 已存在，实际发布状态以 GitHub Release 为准。健康事件与持续健康历程已从 feat-event 合入当前 main 的 `0.3.1 - Unreleased`。临时安装包曾使用 0.3.0，本轮未发布迭代现统一使用 0.3.1，未执行正式发布，schema 编号仍为 v19。其结构草案须在发版前对照上一正式发布基线核对兼容性，不因新增表自动升号；正式发布后新开发先使用无编号 `Unreleased`。
 
 `0.2.16` 变更记录已封板，包含 AI 连接自定义 Headers、OpenCode Go 预设、报告详情加载优化及趋势后台快照与按需读取。目标 schema 保持 v19，趋势派生表通过启动前备份与幂等补齐建立，不新增编号迁移；实际发布状态以 `v0.2.16` tag、Docker 镜像及 GitHub Release 为准。
 
@@ -126,7 +126,7 @@ schema v6 -> v7
 
 ```text
 用户当前应用 0.0.1 / 数据库 schema v1
-  -> 直接安装最新应用 0.3.0 / 目标 schema v9
+  -> 直接安装最新应用 0.3.1 / 目标 schema v9
   -> 首次启动读取当前 schema v1
   -> 迁移前备份 SQLite
   -> 顺序执行 v2、v3、v4、v5、v6、v7、v8、v9
@@ -158,7 +158,7 @@ schema v6 -> v7
 - 缺少 `schema_migrations` 的早期开发库 -> 最新版本，如果这个版本曾经对外发布或已有用户数据。
 - 高版本数据库 -> 低版本应用，必须停止业务并保留维护页。
 
-0.3.0 直升验收还须覆盖实际交付的 0.2.15 安装包及其数据库、最近正式发布基线、空库和已有本轮结构的测试库，分别在 fnOS 与 Docker 验证。不能仅用 schema 同号或代码级测试替代安装验收。必须核对快照失败停止、同秒重试不覆盖快照、补齐异常整体回滚、强制中断后恢复与重试、大库耗时及空间压力、完整备份恢复、原件及权限保留。0.2.15 直接写入升级后数据库存在已确认的业务关联兼容风险，回到旧包不作为失败恢复方案，处理规则见[备份与恢复](BACKUP_RESTORE.md#0215-直接升级至-030)。
+0.3.1 直升验收还须覆盖实际交付的 0.2.15 安装包及其数据库、最近正式发布基线、空库、已有本轮结构的测试库，以及已安装的临时 0.3.0，分别在 fnOS 与 Docker 验证。不能仅用 schema 同号或代码级测试替代安装验收。必须核对快照失败停止、同秒重试不覆盖快照、补齐异常整体回滚、强制中断后恢复与重试、大库耗时及空间压力、完整备份恢复、原件及权限保留。0.2.15 直接写入升级后数据库存在已确认的业务关联兼容风险，回到旧包不作为失败恢复方案，处理规则见[备份与恢复](BACKUP_RESTORE.md#0215-直接升级至-031)。
 
 ## 开发阶段流程
 
@@ -254,7 +254,7 @@ npm run release:notes
 自动化校验与发布：
 
 - GitHub CI 在 push 和 pull request 时执行 `npm run release:ci`；`feat-event` 分支的 push 改由独立 Docker Image 工作流完成校验、服务端/UI 测试、类型检查、性能检查和 Docker 启动检查，不打包 FPK。
-- `Docker Image (feat-event)` 仅在当前仓库的 `feat-event` 分支发布双架构镜像，唯一镜像标签取自 `package.json`（当前 `0.3.0`）；发布前后核对 `latest` digest，不增加分支标签，不创建 Git tag 或 GitHub Release。此流程不冻结版本、不递增应用或 schema 版本，部署方式见 [Docker 部署](DOCKER_DEPLOYMENT.md#从-feat-event-分支发布版本镜像)。
+- `Docker Image (feat-event)` 仅在当前仓库的 `feat-event` 分支发布双架构镜像，唯一镜像标签取自 `package.json`（当前 `0.3.1`）；发布前后核对 `latest` digest，不增加分支标签，不创建 Git tag 或 GitHub Release。此流程不冻结版本、不递增应用或 schema 版本，部署方式见 [Docker 部署](DOCKER_DEPLOYMENT.md#从-feat-event-分支发布版本镜像)。
 - GitHub Release 在 tag 或手动触发时执行严格发布校验、测试和打包；tag 版本必须与 `package.json` 版本一致。
 - Release notes 会自动读取 `CHANGELOG.md` 当前版本段落、`package.json`、`template.config.json` 和迁移注册表，输出本版本变更、发布摘要（含应用 ID 与目标 schema）、发布产物和 Docker 镜像信息；`releaseNotes.highlights` 仅保留给 `release:info` 检查和发布校验，不再写入 GitHub Release 正文。
 - 包结构校验会确认 manifest 版本、sub_version、应用介绍、changelog 和图标尺寸。

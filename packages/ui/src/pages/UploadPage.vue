@@ -839,7 +839,7 @@ onActivated(() => {
     >
       <span class="drop-icon"><ImagePlus :size="30" /></span>
       <strong>拖放报告到这里</strong>
-      <span class="drop-hint">HEIC、JPEG、PNG、WebP 或多页 PDF，多文件可选择报告组织方式</span>
+      <span class="drop-hint">HEIC、JPEG、PNG、WebP 或多页 PDF，<span class="drop-hint-rest">多文件可选择报告组织方式</span></span>
       <div class="drop-actions">
         <label class="primary-button file-button upload-picker">
           <UploadCloud :size="18" /><span>选择文件</span>
@@ -931,8 +931,8 @@ onActivated(() => {
       </article>
       </template>
       <div class="upload-submit">
-        <span>{{ items.length }} 个文件 · {{ formatBytes(totalBytes) }}<template v-if="canSubmitOrganization">，提交后离开页面仍会继续处理</template></span>
-        <button class="primary-button" type="button" :disabled="contextMismatch || uploading || batchRunning" @click="submit">
+        <span>{{ items.length }} 个文件 · {{ formatBytes(totalBytes) }}<template v-if="canSubmitOrganization">，提交后离开页面仍会继续处理</template><template v-else-if="organizationMode === 'custom'">，请先完成全部文件分组</template><template v-else>，请先选择报告组织方式</template></span>
+        <button class="primary-button" type="button" :disabled="contextMismatch || uploading || batchRunning || !canSubmitOrganization" @click="submit">
           <LoaderCircle v-if="uploading" class="spin-icon" :size="18" />
           <UploadCloud v-else :size="18" />
           {{ uploading ? "正在保存" : "保存并开始识别" }}

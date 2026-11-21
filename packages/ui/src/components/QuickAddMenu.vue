@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onDeactivated, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
-import { RouterLink } from 'vue-router';
+import { RouterLink, useRouter } from 'vue-router';
 import { useScrollLock } from '../composables/useScrollLock';
 import HealthCategoryIcon from './HealthCategoryIcon.vue';
 import { Camera, ChevronRight, Plus, Link2 } from '@lucide/vue';
@@ -24,6 +24,8 @@ const props = defineProps<{
 }>();
 
 const emit=defineEmits<{associate:[];symptom:[opener:HTMLElement|null]}>();
+const router = useRouter();
+const triggerLabel = computed(() => props.label || (props.placement === 'mobile' ? '拍照或新增记录' : '新增'));
 const open = ref(false);
 const trigger = ref<HTMLButtonElement | null>(null);
 const panel = ref<HTMLElement | null>(null);
@@ -153,15 +155,27 @@ watch(open, value => {
 function target(entry:typeof entries[number]) {
  const context=props.processId?{processId:props.processId,memberId:props.memberId,returnTo:props.routeKey}:props.relatedRecord?{relatedKind:props.relatedRecord.kind,relatedId:props.relatedRecord.id,memberId:props.memberId,returnTo:props.routeKey}:{};
  if(entry.category==='medication'){const origin=new URL(props.routeKey,'https://health.invalid');const query=origin.pathname==='/events'?Object.fromEntries(origin.searchParams):{};delete query.recordKind;delete query.recordId;return {path:'/events',query:{...query,...context,add:'medication'}};}
- return entry.category==='vaccination'||entry.category==='symptom'||props.relatedRecord||props.processId?{path:entry.to,query:{returnTo:props.routeKey,...context}}:entry.to;
+ return entry.category==='vaccination'||entry.category==='symptom'||entry.category==='monitoring'||props.relatedRecord||props.processId?{path:entry.to,query:{returnTo:props.routeKey,...context}}:entry.to;
 }
 
 const entries = [
   { label: '上传资料', hint: '自动归类报告、用药单和接种原件', to: '/upload', category: 'report' },
   { label: '症状 / 不适', hint: '记录症状及后续变化', to: '/add/symptom', category: 'symptom' },
+  { label: '记录测量', hint: '血压、体格、血糖、体温、血氧等', to: '/add/measurement', category: 'monitoring' },
   { label: '用药', hint: '从用药单带入，或手动记录', to: '/events?add=medication', category: 'medication' },
   { label: '接种', hint: '填写接种日期、剂次和下一剂提醒', to: '/add/vaccination', category: 'vaccination' }
 ] as const;
+
+function isAction(entry: typeof entries[number]) {
+  return entry.category === 'medication' || (entry.category === 'symptom' && props.symptomDialog);
+}
+async function choose(entry: typeof entries[number]) {
+  const destination = entry.category === 'medication' ? target(entry) : null;
+  const symptom = entry.category === 'symptom' && props.symptomDialog;
+  close();
+  if (symptom) emit('symptom', trigger.value);
+  else if (destination) await router.push(destination);
+}
 
 async function toggle() {
   if (!props.canManage||props.disabled) return;
@@ -216,10 +230,10 @@ onUnmounted(() => { mounted = false; window.removeEventListener('keydown', onKey
       </div>
     </Teleport>
     <button ref="trigger" type="button" class="quick-add-trigger" :class="{ 'is-open': open }"
-      :aria-label="canManage ? label||'拍照或新增记录' : '当前成员只有查看权限'"
+      :aria-label="canManage ? triggerLabel : '当前成员只有查看权限'"
       aria-haspopup="menu" :aria-expanded="open" :aria-controls="menuId"
       :disabled="!canManage||disabled" @click="toggle">
-      <span class="quick-add-icon"><Plus v-if="placement==='inline'" :size="16"/><Camera v-else :size="placement === 'mobile' ? 26 : 19" /></span>
+      <span class="quick-add-icon"><Plus :size="placement==='mobile'?28:placement==='inline'?16:19" :stroke-width="2.5"/></span>
       <span v-if="placement !== 'mobile'">{{label||'新增'}}</span>
     </button>
     <template v-if="open">
@@ -234,8 +248,8 @@ onUnmounted(() => { mounted = false; window.removeEventListener('keydown', onKey
           <ChevronRight :size="16" class="quick-add-chevron" />
         </button>
         <button v-if="processId||relatedRecord" type="button" class="quick-add-entry quick-add-associate" role="menuitem" @click="close();emit('associate')"><span class="quick-add-entry-icon"><Link2 :size="24"/></span><span class="quick-add-entry-copy"><strong>{{processId?'添加记录':'关联历程'}}</strong><small>{{processId?'选择已有记录加入当前历程':'选择相关记录，形成或加入健康历程'}}</small></span><ChevronRight :size="16"/></button>
-        <component v-for="entry in entries" :key="entry.to" :is="entry.category==='symptom'&&symptomDialog?'button':RouterLink" :to="entry.category==='symptom'&&symptomDialog?undefined:target(entry)" :type="entry.category==='symptom'&&symptomDialog?'button':undefined"
-          class="quick-add-entry" role="menuitem" @click="close();if(entry.category==='symptom'&&symptomDialog)emit('symptom',trigger)">
+        <component v-for="entry in entries" :key="entry.to" :is="isAction(entry)?'button':RouterLink" :to="isAction(entry)?undefined:target(entry)" :type="isAction(entry)?'button':undefined"
+          class="quick-add-entry" role="menuitem" @click="choose(entry)">
           <span class="quick-add-entry-icon"><HealthCategoryIcon :category="entry.category" :size="34" /></span>
           <span class="quick-add-entry-copy"><strong>{{ entry.label }}</strong><small>{{ entry.hint }}</small></span>
           <ChevronRight :size="16" class="quick-add-chevron" />
@@ -259,5 +273,5 @@ onUnmounted(() => { mounted = false; window.removeEventListener('keydown', onKey
 button.quick-add-entry:not(.is-disabled){width:100%;border:0;background:none;font:inherit;text-align:left;cursor:pointer}button.quick-add-entry:not(.is-disabled):hover,button.quick-add-entry:not(.is-disabled):focus-visible{background:var(--brand-softer)}
 .quick-add.quick-add--inline{z-index:6}.quick-add--inline .quick-add-trigger{display:flex;align-items:center;gap:5px;min-height:32px;padding:5px 10px;background:var(--brand-softer);border-radius:var(--radius-s);font-size:12px;font-weight:500}.quick-add--inline .quick-add-panel{left:0;top:calc(100% + 6px);z-index:5}.quick-add-associate{width:100%;border:0;background:none;font:inherit;text-align:left;cursor:pointer}
 
-.quick-add{position:relative;min-width:0;z-index:1}.quick-add-trigger{border:0;background:none;cursor:pointer;color:var(--brand-strong);font:inherit;font-weight:600}.quick-add-trigger:disabled{opacity:.45;cursor:not-allowed}.quick-add-icon{display:grid;place-items:center}.quick-add-backdrop{position:fixed;inset:0;background:rgba(24,24,22,.22);z-index:4}.quick-add-backdrop--mobile{z-index:29}.quick-add-panel{position:absolute;z-index:1;width:min(330px,calc(100vw - 24px));padding:10px;border:1px solid var(--line);border-radius:18px;background:var(--surface);box-shadow:var(--shadow-l)}.quick-add-entry{display:flex;align-items:center;gap:12px;min-height:62px;padding:10px;border-radius:12px;color:var(--ink);text-decoration:none}.quick-add-entry:hover,.quick-add-entry:focus-visible{background:var(--brand-softer);outline:none}.quick-add-entry-icon{flex:0 0 auto;display:grid;place-items:center;width:38px;height:38px;}.quick-add-entry-copy{flex:1;display:grid;gap:3px;min-width:0}.quick-add-entry-copy strong{font-size:14px}.quick-add-entry-copy small{font-size:12px;color:var(--muted)}.quick-add-chevron{color:var(--muted)}.quick-add-entry.is-disabled{width:100%;border:0;background:none;font:inherit;text-align:left;opacity:.45;cursor:not-allowed}.quick-add-entry.is-disabled:hover{background:none}.quick-add--desktop .quick-add-trigger{display:flex;align-items:center;gap:9px;min-height:38px;width:100%;padding:0 10px;border-radius:10px;text-align:left;font-size:14px}.quick-add--desktop .quick-add-trigger:hover,.quick-add--desktop .quick-add-trigger.is-open{background:var(--brand-soft)}.quick-add--desktop .quick-add-icon{width:20px;height:20px}.quick-add--desktop .quick-add-panel{left:calc(100% + 12px);top:0}.quick-add--mobile{display:grid;place-items:center}.quick-add--mobile .quick-add-trigger{display:grid;place-items:center;width:100%;height:100%;padding:0}.quick-add--mobile .quick-add-icon{width:50px;height:50px;border-radius:50%;background:var(--brand-gradient);color:#fff;box-shadow:0 6px 16px rgba(14,124,107,.35);transition:transform .12s}.quick-add--mobile .quick-add-trigger:active .quick-add-icon{transform:scale(.92)}.quick-add--mobile .quick-add-panel{left:50%;bottom:calc(100% + 16px);transform:translateX(-50%)}
+.quick-add{position:relative;min-width:0;z-index:1}.quick-add-trigger{border:0;background:none;cursor:pointer;color:var(--brand-strong);font:inherit;font-weight:600}.quick-add-trigger:disabled{opacity:.45;cursor:not-allowed}.quick-add-icon{display:grid;place-items:center}.quick-add-backdrop{position:fixed;inset:0;background:rgba(24,24,22,.22);z-index:4}.quick-add-backdrop--mobile{z-index:29}.quick-add-panel{position:absolute;z-index:1;width:min(330px,calc(100vw - 24px));padding:10px;border:1px solid var(--line);border-radius:18px;background:var(--surface);box-shadow:var(--shadow-l)}.quick-add-entry{display:flex;align-items:center;gap:12px;min-height:62px;padding:10px;border-radius:12px;color:var(--ink);text-decoration:none}.quick-add-entry:hover,.quick-add-entry:focus-visible{background:var(--brand-softer);outline:none}.quick-add-entry-icon{flex:0 0 auto;display:grid;place-items:center;width:38px;height:38px;}.quick-add-entry-copy{flex:1;display:grid;gap:3px;min-width:0}.quick-add-entry-copy strong{font-size:14px}.quick-add-entry-copy small{font-size:12px;color:var(--muted)}.quick-add-chevron{color:var(--muted)}.quick-add-entry.is-disabled{width:100%;border:0;background:none;font:inherit;text-align:left;opacity:.45;cursor:not-allowed}.quick-add-entry.is-disabled:hover{background:none}.quick-add--desktop .quick-add-trigger{display:flex;align-items:center;gap:9px;min-height:38px;width:100%;padding:0 10px;border-radius:10px;text-align:left;font-size:14px}.quick-add--desktop .quick-add-trigger:hover,.quick-add--desktop .quick-add-trigger.is-open{background:var(--brand-soft)}.quick-add--desktop .quick-add-icon{width:26px;height:26px;border-radius:50%;background:var(--brand-gradient);color:#fff}.quick-add--desktop .quick-add-panel{left:calc(100% + 12px);top:0}.quick-add--mobile{position:relative;z-index:2;display:grid;place-items:center}.quick-add--mobile .quick-add-trigger{position:absolute;left:50%;top:-16px;display:grid;place-items:center;width:62px;height:62px;padding:0;transform:translateX(-50%);color:#fff}.quick-add--mobile .quick-add-icon{width:62px;height:62px;border-radius:50%;background:var(--brand-gradient);color:#fff;box-shadow:0 3px 8px rgba(14,124,107,.22);transition:transform .12s}.quick-add--mobile .quick-add-trigger:active .quick-add-icon{transform:scale(.94)}.quick-add--mobile .quick-add-panel{left:50%;bottom:calc(100% + 26px);transform:translateX(-50%)}
 </style>

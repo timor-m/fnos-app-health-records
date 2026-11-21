@@ -31,6 +31,7 @@ import { healthProcessSchemaSql } from "./health-process-draft";
 import { healthWorkflowDraftSql } from "./health-workflow-draft";
 import { healthUploadSchemaSql } from "./health-upload-draft";
 import { medicationDraftSchemaSql } from "./medication-draft";
+import { measurementDraftSchemaSql } from "./measurement-draft";
 export const schemaVersion = latestSchemaVersion;
 
 export const schemaSql = `
@@ -610,6 +611,7 @@ ${healthProcessSchemaSql}
 ${healthWorkflowDraftSql}
 ${healthUploadSchemaSql}
 ${medicationDraftSchemaSql}
+${measurementDraftSchemaSql}
 ${healthCategorySchemaSql}
 ${healthRecordProcessSchemaSql}
 ${trendSnapshotSchemaSql}

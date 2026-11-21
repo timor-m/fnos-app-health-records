@@ -359,7 +359,10 @@ function materializeActiveDictionary() {
   for (const current of layers) {
     for (const definition of current.documents.indicators.indicators) {
       if (definitions.has(definition.canonicalKey)) {
-        throw new Error(`远程字典不得覆盖已有指标 ${definition.canonicalKey}`);
+        // Remote snapshots may still list indicators later promoted into core.
+        // Keep the core definition so upgrades do not fail materialization.
+        if (current.layer === "remote") continue;
+        throw new Error(`字典重复定义指标 ${definition.canonicalKey}`);
       }
       definitions.set(definition.canonicalKey, {
         layer: current.layer,

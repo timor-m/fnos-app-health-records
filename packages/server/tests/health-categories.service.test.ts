@@ -31,8 +31,8 @@ function fixture(run:()=>void){const previous=process.env.STORAGE_DIR;const dir=
 function status(fn:()=>unknown,code:number){assert.throws(fn,(error:unknown)=>(error as {statusCode:number}).statusCode===code);}
 function report(id:string,type:string,title=id,memberId='member'){getDatabase().prepare("INSERT INTO reports(id,member_id,created_by,title,report_type,status,report_issued_at) VALUES(?,?,'manager',?,?,'ready','2026-01-01')").run(id,memberId,title,type);}
 const vaccine={memberId:'member',vaccineName:'合成疫苗',administeredAt:'2026-01-01',doseNumber:'1'};
-test('public categories are exactly five; source document subtypes do not create extra categories',()=>{
- assert.deepEqual(healthCategories,['report','imaging','symptom','medication','vaccination']);
+test('public categories are exactly six; source document subtypes do not create extra categories',()=>{
+ assert.deepEqual(healthCategories,['report','imaging','symptom','monitoring','medication','vaccination']);
  for(const type of ['checkup','laboratory','pathology','functional','outpatient','inpatient','billing','other'])assert.equal(reportCategory(type),'report');
  assert.equal(reportCategory('imaging'),'imaging');assert.equal(reportCategory('prescription'),'medication');assert.equal(reportCategory('vaccination'),'vaccination');
 });
@@ -112,6 +112,8 @@ test('public symptom creation hides process scaffolding, is idempotent, and reje
  const input={memberId:'member',name:'合成不适',startedAt:'2026-01-01',requestKey:'public-symptom-stable-001'};
  const saved=createPublicSymptom(manager,input);assert.equal(createPublicSymptom(manager,input).id,saved.id);
  assert.equal(listHealthRecordFeed(manager,{memberId:'member',category:'symptom'}).items[0].resourceId,saved.id);
+ createPublicSymptom(manager,{memberId:'member',name:'合成头痛',startedAt:'2026-01-02',bodyArea:'头部',severity:4,description:'合成补充',requestKey:'public-symptom-card-text-001'});
+ assert.equal(listHealthRecordFeed(manager,{memberId:'member',category:'symptom'}).items.find(item=>item.title==='合成头痛')?.description,'头部 · 程度 4/10 · 合成补充');
  report('foreign-symptom-context','laboratory','Synthetic','second');
  status(()=>createPublicSymptom(manager,{memberId:'member',name:'不能串成员',relatedRecords:[{kind:'report',id:'foreign-symptom-context'}]}),403);
  status(()=>createPublicSymptom(viewer,input),403);
@@ -160,8 +162,14 @@ test('confirmed vaccination keeps a source snapshot, deduplicates its credential
  const uncertain=createClinicalFact(manager,'vax','vaccination',{vaccineName:vaccine.vaccineName,doseNumber:vaccine.doseNumber});
  assert.equal(getReportDetail(manager,'vax').vaccinations.find(item=>item.id===uncertain.id)?.confirmedVaccinationId,null);
 
+ const timed=createClinicalFact(manager,'vax','vaccination',{vaccineName:'合成时刻疫苗',doseNumber:'1',administeredAt:'2026-01-01 09:30:00',nextDueAt:'2026-02-01 08:00'});
+ const timedSaved=createVaccination(manager,{memberId:'member',vaccineName:'合成时刻疫苗',doseNumber:'1',administeredAt:'2026-01-01 09:30:00',nextDueAt:'2026-02-01 08:00',sourceReportId:'vax',sourceFactId:timed.id});
+ assert.equal(timedSaved.administeredAt,'2026-01-01 09:30:00');assert.equal(timedSaved.nextDueAt,'2026-02-01 08:00');
+ assert.equal(getReportDetail(manager,'vax').vaccinations.find(item=>item.id===timed.id)?.confirmedVaccinationId,timedSaved.id);
+ status(()=>createVaccination(manager,{...vaccine,administeredAt:'2026/01/01'}),400);
  status(()=>createVaccination(manager,{...vaccine,sourceReportId:'vax',sourceFactId:fact.id}),409);
  status(()=>createVaccination(manager,{...vaccine,sourceReportId:'foreign-vax'}),400);
+ deleteVaccination(manager,timedSaved.id,{revision:timedSaved.revision});
  deleteVaccination(manager,saved.id,{revision:saved.revision});assert.equal(listHealthRecordFeed(manager,{memberId:'member',category:'vaccination'}).items.length,0);
 }));
 
@@ -180,12 +188,12 @@ test('postponing a next-dose reminder updates its vaccination and revision toget
  assert.equal(getVaccination(manager,first.id).nextDueAt,'2026-02-10');
 }));
 
-test('overview supports manual-only health records and uses the same five counts as the complete record list',()=>fixture(()=>{
+test('overview supports manual-only health records and uses the same six counts as the complete record list',()=>fixture(()=>{
  const symptom=createPublicSymptom(manager,{memberId:'member',name:'合成日常不适',startedAt:'2026-01-02'});
  const medication=createMedicationCourse(manager,{memberId:'member',medicationName:'合成手动用药',startedAt:'2026-01-03',confirmed:true});
  createVaccination(manager,vaccine);
  const overview=getOverview(manager,'member');
- assert.equal(overview.recordCount,3);assert.deepEqual(overview.categoryCounts,{report:0,imaging:0,symptom:1,medication:1,vaccination:1});
+ assert.equal(overview.recordCount,3);assert.deepEqual(overview.categoryCounts,{report:0,imaging:0,symptom:1,monitoring:0,medication:1,vaccination:1});
  assert.equal(overview.attention.symptoms[0].resourceId,symptom.id);assert.equal(overview.attention.medications[0].resourceId,medication.id);
  assert.equal(overview.pending.processingCount,0);assert.equal(overview.pending.reviewCount,0);assert.equal(overview.pending.failedCount,0);
  assert.deepEqual(overview.recentRecords,[]);
@@ -202,7 +210,7 @@ test('overview counts grouped cards once, source-processing per document, and co
  createMedicationCourse(manager,{memberId:'member',sourceMedicationId:fact.id,medicationName:'合成处方药',startedAt:'2026-01-01',confirmed:true});
  createVaccination(manager,{...vaccine,sourceReportId:'vax-proof'});
  getDatabase().prepare("UPDATE reports SET created_at='2026-01-01 00:00:00',status=CASE id WHEN 'checkup' THEN 'needs_review' WHEN 'lab' THEN 'failed' WHEN 'image' THEN 'uploading' WHEN 'vax-proof' THEN 'processing' ELSE status END").run();
- const overview=getOverview(manager,'member');assert.equal(overview.recordCount,4);assert.deepEqual(overview.categoryCounts,{report:1,imaging:1,symptom:0,medication:1,vaccination:1});
+ const overview=getOverview(manager,'member');assert.equal(overview.recordCount,4);assert.deepEqual(overview.categoryCounts,{report:1,imaging:1,symptom:0,monitoring:0,medication:1,vaccination:1});
  assert.equal(overview.attention.medicationCount,1);assert.equal(overview.attention.medications[0].kind,'medication');
  assert.equal(overview.pending.failedCount,1);assert.equal(overview.pending.reviewCount,1);assert.equal(overview.pending.processingCount,2);
  assert.equal(overview.pending.documents.length,2);assert.equal(overview.pending.documents[0].resourceId,'vax-proof');assert.ok(overview.recentRecords.every(item=>item.memberId==='member'));

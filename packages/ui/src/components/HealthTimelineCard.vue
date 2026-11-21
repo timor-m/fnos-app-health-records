@@ -8,11 +8,16 @@ import { timelineDateParts } from '../utils/health-timeline';
 import { formatMedicationDate } from '../utils/medication-date';
 const props=defineProps<{entry:HealthFeedEntry;selected?:boolean;origin?:'overview';returnTo?:string;dateLabel?:string}>();
 const emit=defineEmits<{activate:[entry:HealthFeedEntry,event:MouseEvent]}>();
-const labels:Record<string,string>={checkup:'体检',laboratory:'检验',imaging:'影像检查',functional:'功能检查',pathology:'病理',outpatient:'门诊病历',inpatient:'住院资料',billing:'费用凭证',prescription:'用药单',vaccination:'接种',course:'用药记录',intake:'用药记录',symptom:'症状跟踪',other:'其他资料'};
+const labels:Record<string,string>={checkup:'体检',laboratory:'检验',imaging:'影像检查',functional:'功能检查',pathology:'病理',outpatient:'门诊病历',inpatient:'住院资料',billing:'费用凭证',prescription:'用药单',vaccination:'接种',course:'用药记录',intake:'用药记录',symptom:'症状跟踪',manual:'手动',device:'设备',import:'导入',other:'其他资料'};
 const states:Record<string,string>={active:'进行中',resolved:'已缓解',unknown:'状态未知',paused:'已暂停',stopped:'已停用',queued:'排队中',uploading:'上传中',processing:'处理中',needs_review:'待确认',failed:'识别失败',ready:'已归档'};
+const measurementChannels=new Set(['自测','设备','导入']);
 const card=computed(()=>{
  const entry=props.entry;const details:string[]=[];const isVaccination=entry.kind==='vaccination';
  const dose=entry.doseNumber?.trim();const doseLabel=dose && /^\d+$/.test(dose)?`第 ${dose} 剂`:dose;
+ const readings=entry.kind==='measurement'&&entry.metrics?.length?entry.metrics:[];
+ const metrics=readings.slice(0,6);
+ const metricMore=readings.length>6?readings.length:0;
+ const channel=entry.kind==='measurement'&&entry.institution&&measurementChannels.has(entry.institution)?entry.institution:null;
  if(entry.medicationCount)details.push(entry.formulaCount
    ? [`${entry.formulaCount} 份药方`,entry.medicationCount>entry.formulaCount?`${entry.medicationCount-entry.formulaCount} 项药品`:''].filter(Boolean).join(' · ')
    : `${entry.medicationCount} 项药品`);
@@ -20,12 +25,15 @@ const card=computed(()=>{
  else if(entry.kind==='medication_document')details.push(entry.confirmedCount?'已确认使用情况':'使用情况未确认');
  if(entry.intakeCount)details.push(`${entry.intakeCount} 次服用补充`);
  if(entry.processIds.length)details.push(`关联 ${entry.processIds.length} 个健康历程`);
- const state=isVaccination?'已接种':entry.category==='vaccination'&&['ready','needs_review'].includes(entry.status||'')?'待完善':entry.kind==='medication' && entry.status==='active'?'正在使用':states[entry.status||''];
+ // Measurement channels are shown via institution/meta labels; keep status chips for clinical/document states only.
+ const symptomState=entry.kind==='symptom'?{active:'持续跟踪',resolved:'已消失',unknown:'状态未知'}[entry.status||'']:undefined;
+ const medicationState=entry.kind==='medication'?{active:'正在使用',paused:'已暂停',stopped:'已停止'}[entry.status||'']:undefined;
+ const state=symptomState!==undefined?symptomState:medicationState!==undefined?medicationState:isVaccination?'已接种':entry.kind==='measurement'?null:entry.category==='vaccination'&&['ready','needs_review'].includes(entry.status||'')?'待完善':states[entry.status||''];
  const subtypeLabels=[...new Set((entry.category==='report' && entry.documents.length ? entry.documents.map(doc=>doc.reportType) : [entry.subtype]).map(type=>labels[type]||type))];
- const meta=(isVaccination || ['symptom','imaging','vaccination'].includes(entry.category))?'':subtypeLabels.join(' · ');
+ const meta=metrics.length?entry.title:(isVaccination || ['symptom','imaging','vaccination','monitoring'].includes(entry.category))?'':subtypeLabels.join(' · ');
  const tone=isVaccination?'chip--green':entry.status==='failed'?'chip--red':entry.status==='needs_review'||entry.category==='vaccination'&&entry.status==='ready'?'chip--amber':['processing','uploading','queued'].includes(entry.status||'')?'chip--info':['active','resolved','ready'].includes(entry.status||'')?'chip--green':'chip--plain';
  return {to:props.returnTo?{path:healthRecordPath(entry.kind,entry.resourceId),query:{...(props.origin?{from:props.origin}:{}),returnTo:props.returnTo}}:props.origin?{path:healthRecordPath(entry.kind,entry.resourceId),query:{from:props.origin}}:healthRecordPath(entry.kind,entry.resourceId),type:healthCategoryLabels[entry.category],title:entry.title,
- institution:entry.institution,meta,dose:isVaccination?doseLabel:null,summaryNote:isVaccination?entry.note:null,description:isVaccination?null:entry.description,details,
+ institution:channel?null:entry.institution,meta,channel,metrics,metricMore,dose:isVaccination?doseLabel:null,summaryNote:isVaccination?entry.note:null,description:isVaccination||metrics.length?null:entry.description,details,
  status:state?{label:state,chip:tone}:null};
 });
 const date=computed(()=>{const value=timelineDateParts(props.entry.date);return {main:value?.day||(props.dateLabel?'待确认':'日期待确认'),details:value?.time?[value.time]:[],label:formatMedicationDate(props.entry.date)||(props.dateLabel?'待确认':'日期待确认')};});
@@ -47,6 +55,7 @@ const uploadTime=computed(()=>{
       <span class="health-timeline-heading">
         <span class="health-timeline-type">{{ card.type }}</span>
         <span v-if="card.meta" class="health-timeline-meta" :title="card.meta">{{ card.meta }}</span>
+        <span v-if="card.channel" class="chip chip--plain health-timeline-channel">{{ card.channel }}</span>
         <span v-if="card.status || card.dose" class="health-timeline-labels">
           <span v-if="card.dose" class="chip chip--plain health-timeline-dose">{{card.dose}}</span>
           <span v-if="card.status" class="chip health-timeline-status" :class="card.status.chip">{{ card.status.label }}</span>
@@ -56,7 +65,14 @@ const uploadTime=computed(()=>{
           <small v-for="detail in date.details" :key="detail" class="health-timeline-date-detail">{{ detail }}</small>
         </span>
       </span>
-      <strong class="health-timeline-title" :class="{'health-timeline-title--vaccination':entry.kind==='vaccination'}"><span class="health-timeline-title-text">{{ card.title }}</span></strong>
+      <strong v-if="!card.metrics.length" class="health-timeline-title" :class="{'health-timeline-title--vaccination':entry.kind==='vaccination'}"><span class="health-timeline-title-text">{{ card.title }}</span></strong>
+      <span v-if="card.metrics.length" class="health-timeline-metrics">
+        <span v-for="(metric, index) in card.metrics" :key="`${metric.label}-${index}`" class="health-timeline-metric">
+          <strong>{{ metric.value }}</strong>
+          <small>{{ [metric.label, metric.unit].filter(Boolean).join(' · ') }}</small>
+        </span>
+        <small v-if="card.metricMore" class="health-timeline-metric-more">等 {{ card.metricMore }} 项</small>
+      </span>
       <span v-if="entry.duplicateHint" class="health-timeline-duplicate"><span class="chip chip--amber" title="打开报告查看已有报告及匹配依据">{{entry.duplicateHint==='high'?'高度重复':'疑似重复'}}</span></span>
       <span v-if="card.institution || card.summaryNote" class="health-timeline-summary">
         <span v-if="card.institution" class="health-timeline-institution">{{ card.institution }}</span>
@@ -99,13 +115,14 @@ const uploadTime=computed(()=>{
 @media (prefers-reduced-motion: reduce) { .health-timeline-card { transition: none; } }
 .health-timeline-card[data-category="symptom"] { --timeline-type: var(--amber); }
 .health-timeline-card:is([data-category="report"], [data-category="imaging"]) { --timeline-type: var(--info); }
+.health-timeline-card[data-category="monitoring"] { --timeline-type: color-mix(in srgb, var(--info) 55%, var(--brand-strong)); }
 .health-timeline-card[data-category="medication"] { --timeline-type: color-mix(in srgb, var(--info) 68%, var(--danger)); }
 .health-timeline-card[data-category="vaccination"] { --timeline-type: var(--brand-strong); }
 .health-timeline-heading { display: flex; align-items: center; justify-content: flex-start; flex-wrap: nowrap; gap: 8px; }
 .health-timeline-heading .health-timeline-labels { flex-wrap: nowrap; flex-shrink: 0; }
 .health-timeline-card[data-kind="vaccination"] .health-timeline-heading { align-items: flex-start; }
 .health-timeline-card[data-kind="vaccination"] .health-timeline-labels { flex-shrink: 1; flex-wrap: wrap; gap: 4px; }
-.health-timeline-date { margin-left: auto; margin-right: calc(0px - var(--timeline-gap)); display: flex; flex-shrink: 0; flex-wrap: nowrap; justify-content: flex-end; gap: 4px; min-width: 0; max-width: 100%; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.health-timeline-date { margin-left: auto; display: flex; flex-shrink: 0; flex-wrap: nowrap; justify-content: flex-end; gap: 4px; min-width: 0; max-width: 100%; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .health-timeline-date-main { color: var(--muted); font-size: 12px; line-height: 18px; }
 .health-timeline-date-detail { color: var(--muted); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
 .health-timeline-upload-time { color:var(--ink-2);font-size:12px;line-height:18px; }
@@ -126,6 +143,11 @@ const uploadTime=computed(()=>{
 .health-timeline-summary { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 20px; }
 .health-timeline-institution { color: var(--ink-2); font-size: 12px; font-weight: 400; line-height: 20px; min-width: 0; }
 .health-timeline-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; line-height: 18px; }
+.health-timeline-metrics { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 18px; min-width: 0; }
+.health-timeline-metric { display: grid; gap: 1px; min-width: 0; }
+.health-timeline-metric strong { font-size: 16px; font-weight: 600; line-height: 22px; font-variant-numeric: tabular-nums; color: var(--ink); }
+.health-timeline-metric small, .health-timeline-metric-more { color: var(--muted); font-size: 12px; line-height: 16px; }
+.health-timeline-channel { flex-shrink: 0; color: var(--ink-2); font-size: 12px; font-weight: 400; padding: 0 6px; border-radius: 5px; line-height: 18px; }
 .health-timeline-description {
   color: var(--ink-2);
   font-size: 12px;

@@ -79,8 +79,10 @@ test('duplicate report merge carries event, reminder and confirmed medication re
 }));
 
 test('event dates reject calendar rollover and planned future occurrences', () => fixture(() => {
-  for (const date of ['2025-02-29', '2024-02-30T10:00', '2025-01-01T24:00', '2025-04-31T12:00Z']) status(() => dateInput(date, '日期'), 400);
+  for (const date of ['2025-02-29', '2024-02-30T10:00', '2025-01-01T24:00', '2025-04-31T12:00Z', '2026/01/01', '2026-01-01 24:00']) status(() => dateInput(date, '日期'), 400);
   assert.equal(dateInput('2024-02-29T23:59:59+08:00', '日期'), '2024-02-29T23:59:59+08:00');
+  assert.equal(dateInput('2024-02-29 23:59:59', '日期'), '2024-02-29 23:59:59');
+  assert.equal(dateInput('2024-02-29 23:59', '日期'), '2024-02-29 23:59');
   status(() => createHealthEvent(manager, { memberId: 'member', eventType: 'follow_up', startedAt: '2999-01-01' }), 400);
 }));
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch, type Directive } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import {
   Activity,
   ChartNoAxesCombined,
@@ -25,7 +25,8 @@ import ImageViewer, { type ImageViewerPage } from "../components/ImageViewer.vue
 import PullIndicator from "../components/PullIndicator.vue";
 import ReportDetailModal from "../components/ReportDetailModal.vue";
 import { apiUrl, request } from "../utils/api";
-import { matchTrendSearch, trendMeasurementTime, trendTimeSource } from "../utils/trends";
+import { matchTrendSearch, trendMeasurementTime, trendPointSessionId, trendTimeSource } from "../utils/trends";
+import { healthRecordPath } from "../utils/health-record-navigation";
 import { splitMeasurementBound } from '../../../shared/measurement-result';
 import { describeObservationAbnormal, formatReferenceRange } from "../utils/indicator-display";
 import {
@@ -44,6 +45,7 @@ import type { IndicatorNormalizationMetrics, OcrPageDetail, TrendExcludedPoint, 
 
 const app = useAppContext();
 const route = useRoute();
+const router = useRouter();
 const query = ref("");
 const groupFilter = ref('');
 const groupManagerOpen = ref(false);
@@ -688,11 +690,30 @@ function toggleDetails(item: TrendSeries, event: MouseEvent) {
 
 function openReport(reportId: string) {
   closeDetails();
+  const sessionId = reportId.startsWith('measurement:') ? reportId.slice('measurement:'.length) : null;
+  if (sessionId) {
+    void router.push({ path: healthRecordPath('measurement', sessionId), query: { returnTo: route.fullPath } });
+    return;
+  }
   previewReportId.value = reportId;
+}
+
+function openTrendPoint(point: TrendPoint | TrendExcludedPoint) {
+  const sessionId = 'sourceKind' in point ? trendPointSessionId(point as TrendPoint) : null;
+  if (sessionId) {
+    closeDetails();
+    void router.push({ path: healthRecordPath('measurement', sessionId), query: { returnTo: route.fullPath } });
+    return;
+  }
+  openReport(point.reportId);
 }
 
 function openSourcePage(point: TrendPoint | TrendExcludedPoint, item: TrendSeries) {
   closeDetails();
+  if ('sourceKind' in point && (point as TrendPoint).sourceKind === 'measurement') {
+    openTrendPoint(point);
+    return;
+  }
   if (!point.sourcePage) {
     openReport(point.reportId);
     return;
@@ -1024,8 +1045,7 @@ onDeactivated(() => {
                     <div>
                       <span>本次结果</span>
                       <p>
-                        {{ latestNumberText(item) }}{{ item.unit || "" }}
-                        · {{ referenceSummary(latestPoint(item), item.unit) }}
+                        {{ [latestNumberText(item), item.unit].filter(Boolean).join(" ") }} · {{ referenceSummary(latestPoint(item), item.unit) }}
                       </p>
                     </div>
                     <div v-if="item.abnormalContinuityStatus !== 'none'">
@@ -1122,7 +1142,7 @@ onDeactivated(() => {
                 <small v-if="trendPointProcessingHint(point)" class="trend-point-lifecycle">{{ trendPointProcessingHint(point) }}</small>
               </div>
               <button v-if="point.sourcePage" class="trend-source-button" type="button" title="查看指标所在页高清图" @click="openSourcePage(point, item)">原图</button>
-              <button type="button" title="打开来源报告" @click="openReport(point.reportId)">
+              <button type="button" :title="point.sourceKind==='measurement'?'打开测量记录':'打开来源报告'" @click="openTrendPoint(point)">
                 <ChevronRight :size="18" />
               </button>
             </article>

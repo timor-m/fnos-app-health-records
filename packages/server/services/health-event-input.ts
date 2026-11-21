@@ -20,7 +20,7 @@ export function textInput(value: unknown, label: string, maxLength: number, requ
 
 export function dateInput(value: unknown, label: string): string | null {
   if (value === null || value === undefined || value === '') return null;
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})?)?$/.test(value))
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})?)?$/.test(value))
     throw createError({ statusCode: 400, statusMessage: `${label}格式无效` });
   const parsed = Date.parse(value);
   const [year, month, day] = value.slice(0, 10).split('-').map(Number);

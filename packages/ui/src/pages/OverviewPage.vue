@@ -97,7 +97,7 @@ const {pullDistance,refreshing}=usePullRefresh(root,async()=>{if(recordOpen.valu
    </section>
   </div>
   <template v-if="overview">
-   <nav class="overview-types" aria-label="五类健康记录">
+   <nav class="overview-types" aria-label="健康记录分类">
     <component :is="isHealthCategoryDisabled(category)?'button':RouterLink" v-for="category in healthCategoryOrder" :key="category" class="overview-type" :to="isHealthCategoryDisabled(category)?undefined:{path:'/events',query:{category}}" :type="isHealthCategoryDisabled(category)?'button':undefined" :disabled="isHealthCategoryDisabled(category)||undefined" :aria-label="isHealthCategoryDisabled(category)?'影像，暂未开放':undefined" :title="isHealthCategoryDisabled(category)?'影像暂未开放':undefined" :data-category="category">
      <HealthCategoryIcon class="overview-type-image" :category="category" :size="40"/>
      <span class="overview-type-label">{{healthCategoryLabels[category]}}</span>
@@ -120,7 +120,7 @@ const {pullDistance,refreshing}=usePullRefresh(root,async()=>{if(recordOpen.valu
     </div>
    </section>
    <section v-if="overview.recentRecords.length" class="settings-band overview-panel overview-recent-uploads"><header><h3>最近上传</h3><RouterLink to="/events">全部记录</RouterLink></header><div class="overview-panel-body"><HealthTimelineCard v-for="entry in overview.recentRecords" :key="entry.id" :entry="entry" date-label="报告日期" :return-to="entry.category==='vaccination'?route.fullPath:undefined" origin="overview" @activate="activateRecord"/></div></section>
-   <EmptyState v-if="!overview.recordCount" title="还没有健康记录" :description="canManage?'上传资料，或从新增菜单填写症状、用药和接种。':'当前成员暂无健康记录。'"><RouterLink v-if="canManage" class="primary-button" to="/upload">上传资料</RouterLink></EmptyState>
+   <EmptyState v-if="!overview.recordCount" title="还没有健康记录" :description="canManage?'上传资料，或从新增菜单填写症状、测量、用药和接种。':'当前成员暂无健康记录。'"><RouterLink v-if="canManage" class="primary-button" to="/upload">上传资料</RouterLink></EmptyState>
   </template>
   <HealthRecordDetailModal v-if="recordOpen&&dialog" :key="`${app.selectedMemberId.value}:${dialog.kind}:${dialog.recordId}`" :open="true" v-bind="dialog" @close="closeRecord" @updated="load" @open-report="openReport"/>
  </section>
@@ -129,8 +129,39 @@ const {pullDistance,refreshing}=usePullRefresh(root,async()=>{if(recordOpen.valu
 <style scoped>
 
 .overview-page { gap:16px; min-width:0; width:100%; align-content:start; }
-.overview-types { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; }
-.overview-types .overview-type { min-width:0; min-height:104px; display:grid; grid-template-areas:"icon label" "icon count"; grid-template-columns:40px minmax(0,max-content); grid-template-rows:20px auto; justify-content:center; align-items:center; align-content:center; gap:2px 12px; padding:12px 6px; border:1px solid var(--line); border-radius:var(--radius-m); background:var(--surface); }
+.overview-types {
+  --overview-type-gap: 10px;
+  display: flex;
+  align-items: stretch;
+  gap: var(--overview-type-gap);
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  touch-action: pan-x pinch-zoom;
+  scrollbar-width: none;
+}
+.overview-types::-webkit-scrollbar { display: none; }
+.overview-types .overview-type {
+  /* Keep the original five-up density; a sixth category scrolls into view. */
+  flex: 0 0 calc((100% - (4 * var(--overview-type-gap))) / 5);
+  width: calc((100% - (4 * var(--overview-type-gap))) / 5);
+  min-width: calc((100% - (4 * var(--overview-type-gap))) / 5);
+  min-height: 104px;
+  display: grid;
+  grid-template-areas: "icon label" "icon count";
+  grid-template-columns: 40px minmax(0, 1fr);
+  grid-template-rows: 20px auto;
+  justify-content: center;
+  align-items: center;
+  align-content: center;
+  gap: 2px 12px;
+  padding: 12px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  box-sizing: border-box;
+}
 .overview-types button:disabled { opacity: .45; cursor: not-allowed; font: inherit; text-align: inherit; }
 .overview-type-image { grid-area:icon; width:40px; height:40px; object-fit:contain; }
 .overview-type-label { grid-area:label; color:var(--ink-2); font-size:12px; line-height:20px; }
@@ -144,7 +175,6 @@ const {pullDistance,refreshing}=usePullRefresh(root,async()=>{if(recordOpen.valu
 .overview-panel > header > a { display:inline-flex; align-items:center; justify-content:center; min-height:32px; flex-shrink:0; padding:4px 6px; margin-right:-6px; border-radius:6px; background:transparent; color:var(--brand-strong); font-size:12px; font-weight:500; }
 .overview-panel-body { padding:12px; display:grid; gap:8px; min-width:0; }
 .overview-pending-list { display:grid; gap:8px; }.overview-pending-list :deep(.health-timeline-footer) { display:none; }.overview-pending-list :deep(.health-timeline-card) { padding:10px; }.overview-pending-list :deep(.health-timeline-meta) { display:none; }
-.overview-pending-list :deep(.health-timeline-date) { margin-right:0; }
 .overview-processing { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
 .overview-processing a { display:grid; gap:4px; min-width:0; padding:10px 8px; border-radius:8px; background:var(--fill-2); }
 .overview-processing span { color:var(--muted); font-size:12px; }.overview-processing strong { color:var(--ink); font-size:17px; font-weight:500; }.overview-processing small { color:var(--muted); font-size:12px; font-weight:400; }
@@ -201,8 +231,20 @@ const {pullDistance,refreshing}=usePullRefresh(root,async()=>{if(recordOpen.valu
  .overview-processing a { min-height:44px; padding:4px 8px; gap:0; }
  .overview-processing span { line-height:16px; }
  .overview-processing strong { font-size:16px; line-height:20px; }
- .overview-types { gap:6px; }
- .overview-types .overview-type { grid-template-areas:"icon" "label" "count"; grid-template-columns:minmax(0,1fr); grid-template-rows:26px 14px minmax(20px,auto); justify-items:center; gap:1px; min-height:70px; padding:3px; }
+ .overview-types {
+   --overview-type-gap: 6px;
+   margin-inline: calc(-1 * var(--page-content-inset, 8px));
+   padding-inline: var(--page-content-inset, 8px);
+ }
+ .overview-types .overview-type {
+   grid-template-areas: "icon" "label" "count";
+   grid-template-columns: minmax(0, 1fr);
+   grid-template-rows: 26px 14px minmax(20px, auto);
+   justify-items: center;
+   gap: 1px;
+   min-height: 70px;
+   padding: 3px;
+ }
  .overview-type-image { width:26px; height:26px; }
  .overview-type-label { font-size:12px; line-height:14px; white-space:nowrap; }
  .overview-type-count { font-size:16px; line-height:20px; text-align:center; }

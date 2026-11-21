@@ -61,13 +61,20 @@ export function listHealthTrash(user: RequestUser, memberId: string, input: { cu
       COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ',deleted_at),''),'intake:'||id
     FROM medication_intakes WHERE member_id=? AND deleted_at IS NOT NULL
     UNION ALL
+    SELECT id,'measurement',member_id,
+      COALESCE(template_id,channel,'measurement'),recorded_at,NULL,
+      COALESCE(NULLIF(TRIM(COALESCE(device_vendor,'')||' '||COALESCE(device_model,'')),''),channel),
+      strftime('%Y-%m-%dT%H:%M:%fZ',deleted_at),strftime('%Y-%m-%dT%H:%M:%fZ',purge_after),revision,
+      COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ',deleted_at),''),'measurement:'||id
+    FROM measurement_sessions WHERE member_id=? AND deleted_at IS NOT NULL
+    UNION ALL
     SELECT process_id,'process',member_id,title,started_at,NULL,NULL,
       strftime('%Y-%m-%dT%H:%M:%fZ',deleted_at),strftime('%Y-%m-%dT%H:%M:%fZ',purge_after),revision,
       COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ',deleted_at),''),'process:'||process_id
     FROM health_record_process_trash WHERE member_id=? AND deleted_at IS NOT NULL
   ) SELECT * FROM entries ${cursor ? 'WHERE sortAt<? OR (sortAt=? AND sortKey<?)' : ''}
     ORDER BY sortAt DESC,sortKey DESC LIMIT ?`;
-  const params: Array<string | number> = [memberId, memberId, memberId, memberId, memberId, memberId];
+  const params: Array<string | number> = [memberId, memberId, memberId, memberId, memberId, memberId, memberId];
   if (cursor) params.push(cursor.at, cursor.at, cursor.key);
   params.push(size + 1);
   const rows = getDatabase().prepare(sql).all(...params) as Array<HealthTrashEntry & { sortAt: string; sortKey: string }>;
@@ -154,9 +161,9 @@ export function purgeExpiredVaccinations(limit = 50) {
   return { checked: rows.length, deleted, failed };
 }
 
-export const standaloneTrashKinds = ['symptom','medication','intake'] as const;
+export const standaloneTrashKinds = ['symptom','medication','intake','measurement'] as const;
 type StandaloneKind = typeof standaloneTrashKinds[number];
-const standaloneTables: Record<StandaloneKind,string> = {symptom:'health_process_symptoms',medication:'medication_courses',intake:'medication_intakes'};
+const standaloneTables: Record<StandaloneKind,string> = {symptom:'health_process_symptoms',medication:'medication_courses',intake:'medication_intakes',measurement:'measurement_sessions'};
 function standalone(kind:StandaloneKind,id:string) {
   const db=getDatabase();const table=standaloneTables[kind];
   if(!table)throw createError({statusCode:400,statusMessage:'记录类型无效'});
@@ -171,6 +178,7 @@ function purgeStandalone(kind:StandaloneKind,id:string,actor:string|null) {
       db.prepare(`DELETE FROM health_process_symptom_revisions WHERE (target_type='symptom' AND target_id=?) OR (target_type='update' AND target_id IN (SELECT id FROM health_process_symptom_updates WHERE symptom_id=?))`).run(id,id);
     }
     if(kind==='medication')db.prepare('DELETE FROM medication_intakes WHERE course_id=? AND deleted_at IS NULL').run(id);
+    if(kind==='measurement')db.prepare('DELETE FROM measurement_observations WHERE session_id=?').run(id);
     db.prepare(`DELETE FROM ${standaloneTables[kind]} WHERE id=?`).run(id);
     db.prepare(`INSERT INTO audit_logs(id,actor_user_id,action,target_type,target_id,detail_json) VALUES(?,?,?,?,?,'{}')`).run(createId('audit'),actor,`${kind}.purge`,kind,id);
     return {id,deleted:true,pendingFileCount:0};
@@ -192,6 +200,13 @@ export function mutateStandaloneTrash(user:RequestUser,kind:StandaloneKind,id:st
     }
     const deletedAt=restoring?null:new Date().toISOString();const purgeAfter=deletedAt?new Date(Date.parse(deletedAt)+30*86400000).toISOString():null;
     db.prepare(`UPDATE ${standaloneTables[kind]} SET deleted_at=?,purge_after=?,${versionKey}=${versionKey}+1,updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(deletedAt,purgeAfter,id);
+    if(kind==='measurement'){
+      const memberId=String(row.member_id);
+      if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='trend_snapshot_members'").get()){
+        db.prepare(`INSERT INTO trend_snapshot_members(member_id, desired_revision, invalidated, full_rebuild) VALUES(?,1,1,1)
+          ON CONFLICT(member_id) DO UPDATE SET desired_revision=desired_revision+1,invalidated=1,full_rebuild=1,retry_at=0`).run(memberId);
+      }
+    }
     db.prepare(`INSERT INTO audit_logs(id,actor_user_id,action,target_type,target_id,detail_json) VALUES(?,?,?,?,?,'{}')`).run(createId('audit'),user.id,`${kind}.${restoring?'restore':'trash'}`,kind,id);
     return {id,status:restoring?'active':'trashed'};
   });

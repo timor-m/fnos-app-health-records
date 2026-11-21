@@ -58,8 +58,8 @@ const selectedIntakes=computed(()=>{
 const activeCourses=computed(()=>selectedCourses.value.filter(course=>course.status!=='stopped'));
 const stoppedCourses=computed(()=>selectedCourses.value.filter(course=>course.status==='stopped'));
 
-const visibleHistory=computed(()=>history.value.filter(item=>(!props.reportId || item.reportId===props.reportId) && (!search.value.trim()
-  || `${item.medicationName} ${item.specification || ''} ${item.reportTitle}`.toLocaleLowerCase().includes(search.value.trim().toLocaleLowerCase()))));
+function historyQuery(item:HistoricalMedication){return [item.medicationName,item.specification,item.reportTitle,...(item.formula?.ingredients.map(ingredient=>ingredient.name)??[])].filter(Boolean).join(' ').toLocaleLowerCase();}
+const visibleHistory=computed(()=>history.value.filter(item=>(!props.reportId || item.reportId===props.reportId) && (!search.value.trim() || historyQuery(item).includes(search.value.trim().toLocaleLowerCase()))));
 function usage(item:Partial<MedicationFields>){return [item.specification,item.dosageForm,[item.dose,item.doseUnit].filter(Boolean).join(' '),formatMedicationFrequency(item.frequency),item.route].filter(Boolean).join(' · ');}
 function displayTime(value:string){return formatMedicationDate(value);}
 function currentScope(){return JSON.stringify([app.selectedMemberId.value,props.courseId,props.intakeId,props.reportId,props.add,props.entryMode,props.entrySource]);}
@@ -218,13 +218,13 @@ onBeforeUnmount(()=>{alive=false;sequence++;});
           <button v-if="canManage" type="button" class="soft-action-button" @click="openEditor({mode:'course'})">手动添加用药</button>
         </div>
         <article v-for="item in visibleHistory" :key="item.medicationId" class="medication-card medication-prescription">
-          <header><strong>{{ item.medicationName }}</strong><span v-if="item.confirmedCourseIds.length" class="medication-status">已有确认记录</span></header>
-          <p>{{ usage(item) || '原报告未注明详细用法' }}</p><p v-if="item.instructions">{{ item.instructions }}</p>
+          <header><strong>{{ item.medicationName }}<template v-if="item.formula"> · {{ item.formula.ingredients.length }} 味</template></strong><span v-if="item.confirmedCourseIds.length" class="medication-status">已有确认记录</span></header>
+          <p v-if="usage(item)">{{ usage(item) }}</p><p v-else-if="!item.instructions">原报告未注明详细用法</p><p v-if="item.instructions">{{ item.instructions }}</p>
           <button class="medication-source-link" type="button" @click="sourceReportId=item.reportId">{{ item.reportTitle }} · {{ item.reportIssuedAt ? displayTime(item.reportIssuedAt) : '日期未注明' }}</button>
           <div class="medication-actions">
             <button v-for="id in item.confirmedCourseIds" :key="id" type="button" class="soft-action-button" @click="focusCourse(id)">查看已确认用药{{ item.confirmedCourseIds.length>1 ? ` · ${displayTime(data.courses.find(course=>course.id===id)?.startedAt || '')}` : '' }}</button>
-            <button v-if="canManage && !item.confirmedCourseIds.length" type="button" class="primary-button" @click="openEditor({mode:'course',source:item})">确认开始用药</button>
-            <button v-if="canManage && item.confirmedCourseIds.length" type="button" class="soft-action-button medication-repeat" @click="openEditor({mode:'course',source:item})">再次开始用药</button>
+            <button v-if="canManage && !item.confirmedCourseIds.length" type="button" class="primary-button" @click="openEditor({mode:'course',source:item})">{{ item.formula ? '确认整方使用' : '确认开始用药' }}</button>
+            <button v-if="canManage && item.confirmedCourseIds.length" type="button" class="soft-action-button medication-repeat" @click="openEditor({mode:'course',source:item})">{{ item.formula ? '再次确认整方使用' : '再次开始用药' }}</button>
           </div>
         </article>
       </section>

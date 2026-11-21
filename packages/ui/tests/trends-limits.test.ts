@@ -1,6 +1,6 @@
 import {snapshotOverview,snapshotParts,autoChartViewport} from './helpers/trend-snapshot';
 import {afterEach,beforeEach, expect, it, vi} from 'vitest';
-import {flushPromises, shallowMount} from '@vue/test-utils';
+import {flushPromises, mount, shallowMount} from '@vue/test-utils';
 import {ref} from 'vue';
 import TrendsPage from '../src/pages/TrendsPage.vue';
 import {splitMeasurementBound} from '../../shared/measurement-result';
@@ -9,7 +9,7 @@ const {request, context} = vi.hoisted(() => ({request: vi.fn(), context: {app: n
 vi.mock('../src/utils/api', async original => ({...await original<typeof import('../src/utils/api')>(),request, apiUrl: (path: string) => path}));
 vi.mock('../src/composables/useAppContext', () => ({useAppContext: () => context.app}));
 vi.mock('../src/composables/useRefreshOnActivate', () => ({useRefreshOnActivate: () => {}}));
-vi.mock('vue-router', () => ({useRoute: () => ({path: '/trends', query: {}})}));
+vi.mock('vue-router', () => ({useRoute: () => ({path: '/trends', query: {}}), useRouter: () => ({push: vi.fn(), replace: vi.fn()})}));
 
 beforeEach(() => {
   localStorage.clear();autoChartViewport();
@@ -85,6 +85,22 @@ it.each(['<0.3', '<=0.3', '>0.3', '>=0.3'])('preserves %s even in a legacy paylo
 
 afterEach(()=>{vi.unstubAllGlobals();});
 
+
+it('separates the latest result from its unit in the detail popover', async () => {
+  const item = series(['2', '3']);
+  item.latestValue = 3;
+  request.mockImplementation(async (path: string, init?: RequestInit) => path === 'trends/snapshot/charts' ? snapshotParts([item], init) : path.startsWith('trends/snapshot?') ? snapshotOverview([item]) : []);
+  const wrapper = mount(TrendsPage, {attachTo: document.body, global: {stubs: {RouterLink: true, TrendGroupFilter: true, TrendGroupManager: true, ReportDetailModal: true, ImageViewer: true}}});
+  try {
+    await flushPromises(); await new Promise(resolve => setTimeout(resolve, 45)); await flushPromises();
+    vi.stubGlobal('matchMedia', () => ({matches: false, addEventListener() {}, removeEventListener() {}}));
+    await wrapper.get('.trend-detail-toggle').trigger('click');
+    await flushPromises();
+    const result = [...document.querySelectorAll('.trend-normalization-popover p')].map(node => node.textContent || '').find(text => text.includes('U/L'));
+    expect(result).toContain('3 U/L');
+    expect(result).not.toContain('3U/L');
+  } finally { wrapper.unmount(); }
+});
 
 it('keeps the first history point within the initial chart view for dense histories', async () => {
   const item=series(Array.from({length:100},(_,i)=>String(2+i%5)));

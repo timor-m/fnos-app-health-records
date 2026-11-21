@@ -161,9 +161,9 @@ it('uses the live overview total in the topbar and leaves other page subtitles i
   await wrapper.vm.$nextTick();
   expect(wrapper.get('.topbar-subtitle').text()).toBe('共 0 条记录');
   mocks.route.path = mocks.route.fullPath = '/events';
-  mocks.route.meta = { title: '记录', subtitle: '报告、影像、症状、用药与接种' };
+  mocks.route.meta = { title: '记录', subtitle: '报告、影像、症状、监测、用药与接种' };
   await wrapper.vm.$nextTick();
-  expect(wrapper.get('.topbar-subtitle').text()).toBe('报告、影像、症状、用药与接种');
+  expect(wrapper.get('.topbar-subtitle').text()).toBe('报告、影像、症状、监测、用药与接种');
   wrapper.unmount();
 });
 

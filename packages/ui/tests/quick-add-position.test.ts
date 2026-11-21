@@ -1,6 +1,11 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
+import { createMemoryHistory, createRouter } from 'vue-router';
 import QuickAddMenu from '../src/components/QuickAddMenu.vue';
+
+function menuRouter() {
+  return createRouter({ history: createMemoryHistory(), routes: [{ path: '/:pathMatch(.*)*', component: { template: '<div/>' } }] });
+}
 
 let wrapper: ReturnType<typeof mount>;
 const panel = () => document.querySelector<HTMLElement>('.quick-add-panel--inline')!;
@@ -10,7 +15,7 @@ function render(rect: DOMRect, width = 390, height = 640) {
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(420);
   wrapper = mount(QuickAddMenu, { attachTo: document.body,
     props: { placement: 'inline', canManage: true, label: '补充记录', routeKey: '/health-processes/process', processId: 'process', memberId: 'member' },
-    global: { stubs: { RouterLink: { props: ['to'], template: '<a href="#"><slot /></a>' } } },
+    global: { plugins: [menuRouter()], stubs: { RouterLink: { props: ['to'], template: '<a href="#"><slot /></a>' } } },
   });
   return vi.spyOn(wrapper.get('.quick-add-trigger').element, 'getBoundingClientRect').mockReturnValue(rect);
 }
@@ -34,7 +39,7 @@ it('uses space below a high trigger and limits a tall menu to a scrollable visib
   expect(number(panel().style.top)).toBeGreaterThanOrEqual(56);
   expect(number(panel().style.maxHeight)).toBeLessThan(420);
   expect(number(panel().style.top) + number(panel().style.maxHeight)).toBeLessThanOrEqual(288);
-  expect(panel().querySelectorAll('[role=menuitem]')).toHaveLength(6);
+  expect(panel().querySelectorAll('[role=menuitem]')).toHaveLength(7);
 });
 
 it('repositions when the viewport changes and stops listening after closing', async () => {

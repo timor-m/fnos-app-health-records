@@ -7,6 +7,8 @@ import { assertMemberAccess } from './member.service';
 import { reportCategory, isHealthCategory, type HealthDocument, type HealthFeedEntry, type HealthFeedPage } from '../../shared/health-categories';
 import { listMedications, listMedicationDocuments } from './medication.service';
 import { listVaccinations } from './vaccination.service';
+import { feedDescriptionForSession, feedMetricsForSession, feedTitleForSession, listMeasurements } from './measurement.service';
+import { measurementChannelLabels, measurementSearchText } from '../../shared/measurements';
 import { readProcessSymptoms } from './symptom-episode.service';
 import { processMembership, processRecordKey } from './health-record-process.service';
 
@@ -35,6 +37,10 @@ export function healthRecordSnapshot(user:RequestUser,input:Input) {
  const links=db.prepare(`SELECT x.resource_id AS reportId,e.id AS eventId,e.title,e.started_at AS date
   FROM health_event_resources x JOIN health_events e ON e.id=x.event_id AND e.deleted_at IS NULL
   WHERE x.resource_type='report' AND e.member_id=? ORDER BY x.created_at,x.id`).all(memberId) as Array<{reportId:string;eventId:string;title:string|null;date:string|null}>;
+ function symptomCardText(symptom:{bodyArea?:string|null;currentSeverity:number|null;description:string|null}){
+  const facts=[symptom.bodyArea?.trim(),symptom.currentSeverity==null?'':`程度 ${symptom.currentSeverity}/10`].filter(Boolean).join(' · ');
+  return [facts,symptom.description?.trim()].filter(Boolean).join(' · ')||null;
+ }
  const groups=new Map<string,HealthFeedEntry>();
  for(const doc of documents){
   const category=reportCategory(doc.reportType);if(category==='medication')continue;
@@ -53,9 +59,11 @@ export function healthRecordSnapshot(user:RequestUser,input:Input) {
   const valid=symptom.updates.filter(update=>!update.deletedAt);
   const date=valid.map(update=>update.recordedAt).concat(symptom.startedAt||'').filter(Boolean).sort((a,b)=>Date.parse(a)-Date.parse(b)).at(-1)||null;
   const item=base('symptom',symptom.id,memberId,'symptom',symptom.name,date,'symptom');
-  Object.assign(item,{episodeId:process.id,symptomId:symptom.id,processIds:[process.id],description:symptom.description,status:symptom.status});entries.push(item);
+  Object.assign(item,{episodeId:process.id,symptomId:symptom.id,processIds:[process.id],description:symptomCardText(symptom),status:symptom.status});entries.push(item);
  }
  const overview=listMedications(user,{memberId});const medicationDocuments=listMedicationDocuments(user,{memberId});
+ const ingredientSearch=new Map<string,string>();
+ for(const doc of medicationDocuments)if(doc.ingredientNames?.length)ingredientSearch.set(doc.id,doc.ingredientNames.join(' '));
  const documentMap=new Map(medicationDocuments.map(doc=>[doc.id,doc]));
  const documentEntries=new Map<string,HealthFeedEntry>();
  for(const doc of medicationDocuments){const item=base('medication_document',doc.id,memberId,'medication',doc.title,doc.date,'prescription');Object.assign(item,{documents:documents.filter(value=>value.id===doc.id),description:doc.medicationNames.join(' · '),medicationCount:doc.medicationCount,...(doc.formulaCount?{formulaCount:doc.formulaCount}:{}),confirmedCount:0,activeCount:0,status:doc.status});documentEntries.set(doc.id,item);}
@@ -74,6 +82,17 @@ export function healthRecordSnapshot(user:RequestUser,input:Input) {
  }
  const vaccinations=listVaccinations(user,memberId);const confirmedSources=new Set(db.prepare('SELECT DISTINCT source_report_id AS id FROM health_vaccinations WHERE member_id=? AND source_report_id IS NOT NULL').all(memberId).map(row=>String(row.id)));
  for(const vaccination of vaccinations){const item=base('vaccination',vaccination.id,memberId,'vaccination',vaccination.vaccineName,vaccination.administeredAt,'administered');Object.assign(item,{institution:vaccination.organizationName,doseNumber:vaccination.doseNumber,note:vaccination.note,description:[vaccination.doseNumber,vaccination.note].filter(Boolean).join(' · '),documents:documents.filter(doc=>doc.id===vaccination.sourceReportId)});entries.push(item);}
+ for(const session of listMeasurements(user,memberId)){
+  const item=base('measurement',session.id,memberId,'monitoring',feedTitleForSession(session),session.recordedAt,session.channel);
+  Object.assign(item,{
+    description:[feedDescriptionForSession(session), measurementSearchText(session)].filter(Boolean).join(' ')||null,
+    metrics:feedMetricsForSession(session),
+    status:session.channel==='manual'?null:session.channel,
+    institution:[session.deviceVendor,session.deviceModel].filter(Boolean).join(' ')||measurementChannelLabels[session.channel],
+    note:session.note,
+  });
+  entries.push(item);
+ }
  // Cards and details share the same direct, grouped and inherited process definitions.
  const memberships=processMembership(user,memberId);
  for(const item of new Set([...entries,...medicationCourses]))item.processIds=[...new Set([...(memberships.get(processRecordKey({kind:item.kind,id:item.resourceId}))||[]),...item.documents.flatMap(doc=>memberships.get(processRecordKey({kind:doc.reportType==='prescription'?'medication_document':'report',id:doc.id}))||[])])];
@@ -81,7 +100,7 @@ export function healthRecordSnapshot(user:RequestUser,input:Input) {
  const sorted=entries.filter(item=>!(item.kind==='report' && item.category==='vaccination' && confirmedSources.has(item.resourceId)))
   .filter(item=>(!input.category||item.category===input.category)&&(!input.subtype||(item.category==='vaccination'&&['vaccination','administered'].includes(input.subtype))||(input.category==='medication'&&input.subtype==='record' ? item.kind==='medication'||item.kind==='intake' : item.subtype===input.subtype||item.documents.some(doc=>doc.reportType===input.subtype))))
   .filter(item=>!input.status||statusMatches(item.status,input.status)||item.documents.some(doc=>statusMatches(doc.status,input.status!)))
-  .filter(item=>!query||[item.title,item.date,localDate(item.date),item.description,item.institution,...item.documents.flatMap(doc=>[doc.title,doc.reportIssuedAt,localDate(doc.reportIssuedAt),doc.hospitalName,doc.department])].filter(Boolean).join(' ').toLocaleLowerCase().includes(query)).sort(sort);
+  .filter(item=>!query||[item.title,item.date,localDate(item.date),item.description,item.institution,item.kind==='medication_document'?ingredientSearch.get(item.resourceId):'',...item.documents.flatMap(doc=>[doc.title,doc.reportIssuedAt,localDate(doc.reportIssuedAt),doc.hospitalName,doc.department])].filter(Boolean).join(' ').toLocaleLowerCase().includes(query)).sort(sort);
  return {entries:sorted,documents,medicationCourses:medicationCourses.sort(sort)};
 }
 export function healthRecordEntries(user:RequestUser,input:Input):HealthFeedEntry[]{return healthRecordSnapshot(user,input).entries;}

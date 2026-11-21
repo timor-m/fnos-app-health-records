@@ -155,6 +155,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('scroll', positionError, true);
 });
 const inputPlaceholder = computed(() => props.showTime ? 'YYYY-MM-DD HH:mm' : 'YYYY-MM-DD');
+const pickerTitle = computed(() => props.label || (props.showTime ? '请选择时间' : '请选择日期'));
+const pickerTriggerLabel = computed(() => '选择' + (props.ariaLabel || props.label || (props.showTime ? '日期和时间' : '日期')));
 watch(() => [props.modelValue, props.showTime] as const, () => {
   inputText.value = (props.modelValue || '').replace('T', ' ').slice(0, props.showTime ? 16 : 10);
   inputError.value = '';
@@ -480,7 +482,7 @@ onBeforeUnmount(() => {
         autocomplete="off" :title="inputPlaceholder" @beforeinput="beforeTextInput" @input="onTextInput" @compositionstart="composingInput = true" @compositionend="finishComposition" @blur="finishInput"
         @focus="showInputError = true" @mouseenter="showInputError = true" @keydown.esc="showInputError = false" @keydown.enter.prevent="finishInput" @keydown.down.alt.prevent="openPicker" />
       <button type="button" class="datetime-picker-trigger" :disabled="disabled"
-        :aria-label="'选择' + (ariaLabel || label || '日期')" :aria-expanded="open" aria-haspopup="dialog" @click="openPicker">
+        :aria-label="pickerTriggerLabel" :aria-expanded="open" aria-haspopup="dialog" @click="openPicker">
         <CalendarDays :size="17" aria-hidden="true" />
       </button>
     </div>
@@ -488,12 +490,12 @@ onBeforeUnmount(() => {
       <div v-if="errorVisible" :id="errorId" ref="errorTooltip" class="datetime-input-error" :style="errorStyle" role="tooltip" aria-live="polite">{{ inputError }}</div>
       <!-- click 关闭遮罩避免透穿；touchstart.prevent 阻止触屏合成 click 落到底层元素 -->
       <div v-if="open" ref="layer" class="datetime-picker-layer" @click.self="cancel" @touchstart.self.prevent="cancel">
-        <div ref="panel" class="datetime-picker-panel" :style="panelStyle" role="dialog" aria-modal="true" :aria-label="label || '请选择时间'">
+        <div ref="panel" class="datetime-picker-panel" :style="panelStyle" role="dialog" aria-modal="true" :aria-label="pickerTitle">
             <div class="datetime-picker-header">
               <button type="button" class="datetime-picker-cancel" @click="cancel">
                 <X :size="18" />
               </button>
-              <span class="datetime-picker-title">{{ label || "请选择时间" }}</span>
+              <span class="datetime-picker-title">{{ pickerTitle }}</span>
               <button type="button" class="datetime-picker-confirm" @click="confirm">
                 <Check :size="18" />
               </button>

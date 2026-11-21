@@ -9,6 +9,7 @@ import HealthRecordDetailPage from "./pages/HealthRecordDetailPage.vue";
 import HealthProcessesPage from "./pages/HealthProcessesPage.vue";
 import HealthProcessDetailPage from "./pages/HealthProcessDetailPage.vue";
 import NewSymptomPage from "./pages/NewSymptomPage.vue";
+import NewMeasurementPage from "./pages/NewMeasurementPage.vue";
 import TrendsPage from "./pages/TrendsPage.vue";
 import MorphologyTrendsPage from "./pages/MorphologyTrendsPage.vue";
 import UploadPage from "./pages/UploadPage.vue";
@@ -40,12 +41,13 @@ const router = createRouter({
   routes: [
     { path: "/", redirect: "/overview" },
     { path: "/overview", component: OverviewPage, meta: { title: "概览" } },
-    { path: "/events", component: HealthEventsPage, meta: { title: "记录", subtitle: "报告、影像、症状、用药与接种" } },
+    { path: "/events", component: HealthEventsPage, meta: { title: "记录", subtitle: "报告、影像、症状、监测、用药与接种" } },
     { path: "/events/detail/:kind/:id", component: HealthRecordDetailPage, meta: { title: "记录详情" } },
     { path: "/health-processes", component: HealthProcessesPage, meta: { title: "健康历程" } },
     { path: "/health-processes/:id", component: HealthProcessDetailPage, meta: { title: "健康历程" } },
     { path: "/add/vaccination", component: NewVaccinationPage, meta: { title: "填写接种" } },
     { path: "/add/symptom", component: NewSymptomPage, meta: { title: "记录症状" } },
+    { path: "/add/measurement", component: NewMeasurementPage, meta: { title: "记录测量" } },
     { path: "/records", component: RecordsPage, meta: { title: "档案" } },
     { path: "/trends", component: TrendsPage, meta: { title: "趋势" } },
     { path: "/trends/morphology", component: MorphologyTrendsPage, meta: { title: "形态变化", subtitle: "追踪历次形态变化" } },

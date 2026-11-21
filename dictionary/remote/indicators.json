@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 28,
+  "revision": 29,
   "indicators": [
     {
       "canonicalKey": "lipid_ldl_hdl_ratio",
@@ -4153,35 +4153,6 @@
         "彩超"
       ],
       "explanation": "超声心动图测量的左心室射血分数，不同测量方法结果略有差异，以原报告为准。"
-    },
-    {
-      "canonicalKey": "vital_spo2",
-      "displayName": "血氧饱和度",
-      "categoryKey": "general_measurement",
-      "order": 51,
-      "kind": "quantitative",
-      "valueType": "numeric",
-      "specimen": "other",
-      "defaultUnit": "%",
-      "unitDimension": "ratio",
-      "aliases": [
-        "血氧",
-        "SpO2",
-        "指脉氧",
-        "指氧",
-        "脉搏血氧饱和度",
-        "指脉氧饱和度",
-        "血氧饱和度"
-      ],
-      "allowedUnits": [
-        "%"
-      ],
-      "sectionHints": [
-        "一般检查",
-        "生命体征",
-        "体检"
-      ],
-      "explanation": "指脉氧（脉搏血氧仪）测量的血氧饱和度，与血气分析中的氧饱和度是不同测量方法，不合并趋势。"
     },
     {
       "canonicalKey": "laboratory_vitamin_d_25oh",

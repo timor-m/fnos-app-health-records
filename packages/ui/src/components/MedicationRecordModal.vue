@@ -20,7 +20,7 @@ const lastEntry=ref('');
 const recordTitle=ref('');
 // Keep the previous dialog mounted to preserve searches and filters, but show only the active step.
 const shellVisible=computed(()=>visible.value&&!childEntry.value);
-const title=computed(()=>props.entryMode==='report'?'从报告带入':props.entryMode==='intake'?'记一次已服药':props.entryMode==='course'?(props.entrySource?'确认开始用药':'手动添加用药'):(props.intakeId || props.courseId) ? recordTitle.value || '用药记录' : props.reportId ? '用药单' : props.add ? '记录用药' : '相关用药');
+const title=computed(()=>props.entryMode==='report'?'从报告带入':props.entryMode==='intake'?'记一次已服药':props.entryMode==='course'?(props.entrySource?(props.entrySource.formula?'确认整方使用':'确认开始用药'):'手动添加用药'):(props.intakeId || props.courseId) ? recordTitle.value || '用药记录' : props.reportId ? '用药单' : props.add ? '记录用药' : '相关用药');
 const scope=computed(()=>JSON.stringify([app.selectedMemberId.value,props.courseId,props.intakeId,props.reportId,props.add,props.entryMode,props.entrySource,props.initialRelatedRecords,props.processId]));
 const panel=ref<HTMLElement|null>(null);const backdrop=ref<HTMLElement|null>(null);
 let returnFocus:HTMLElement|null=null;

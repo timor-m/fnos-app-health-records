@@ -17,13 +17,14 @@ import { aiProviderHasRequiredApiKey } from './ai-provider';
 import { runHealthWorkflowRequest } from './health-workflow-request.service';
 import type { ProcessRecordRemoval } from '../../shared/health-process';
 import { specificProcessTitle } from './health-process-title';
+import { formatMeasurementSessionDescription, formatMeasurementSessionTitle } from '../../shared/measurements';
 
 // Reclassifying a document must never disconnect its existing process.
 const storageRef = (ref: ProcessRecordRef): ProcessRecordRef => ({kind:ref.kind==='medication_document'?'report':ref.kind,id:ref.id});
 export const processRecordKey = (ref: ProcessRecordRef) => `${storageRef(ref).kind}:${ref.id}`;
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = (message: string, statusCode = 400): never => { throw createError({ statusCode, statusMessage: message }); };
-const kinds = ['report', 'medication_document', 'symptom', 'medication', 'intake', 'vaccination'];
+const kinds = ['report', 'medication_document', 'symptom', 'medication', 'intake', 'vaccination', 'measurement'];
 export function processRecordRef(value: unknown): ProcessRecordRef {
   const ref = value as ProcessRecordRef;
   if (!ref || !kinds.includes(ref.kind) || typeof ref.id !== 'string' || !ref.id.trim() || ref.id.length > 200) return fail('关联记录无效');
@@ -78,6 +79,19 @@ export function processRecord(user: RequestUser, input: ProcessRecordRef): Proce
     if (row) {
       title = String(row.medication_name); at = date(row.taken_at); category = 'medication'; stage = 'medication';
       description = [[row.amount,row.amount_unit].filter(Boolean).join(''),row.note].filter(Boolean).join(' · ') || null;
+    }
+  } else if (ref.kind === 'measurement') {
+    row = db.prepare('SELECT * FROM measurement_sessions WHERE id=? AND deleted_at IS NULL').get(ref.id);
+    if (row) {
+      const items = db.prepare(`
+        SELECT canonical_key AS canonicalKey, display_name AS displayName, numeric_value AS numericValue, unit, pair_group AS pairGroup
+        FROM measurement_observations WHERE session_id=? ORDER BY sort_order,id
+      `).all(ref.id) as Array<{canonicalKey:string;displayName:string;numericValue:number;unit:string;pairGroup:string|null}>;
+      title = formatMeasurementSessionTitle(row.template_id as never, items);
+      at = date(row.recorded_at); category = 'monitoring'; stage = 'other';
+      description = formatMeasurementSessionDescription(items) || null;
+      institution = [row.device_vendor, row.device_model].filter(Boolean).join(' ') || null;
+      extra = items;
     }
   } else {
     row = db.prepare('SELECT * FROM health_vaccinations WHERE id=? AND deleted_at IS NULL').get(ref.id);

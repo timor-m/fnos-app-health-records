@@ -91,16 +91,41 @@ export function describeObservationAbnormal(
   };
 }
 
+const superscriptDigits = "⁰¹²³⁴⁵⁶⁷⁸⁹";
+const scientificExponents = new Set(["2", "3", "4", "5", "6", "9", "12"]);
+
+/** 仅整理计数单位的展示写法，不改动已保存的原文。 */
+export function formatDisplayUnit(unit: string | null | undefined) {
+  const original = (unit || "").trim();
+  if (!original) return "";
+  const compact = original.normalize("NFKC").replace(/\s+/g, "").replace(/[／⁄]/g, "/");
+  const match = compact.match(/^(?:[×xX*])?10([°˚~^"'’′″-]?)(\d{1,2})(\/(?:μ|µ|u)?[lL1])$/i);
+  if (!match) return original;
+  const [, separator, exponent, suffix] = match;
+  if (!scientificExponents.has(exponent)) return original;
+  if (!separator && !["3", "6", "9", "12"].includes(exponent)) return original;
+  const displaySuffix = /^\/(?:μ|µ|u)(?:l|1)$/i.test(suffix)
+    ? "/μL"
+    : /^\/(?:l|1)$/i.test(suffix) ? "/L" : suffix;
+  const superscript = [...exponent].map(digit => superscriptDigits[Number(digit)]).join("");
+  return `10${superscript}${displaySuffix}`;
+}
+
 export function formatRawIndicatorResult(
   resultText: string | null | undefined,
   unit: string | null | undefined,
   emptyLabel = ""
 ) {
   const result = (resultText || "").trim();
-  const normalizedUnit = (unit || "").trim();
-  if (!result) return normalizedUnit || emptyLabel;
-  if (!normalizedUnit || result.toLowerCase().endsWith(normalizedUnit.toLowerCase())) return result;
-  return `${result} ${normalizedUnit}`;
+  const rawUnit = (unit || "").trim();
+  const displayUnit = formatDisplayUnit(rawUnit);
+  if (!result) return displayUnit || emptyLabel;
+  if (!displayUnit) return result;
+  if (rawUnit && result.toLowerCase().endsWith(rawUnit.toLowerCase())) {
+    return `${result.slice(0, result.length - rawUnit.length).trimEnd()} ${displayUnit}`.trim();
+  }
+  if (result.toLowerCase().endsWith(displayUnit.toLowerCase())) return result;
+  return `${result} ${displayUnit}`;
 }
 
 export function formatObservationNormalization(input: {
@@ -136,7 +161,7 @@ export function formatReferenceRange(input: {
 }, emptyLabel = "参考范围待整理") {
   const text = (input.referenceText || "").trim();
   if (text) return `参考 ${text}`;
-  const unit = (input.unit || "").trim();
+  const unit = formatDisplayUnit(input.unit);
   const suffix = unit ? ` ${unit}` : "";
   const format = input.formatNumber || ((value: number) => String(value));
   if (input.referenceLow !== null && input.referenceHigh !== null) {

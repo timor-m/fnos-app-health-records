@@ -22,6 +22,14 @@ it.each(['checkup','laboratory','pathology','functional','outpatient','inpatient
 it('a report bundle keeps its institution and process link without a redundant document count',()=>{const wrapper=render({...feedEntry('report','report'),date:null,institution:'合成机构',documents:[{id:'one'},{id:'two'}],processIds:['process']});expect(wrapper.text()).not.toContain('2 份资料');expect(wrapper.get('.health-timeline-summary').text()).toBe('合成机构');expect(wrapper.find('.health-timeline-summary .health-timeline-meta').exists()).toBe(false);expect(wrapper.get('.health-timeline-date').text()).toContain('日期待确认');expect(wrapper.text()).toContain('关联 1 个健康历程');wrapper.unmount();});
 it('unconfirmed prescription evidence does not imply active medication',()=>{const wrapper=render({...feedEntry('medication','medication_document'),confirmedCount:0,activeCount:0,medicationCount:2});expect(wrapper.text()).toContain('使用情况未确认');expect(wrapper.text()).not.toContain('正在使用');expect(wrapper.get('.health-timeline-type').text()).toBe('用药');wrapper.unmount();});
 it('retains actual dose time and emits the exact clicked record',async()=>{const entry={...feedEntry('medication','intake'),date:'2026-01-02T08:20'};const wrapper=render(entry);expect(wrapper.text()).toContain('08:20');await wrapper.get('a').trigger('click');expect(wrapper.emitted('activate')?.[0][0]).toEqual(entry);wrapper.unmount();});
+it('symptom cards show the place, severity, and a clock time when the record has one',()=>{
+ const wrapper=render({...feedEntry('symptom','symptom'),status:'active',date:'2026-11-21T10:17',description:'头部 · 程度 4/10'});
+ expect(wrapper.get('.health-timeline-status').text()).toBe('持续跟踪');
+ expect(wrapper.get('.health-timeline-description').text()).toBe('头部 · 程度 4/10');
+ expect(wrapper.get('.health-timeline-date-main').text()).toBe('11-21');
+ expect(wrapper.get('.health-timeline-date-detail').text()).toBe('10:17');
+ wrapper.unmount();
+});
 it('shows MM-DD and HH:mm on the card while retaining the full date for accessibility',()=>{
  const wrapper=render({...feedEntry('medication','intake'),date:'2026-09-20T20:09'});
  expect(wrapper.get('.health-timeline-date-main').text()).toBe('09-20');
@@ -86,8 +94,32 @@ it('a mixed report bundle lists the real source subtypes without implying a sing
  const wrapper=render({...feedEntry('report','report'),documents:[{id:'one',reportType:'checkup'},{id:'two',reportType:'laboratory'},{id:'three',reportType:'laboratory'}]});
  expect(wrapper.get('.health-timeline-heading .health-timeline-meta').text()).toBe('体检 · 检验');expect(wrapper.find('.health-timeline-summary').exists()).toBe(false);wrapper.unmount();
 });
-it('symptom and imaging cards do not repeat their category as a redundant subtype row',()=>{
- for(const category of ['symptom','imaging'] as const){const wrapper=render({...feedEntry(category,category==='symptom'?'symptom':'report'),subtype:category});expect(wrapper.find('.health-timeline-meta').exists()).toBe(false);wrapper.unmount();}
+it('symptom, imaging and monitoring cards do not repeat their category as a redundant subtype row',()=>{
+ for(const [category,kind,subtype] of [['symptom','symptom','symptom'],['imaging','report','imaging'],['monitoring','measurement','manual']] as const){
+  const wrapper=render({...feedEntry(category,kind),subtype});
+  expect(wrapper.get('.health-timeline-type').text()).toBe(healthCategoryLabels[category]);
+  expect(wrapper.find('.health-timeline-meta').exists()).toBe(false);
+  wrapper.unmount();
+ }
+});
+it('monitoring cards keep the public type and show readings instead of a processing status chip',()=>{
+ const wrapper=render({...feedEntry('monitoring','measurement'),title:'血压',subtype:'device',status:'device',institution:'设备',description:'128/82 mmHg',metrics:[{label:'血压',value:'128/82',unit:'mmHg'},{label:'脉搏',value:'72',unit:'次/分'}]});
+ expect(wrapper.get('.health-timeline-type').text()).toBe('监测');
+ expect(wrapper.attributes('data-category')).toBe('monitoring');
+ expect(wrapper.find('.health-timeline-status').exists()).toBe(false);
+ expect(wrapper.find('.health-timeline-title').exists()).toBe(false);
+ expect(wrapper.get('.health-timeline-meta').text()).toBe('血压');
+ expect(wrapper.get('.health-timeline-channel').text()).toBe('设备');
+ expect(wrapper.find('.health-timeline-summary').exists()).toBe(false);
+ expect(wrapper.findAll('.health-timeline-metric').map(item=>item.text())).toEqual(['128/82血压 · mmHg','72脉搏 · 次/分']);
+ expect(wrapper.get('a').attributes('href')).toContain('/events/detail/measurement/');
+ wrapper.unmount();
+});
+it('monitoring cards keep a device name when the source is not just the channel',()=>{
+ const wrapper=render({...feedEntry('monitoring','measurement'),title:'血压',institution:'合成设备',metrics:[{label:'血压',value:'120/80',unit:'mmHg'}]});
+ expect(wrapper.get('.health-timeline-summary').text()).toBe('合成设备');
+ expect(wrapper.find('.health-timeline-channel').exists()).toBe(false);
+ wrapper.unmount();
 });
 
 it.each([['medication','course'],['intake','intake']] as const)('labels %s as a medication record without hiding the detail route', (kind,subtype)=>{
@@ -132,9 +164,10 @@ it.each([
  ['report','report','processing','处理中','chip--info'],
  ['report','report','failed','识别失败','chip--red'],
  ['symptom','symptom','unknown','状态未知','chip--plain'],
- ['symptom','symptom','resolved','已缓解','chip--green'],
+ ['symptom','symptom','active','持续跟踪','chip--green'],
+ ['symptom','symptom','resolved','已消失','chip--green'],
  ['medication','medication','paused','已暂停','chip--plain'],
- ['medication','medication','stopped','已停用','chip--plain']
+ ['medication','medication','stopped','已停止','chip--plain']
 ] as const)('%s %s status %s uses the shared status color without changing the record category',(category,kind,status,label,tone)=>{
  const wrapper=render({...feedEntry(category,kind),status});const badge=wrapper.get('.health-timeline-status');
  expect(badge.text()).toBe(label);expect(badge.classes()).toContain(tone);

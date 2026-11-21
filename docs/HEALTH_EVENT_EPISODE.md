@@ -14,9 +14,9 @@
 | 用药 | 对外仅区分用药单和用药记录；开始、调整、停药及独立服用统一归入用药记录，按次服用在详情中作为选填补充 |
 | 接种 | 统一展示接种信息，上传原件作为附件；支持手动填写、剂次与下一剂提醒 |
 
-无症状的日常血压、血糖等监测可在后续作为独立“监测”类型扩展。本轮不把监测文件夹或空健康历程生成症状卡片，也不预先开放尚未实现的入口。
+日常血压、血糖、体重等监测为独立“监测”分类：从新增菜单「记录测量」录入，一会话可含多项，与报告指标共用趋势轴并标注自测/设备来源；不塞进症状，也不伪造报告。设备接入复用同一 ingest 接口（`channel=device`）。
 
-健康历程串联同一阶段的症状、就诊、治疗、用药和复查，是可选关联，不是第六类卡片。同一次的多份资料由内部分组保存，不提供独立的诊疗经过业务入口。
+健康历程串联同一阶段的症状、就诊、治疗、用药、监测和复查，是可选关联，不是第七类卡片。同一次的多份资料由内部分组保存，不提供独立的诊疗经过业务入口。
 
 ## 主要流程
 
@@ -86,7 +86,7 @@
 
 用户操作日志覆盖症状登记与变化、用药调整和服药补充、接种、回收站及历程关联，同次资料整理按资料分组展示，不把症状内部容器记录为新增健康历程。操作名称、对象类别及关联数量在读取时转换为可读文字；新增对象名称从当前有权限的原记录读取，不将成员、症状、药品或报告名称复制进持久化日志。已删除、已移交或失去访问权限的对象显示明确占位，既有日志无需改写即可展示。AI 整理仍归入独立 AI 审计。回归检查直接扫描当前审计写入点，并覆盖用药及回收站的动态操作，新增操作或对象类型缺少映射时测试失败。
 
-共享契约为 `packages/shared/health-categories.ts`，公共 `category` 只允许 `report / imaging / symptom / medication / vaccination`。内部 `kind` 用于定位详情，允许 `report / symptom / medication_document / medication / intake / vaccination`；它不是卡片分类。
+共享契约为 `packages/shared/health-categories.ts`，公共 `category` 只允许 `report / imaging / symptom / monitoring / medication / vaccination`。内部 `kind` 用于定位详情，允许 `report / symptom / medication_document / medication / intake / vaccination / measurement`；它不是卡片分类。
 
 | 结构 | 用途 |
 | --- | --- |
@@ -100,6 +100,7 @@
 | `medication_courses`、`medication_course_changes` | 已确认的用药方案及调整、暂停、恢复、停药历史 |
 | `medication_intakes` | 当时的实际服药快照及保存时的来源关联 |
 | `health_vaccinations` | 实际接种、剂次、来源快照、下一剂提醒与已完成的前次提醒 |
+| `measurement_sessions`、`measurement_observations` | 日常监测会话与指标事实；可关联历程并进入趋势 |
 | `reminders` | 原有待办；来源记录和复查资料保存在 `health_record_reminders` |
 | `health_upload_items`、`health_upload_archives`、`health_workflow_requests` | 上传整理状态及幂等重试凭据 |
 
@@ -114,6 +115,7 @@
 | 症状变化与更正 | 复用 `/api/episodes/:id/symptoms/:symptomId` 及其 `updates` 子路径 |
 | 用药及实际服药 | `/api/medications`、`/api/medications/:id/changes`、`/api/medications/intakes` |
 | 接种 | `GET/POST /api/vaccinations`、`GET/PATCH/DELETE /api/vaccinations/:id` |
+| 日常测量 | `POST /api/measurements`、`GET/PATCH /api/measurements/:id`；移入回收站走 `POST /api/health-records/trash`（`kind=measurement`） |
 | 回收站 | `GET /api/health-records/trash?memberId`；接种 `DELETE /api/vaccinations/:id` 移入、`POST /api/vaccinations/:id/restore` 恢复、`DELETE /api/vaccinations/:id?permanent=1` 永久删除，写操作均携带 revision |
 | 接种来源选择 | `GET /api/vaccinations/documents?memberId` |
 | 健康历程列表及阶段详情 | `GET /api/health-processes?memberId`、`GET /api/health-processes/:id` |
@@ -154,7 +156,7 @@ PC 对单张关注卡片和单条提醒使用完整可用宽度；触屏操作�
 
 接种回收站在既有接种表增加可空的 `purge_after` 与 `trash_state_json`，分别保存保留期限与移入前提醒状态；旧库缺列时先备份再幂等补齐，不覆盖既有接种，不修改既有字段语义。元数据缺失时不推断到期删除、不猜测提醒前态；操作日志清理不会影响恢复或保留期限。
 
-应用保持 **0.3.0 Unreleased、schema v19**，本轮不发版、不改已发布迁移。新增独立结构维护在未编号草案中；新库初始化，已有库检测缺失后先备份、再幂等补齐，失败停止启动。保留已落库开发数据，不降号、不清库；不为本轮未发布的旧列表或事件抽象保留接口适配层。正式发布前仍需对照最近发布基线判断结构兼容性，不能仅因新增表就递增 schema。
+应用保持 **0.3.1 Unreleased、schema v19**，本轮不发版、不改已发布迁移。临时安装过的 0.3.0 与当前版本区分，不另增数据库版本。新增独立结构维护在未编号草案中；新库初始化，已有库检测缺失后先备份、再幂等补齐，失败停止启动。保留已落库开发数据，不降号、不清库；不为本轮未发布的旧列表或事件抽象保留接口适配层。正式发布前仍需对照最近发布基线判断结构兼容性，不能仅因新增表就递增 schema。
 
 回归覆盖分类、关联资料可见性、影像分离、真实症状、用药快照与实服、接种来源和剂次提醒、成员权限、归属调整、合并、导出、备份恢复，以及列表分页、重试、成员切换和详情路由。手工验收使用独立临时库和合成资料；OCR/AI 外部识别及 fnOS、Docker 实机部署另行验证。
 

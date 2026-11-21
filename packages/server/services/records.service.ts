@@ -5532,6 +5532,9 @@ export function computeTrendSeries(options: TrendComputationOptions) {
         timeOrderAmbiguous?: boolean;
         duplicateSources?: Array<{observationId:string;reportId:string;reportTitle:string;examinationId:string|null;pageNumber:number|null}>;
         examinationId: string | null; timeKind: string; timePrecision: string; timeStatus: string; timeText: string | null;
+        sourceKind?: 'report' | 'measurement';
+        sessionId?: string | null;
+        channel?: string | null;
         observationId: string;
         reportId: string;
         reportTitle: string;
@@ -5677,7 +5680,101 @@ export function computeTrendSeries(options: TrendComputationOptions) {
       sourceLineIds: lineEvidence.rowLineIds,
       resultLineIds: lineEvidence.resultLineIds,
       sourcePage,
+      sourceKind: 'report' as const,
+      sessionId: null as string | null,
+      channel: null as string | null,
     });
+  }
+
+  if (memberId && getDatabase().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='measurement_observations'").get()) {
+    const measurementRows = getDatabase().prepare(`
+      SELECT o.id AS observationId, o.canonical_key AS canonicalKey, o.display_name AS displayName,
+        o.result_text AS resultText, o.numeric_value AS numericValue, o.unit, o.canonical_value AS canonicalValue,
+        o.canonical_unit AS canonicalUnit, o.quality AS quality, s.id AS sessionId, s.recorded_at AS recordedAt,
+        s.channel, s.device_vendor AS deviceVendor, s.device_model AS deviceModel, hm.birth_date AS memberBirthDate
+      FROM measurement_observations o
+      JOIN measurement_sessions s ON s.id = o.session_id
+      JOIN health_members hm ON hm.id = o.member_id
+      WHERE o.member_id = ? AND s.deleted_at IS NULL AND o.quality IN ('high', 'medium')
+        AND o.canonical_key IS NOT NULL AND o.canonical_value IS NOT NULL
+      ORDER BY s.recorded_at, s.id, o.sort_order, o.id
+    `).all(memberId) as Array<{
+      observationId: string; canonicalKey: string; displayName: string; resultText: string;
+      numericValue: number; unit: string; canonicalValue: number; canonicalUnit: string | null;
+      quality: string; sessionId: string; recordedAt: string; channel: string;
+      deviceVendor: string | null; deviceModel: string | null; memberBirthDate: string | null;
+    }>;
+    for (const row of measurementRows) {
+      const trendUnit = row.canonicalUnit || row.unit;
+      const key = trendSeriesKey(row.canonicalKey, trendUnit);
+      const builtin = trendCatalog.get(row.canonicalKey) || null;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          indicatorKey: row.canonicalKey,
+          name: row.displayName,
+          unit: trendUnit,
+          sectionName: '日常监测',
+          quality: row.quality === 'high' || row.quality === 'medium' ? row.quality : 'medium',
+          confidence: 1,
+          explanation: builtin?.explanation || null,
+          explanationConfidence: builtin ? 1 : 0,
+          fixedPlacement: builtin?.placement || null,
+          sourcePreference: builtin?.sourcePreference || null,
+          placementVotes: new Map(),
+          itemOrder: builtin?.itemOrder ?? 9999,
+          matchReasons: new Set(['measurement']),
+          rawNames: new Set([row.displayName]),
+          excludedPoints: excludedByKey.get(key) || [],
+          points: [],
+        });
+      }
+      const group = groups.get(key)!;
+      group.rawNames.add(row.displayName);
+      const channelLabel = row.channel === 'device' ? '设备' : row.channel === 'import' ? '导入' : '自测';
+      const reportId = `measurement:${row.sessionId}`;
+      options.contribution?.(reportId, key);
+      group.points.push({
+        examinationId: null, timeKind: 'sampled', timePrecision: 'minute', timeStatus: 'confirmed', timeText: null,
+        observationId: row.observationId,
+        reportId,
+        reportTitle: channelLabel,
+        reportType: 'measurement',
+        reportStatus: 'ready',
+        reportIssuedAt: row.recordedAt,
+        sortDate: row.recordedAt,
+        hospitalName: [row.deviceVendor, row.deviceModel].filter(Boolean).join(' ') || channelLabel,
+        sourceSectionName: '日常监测',
+        itemName: row.displayName,
+        resultText: row.resultText,
+        numericValue: row.canonicalValue,
+        resultComparator: null,
+        referenceLow: null,
+        referenceHigh: null,
+        referenceText: null,
+        referenceStatus: 'missing',
+        referenceReason: null,
+        comparisonMethod: null,
+        comparisonSpecimen: null,
+        memberBirthDate: row.memberBirthDate,
+        abnormalFlag: null,
+        reportedAbnormalFlag: null,
+        displayAbnormalFlag: null,
+        abnormalSource: 'none',
+        abnormalStatus: 'unresolved',
+        abnormalConflict: false,
+        abnormalReason: null,
+        evidenceQuote: null,
+        normalizationQuality: row.quality,
+        normalizationConfidence: 1,
+        normalizationReason: 'measurement',
+        sourceLineIds: [],
+        resultLineIds: [],
+        sourcePage: null,
+        sourceKind: 'measurement',
+        sessionId: row.sessionId,
+        channel: row.channel,
+      });
+    }
   }
 
   const sameExamination = examinationDuplicateResolver();
@@ -6490,6 +6587,11 @@ const auditActionTitles: Record<string, string> = {
   "medication.intake.create": "添加服药补充",
   "medication.intake.edit": "编辑服药补充",
   "vaccination.create": "新增接种记录",
+  "measurement.create": "新增测量记录",
+  "measurement.update": "修改测量记录",
+  "measurement.trash": "移入回收站",
+  "measurement.restore": "恢复测量记录",
+  "measurement.purge": "永久删除测量记录",
   "vaccination.update": "编辑接种记录",
   "vaccination.trash": "接种记录移入回收站",
   "vaccination.restore": "恢复接种记录",
@@ -6525,7 +6627,7 @@ const auditTargetLabels: Record<string, string> = {
   user_audit_log: "用户操作日志",
   system_log: "系统日志",
   indicator_dictionary: "指标字典",
-  vaccination: "接种记录", medication: "用药记录", intake: "服药补充", symptom: "症状记录",
+  vaccination: "接种记录", medication: "用药记录", intake: "服药补充", symptom: "症状记录", measurement: "测量记录",
   health_record: "健康记录", health_record_process: "健康历程", health_event: "资料分组", health_episode: "症状记录",
   report_pair: "报告关系", indicator_issue: "指标匹配问题", indicator_alias: "指标别名",
   report_duplicate_operation: "报告整理任务",

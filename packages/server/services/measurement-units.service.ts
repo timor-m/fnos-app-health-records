@@ -31,6 +31,8 @@ const fallbackUnits = [
   "cells?\\/HPF",
   "(?:个)?\\/[HL]PF?",
   "MPa\\.s",
+  /* Longer than bare C/c so plasma viscosity "cP" is not truncated by a Celsius-style unit. */
+  "cP",
   "cm\\/s",
   "mm\\/hr",
   "m\\/s",

@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "core",
-  "revision": 18,
+  "revision": 20,
   "indicators": [
     {
       "canonicalKey": "cbc_wbc",
@@ -1011,8 +1011,16 @@
         "人体成分"
       ],
       "trendSourcePreference": {
-        "preferredSections": ["一般检查", "基础测量", "体格检查"],
-        "discouragedSections": ["人体成分", "人体成份", "体成分"],
+        "preferredSections": [
+          "一般检查",
+          "基础测量",
+          "体格检查"
+        ],
+        "discouragedSections": [
+          "人体成分",
+          "人体成份",
+          "体成分"
+        ],
         "discouragedPenalty": 30
       },
       "explanation": "记录报告中明确测量的体重，用于观察不同日期的体重变化。"
@@ -1049,8 +1057,16 @@
         "生长发育"
       ],
       "trendSourcePreference": {
-        "preferredSections": ["一般检查", "基础测量", "体格检查"],
-        "discouragedSections": ["人体成分", "人体成份", "体成分"],
+        "preferredSections": [
+          "一般检查",
+          "基础测量",
+          "体格检查"
+        ],
+        "discouragedSections": [
+          "人体成分",
+          "人体成份",
+          "体成分"
+        ],
         "discouragedPenalty": 30
       },
       "explanation": "记录报告中明确测量的身高；儿童和青少年可用于观察生长变化。"
@@ -1120,8 +1136,16 @@
         "人体成分"
       ],
       "trendSourcePreference": {
-        "preferredSections": ["一般检查", "基础测量", "体格检查"],
-        "discouragedSections": ["人体成分", "人体成份", "体成分"],
+        "preferredSections": [
+          "一般检查",
+          "基础测量",
+          "体格检查"
+        ],
+        "discouragedSections": [
+          "人体成分",
+          "人体成份",
+          "体成分"
+        ],
         "discouragedPenalty": 30
       },
       "referenceRange": {
@@ -1696,6 +1720,36 @@
       "explanation": "报告明确给出的收缩压与舒张压差值，不由系统根据其他结果自行推算。"
     },
     {
+      "canonicalKey": "vital_body_temperature",
+      "displayName": "体温",
+      "categoryKey": "general_measurement",
+      "order": 100,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "℃",
+      "unitDimension": "other",
+      "aliases": [
+        "体温",
+        "体温值",
+        "Temperature",
+        "TEMP",
+        "BT"
+      ],
+      "allowedUnits": [
+        "℃",
+        "°C",
+        "C",
+        "摄氏度"
+      ],
+      "sectionHints": [
+        "一般检查",
+        "生命体征",
+        "体温"
+      ],
+      "explanation": "记录明确测量的体温，用于观察发热或日常体温变化；不由其他指标推算。"
+    },
+    {
       "canonicalKey": "vital_pulse",
       "displayName": "脉搏",
       "categoryKey": "general_measurement",
@@ -1732,6 +1786,35 @@
       "explanation": "表示每分钟脉搏次数，通常结合测量状态和心率相关检查观察。"
     },
     {
+      "canonicalKey": "vital_spo2",
+      "displayName": "血氧饱和度",
+      "categoryKey": "general_measurement",
+      "order": 101,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "%",
+      "unitDimension": "ratio",
+      "aliases": [
+        "血氧",
+        "SpO2",
+        "指脉氧",
+        "指氧",
+        "脉搏血氧饱和度",
+        "指脉氧饱和度",
+        "血氧饱和度"
+      ],
+      "allowedUnits": [
+        "%"
+      ],
+      "sectionHints": [
+        "一般检查",
+        "生命体征",
+        "体检"
+      ],
+      "explanation": "指脉氧（脉搏血氧仪）测量的血氧饱和度，与血气分析中的氧饱和度是不同测量方法，不合并趋势。"
+    },
+    {
       "canonicalKey": "cbc_hct",
       "displayName": "红细胞压积",
       "categoryKey": "blood_count",
@@ -1756,8 +1839,16 @@
         "全血细胞"
       ],
       "trendSourcePreference": {
-        "preferredSections": ["血常规", "血液常规"],
-        "discouragedSections": ["血粘", "血液流变", "黏度", "粘度"],
+        "preferredSections": [
+          "血常规",
+          "血液常规"
+        ],
+        "discouragedSections": [
+          "血粘",
+          "血液流变",
+          "黏度",
+          "粘度"
+        ],
         "discouragedPenalty": 60
       },
       "explanation": "表示红细胞在全血中所占比例，是血常规常见指标。"

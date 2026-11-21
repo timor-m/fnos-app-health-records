@@ -8,7 +8,7 @@ type AuditRow = { action:string;targetType:string|null;targetId:string|null;deta
 type Ref = { kind:string;id:string };
 export const healthAuditTargetLabels:Record<string,string> = {
   report:'报告',symptom:'症状记录',medication:'用药记录',intake:'服药补充',vaccination:'接种记录',
-  event:'资料分组',episode:'症状记录',process:'健康历程'
+  measurement:'测量记录',event:'资料分组',episode:'症状记录',process:'健康历程'
 };
 export function readUserAuditDetail(json:string):Record<string,unknown> {
   try {const value:unknown=JSON.parse(json);return value&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:{};}
@@ -38,6 +38,7 @@ export function loadHealthUserAuditTargets(user:RequestUser,rows:AuditRow[]) {
     medication:{table:'medication_courses',name:'r.medication_name',member:'r.member_id'},
     intake:{table:'medication_intakes',name:'r.medication_name',member:'r.member_id'},
     vaccination:{table:'health_vaccinations',name:'r.vaccine_name',member:'r.member_id'},
+    measurement:{table:'measurement_sessions',name:"COALESCE(NULLIF(r.template_id,''),r.channel)",member:'r.member_id'},
     event:{table:'health_events',name:'r.title',member:'r.member_id'},
     episode:{table:'health_episodes',name:'r.title',member:'r.member_id'},
     process:{table:'health_record_processes',name:'COALESCE(r.title_override,(SELECT t.title FROM health_record_process_trash t WHERE t.process_id=r.id AND t.deleted_at IS NOT NULL))',member:'r.member_id'}

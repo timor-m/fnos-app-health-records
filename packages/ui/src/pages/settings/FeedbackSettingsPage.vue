@@ -288,7 +288,7 @@ function openDetail(item: Feedback) { selected.value = item; screen.value = "det
 h3,h4,p { margin: 0; }
 h3 { font-size: 16px; line-height: 1.6; } h4 { font-size: 16px; }
 p { color: var(--muted); font-size: 12px; line-height: 1.8; }
-.feedback-hero p { margin-top: 5px; }
+.feedback-hero p { margin-top: 5px; word-break: keep-all; overflow-wrap: break-word; }
 .feedback-primary,.feedback-secondary { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; padding: 0 15px; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .feedback-primary { border: 1px solid var(--brand); background: var(--brand); color: white; }
 .feedback-primary:hover { background: var(--brand-strong); }

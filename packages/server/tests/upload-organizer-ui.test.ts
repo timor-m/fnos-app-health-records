@@ -53,8 +53,8 @@ test('save prompts for organization before issuing any upload request', async ()
   assert.equal(attention.value, 2);
   assert.match(organizer, /v-if="attention && !mode" :key="attention"/);
   assert.match(organizer, /prefers-reduced-motion: reduce/);
-  assert.match(page, /:disabled="contextMismatch \|\| uploading \|\| batchRunning" @click="submit"/);
-  assert.doesNotMatch(page, /:disabled="uploading \|\| !canSubmitOrganization"/);
+  assert.match(page, /:disabled="contextMismatch \|\| uploading \|\| batchRunning \|\| !canSubmitOrganization" @click="submit"/);
+  assert.match(page, /请先选择报告组织方式/);
 });
 
 test('small-screen flat upload rows place metadata and actions on the same second row', () => {

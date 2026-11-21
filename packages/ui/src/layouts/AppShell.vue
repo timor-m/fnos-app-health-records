@@ -258,6 +258,11 @@ const navItems = [
     </section>
 
     <nav class="mobile-nav" aria-label="触屏导航">
+      <span class="mobile-nav-rules" aria-hidden="true"></span>
+      <div class="mobile-nav-shoulder" aria-hidden="true"></div>
+      <svg class="mobile-nav-edge" viewBox="-42 -18 84 22" aria-hidden="true">
+        <path d="M-35.1 0 A16 16 0 0 0 -24.088 -4.392 A35 35 0 0 1 24.088 -4.392 A16 16 0 0 0 35.1 0" />
+      </svg>
       <template v-for="item in navItems" :key="item.to">
         <RouterLink :to="item.to" :class="{ 'router-link-active': isNavActive(item.to, true) }">
           <span class="mobile-nav-icon">

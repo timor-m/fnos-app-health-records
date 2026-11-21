@@ -1,6 +1,7 @@
 import { mount, flushPromises } from '@vue/test-utils';
 import { ref } from 'vue';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { createMemoryHistory, createRouter } from 'vue-router';
 import QuickAddMenu from '../src/components/QuickAddMenu.vue';
 
 const mocks = vi.hoisted(() => ({ upload: vi.fn(), notify: vi.fn(), toast: vi.fn(), app: null as any }));
@@ -14,7 +15,7 @@ beforeEach(() => {
   mocks.app = { selectedMemberId: ref('member-a'), session: ref({ id: 'user' }), notifyDataChanged: mocks.notify };
   mocks.upload.mockResolvedValue({ memberId: 'member-a', reportId: 'synthetic-report' });
   wrapper = mount(QuickAddMenu, { props: { placement: 'mobile', canManage: true, routeKey: '/events' },
-    global: { stubs: { Teleport: true, RouterLink: { props: ['to'], template: '<a><slot /></a>' } } } });
+    global: { plugins: [createRouter({ history: createMemoryHistory(), routes: [{ path: '/:pathMatch(.*)*', component: { template: '<div/>' } }] })], stubs: { Teleport: true, RouterLink: { props: ['to'], template: '<a><slot /></a>' } } } });
 });
 afterEach(() => wrapper.unmount());
 

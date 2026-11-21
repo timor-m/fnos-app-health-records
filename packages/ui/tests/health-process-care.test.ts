@@ -120,9 +120,16 @@ it('offers a member information guide only for missing background and closes sum
  const context={memberId:'member',processId:'process',version:'v1',allergies:'明确无已知过敏',history:'',medications:'不清楚',concern:''};mocks.request.mockResolvedValue({...sample(),doctorContext:context});await start();await wrapper.get('[aria-haspopup="dialog"]').trigger('click');await flushPromises();expect(summary().get('.doctor-background-guide').text()).toContain('重要病史');expect(summary().get('.doctor-background-guide').text()).not.toContain('过敏及不良反应');await summary().get('.doctor-background-guide button').trigger('click');expect(wrapper.emitted('editMember')).toHaveLength(1);expect(document.querySelector('.process-doctor-summary-modal')).toBeNull();
 });
 
+it('explains when nothing is currently being tracked and keeps the new symptom action on the left',async()=>{
+ mocks.request.mockResolvedValue({...sample(),symptoms:[],medications:[]});await start();
+ expect(wrapper.get('.process-care-empty').text()).toBe('还没有正在跟踪的症状或用药。');
+ expect(wrapper.get('.process-care-footer').classes()).toContain('is-empty');
+ expect(wrapper.find('.process-history').exists()).toBe(false);
+ expect(wrapper.get('.process-add-symptom').text()).toContain('新增症状');
+});
 it('shows last recorded facts, folds historical choices and keeps unrelated common symptoms collapsed',async()=>{
  const data=sample();data.symptoms[0].latest={recordedAt:'2026-01-02T08:00',change:'improved',measurementValue:'38.2',measurementUnit:'℃',severity:null};data.symptoms.push({id:'old',name:'合成历史症状',status:'resolved',unit:null});data.medications[0].lastTakenAt='2026-01-02T09:00';data.medications.push({...data.medications[0],key:'stopped',name:'合成历史药品',status:'stopped'});mocks.request.mockResolvedValue(data);await start();
- expect(wrapper.get('.process-symptom-choice').text()).toContain('上次记录 · 38.2 ℃');expect(wrapper.get('.process-medication-choice').text()).toContain('上次记录服药 · 2 ml');expect(wrapper.get('.process-add-symptom').text()).toContain('新增症状');expect(wrapper.get('.process-history').attributes('open')).toBeUndefined();expect(wrapper.findAll('.process-symptom-choice')).toHaveLength(1);expect(wrapper.findAll('.process-medication-choice')).toHaveLength(1);expect(wrapper.get('.process-history').text()).toContain('合成历史药品');
+ expect(wrapper.get('.process-symptom-choice').text()).toContain('上次记录 · 38.2 ℃');expect(wrapper.get('.process-medication-choice').text()).toContain('上次记录服药 · 2 ml');expect(wrapper.get('.process-add-symptom').text()).toContain('新增症状');expect(wrapper.get('.process-history').attributes('open')).toBeUndefined();expect(wrapper.findAll('.process-symptom-choice')).toHaveLength(1);expect(wrapper.findAll('.process-medication-choice')).toHaveLength(1);expect(wrapper.get('.process-history').text()).toContain('合成历史药品');expect(wrapper.find('.process-care-empty').exists()).toBe(false);expect(wrapper.get('.process-care-footer').classes()).not.toContain('is-empty');
 });
 
 

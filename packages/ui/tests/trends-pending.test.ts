@@ -7,7 +7,7 @@ const {request,context}=vi.hoisted(()=>({request:vi.fn(),context:{app:null as an
 vi.mock('../src/utils/api',async original=>({...await original<typeof import('../src/utils/api')>(),request,apiUrl:(path:string)=>path}));
 vi.mock('../src/composables/useAppContext',()=>({useAppContext:()=>context.app}));
 vi.mock('../src/composables/useRefreshOnActivate',()=>({useRefreshOnActivate:()=>{}}));
-vi.mock('vue-router',()=>({useRoute:()=>({path:'/trends',query:{}})}));
+vi.mock('vue-router',()=>({useRoute:()=>({path:'/trends',query:{}}),useRouter:()=>({push:vi.fn(),replace:vi.fn()})}));
 beforeEach(()=>{
  context.app={selectedMemberId:ref('member-a'),session:ref({isAdmin:false}),setTopbarSubtitle:vi.fn(),clearTopbarSubtitle:vi.fn(),setTopbarSearch:vi.fn(),clearTopbarSearch:vi.fn()};
  request.mockReset();

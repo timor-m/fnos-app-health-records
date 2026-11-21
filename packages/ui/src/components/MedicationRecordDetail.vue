@@ -24,7 +24,7 @@ function usage(item:Partial<MedicationFields>) {
   <div class="medication-detail">
     <template v-if="course && !intake">
       <HealthRecordTrashAction :target="trashTarget" :disabled="busy" class="medication-detail-toolbar" @trashed="emit('trashed')">
-        <div class="preview-heading"><span class="medication-detail-status record-detail-status" :class="`is-${course.status}`">{{ course.status==='active' ? '用药中' : medicationStatusLabels[course.status] }}</span></div>
+        <div class="preview-heading"><span class="medication-detail-status record-detail-status" :class="`is-${course.status}`">{{ medicationStatusLabels[course.status] }}</span></div>
         <div v-if="canManage" class="medication-toolbar-actions medication-detail-actions record-detail-compact-actions">
           <button type="button" class="soft-action-button" :disabled="busy" :aria-label="course.status==='stopped' ? '补记一次已服药' : '记一次已服药'" :title="course.status==='stopped' ? '补记一次已服药' : '记一次已服药'" @click="emit('addIntake')"><Pill :size="14" />{{ course.status==='stopped' ? '补记服药' : '记服药' }}</button>
           <template v-if="course.status!=='stopped'">
@@ -50,7 +50,7 @@ function usage(item:Partial<MedicationFields>) {
       <MedicationFormulaPanel v-if="course.source?.formula" :formula="course.source.formula" title="确认时的配方" />
       <details v-if="course.source" class="medication-detail-disclosure record-detail-disclosure">
         <summary>确认时的处方</summary>
-        <div class="medication-detail-snapshot"><strong>{{ course.source.medicationName }}</strong><p>{{ usage(course.source) || '原报告未注明详细用法' }}</p><p v-if="course.source.instructions">{{ course.source.instructions }}</p><p v-if="course.source.duration">疗程：{{ course.source.duration }}</p></div>
+        <div class="medication-detail-snapshot"><strong>{{ course.source.medicationName }}</strong><p v-if="usage(course.source)">{{ usage(course.source) }}</p><p v-else-if="!course.source.instructions">原报告未注明详细用法</p><p v-if="course.source.instructions">{{ course.source.instructions }}</p><p v-if="course.source.duration">疗程：{{ course.source.duration }}</p></div>
       </details>
       <details v-if="course.changes.length" class="medication-detail-disclosure record-detail-disclosure">
         <summary>查看使用历史（{{ course.changes.length }}）</summary>

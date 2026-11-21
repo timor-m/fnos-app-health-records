@@ -11,6 +11,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { closeDatabaseForTests, getDatabase } from '../database/client';
 import { ensureMedicationDraftSchema, medicationDraftNeedsRepair } from '../database/medication-draft';
 import type { RequestUser } from '../domain/request-user';
+import { healthRecordEntries } from '../services/health-record-feed.service';
 import { changeMedicationCourse, createMedicationCourse, createMedicationIntake, getMedicationCourse, getMedicationIntake,
   listHistoricalMedications, listMedicationDocuments, listMedications, updateMedicationIntake } from '../services/medication.service';
 import { mergeReportWorkflow, validateHealthWorkflowDatabase, exportMemberHealthWorkflow } from '../services/health-workflow-integrity.service';
@@ -61,6 +62,10 @@ test('a decoction is confirmed and taken as one medication with its original for
   assert.deepEqual(getMedicationIntake(manager,intake.id).source?.formula,syntheticFormula);
   status(()=>updateClinicalFact(viewer,'medication',created.id,{formula:changed}),403);
   status(()=>updateClinicalFact(manager,'medication',created.id,{formula:{kind:'decoction',ingredients:[{name:''}]}}),400);
+  const matched=healthRecordEntries(manager,{memberId:'member-a',category:'medication',query:'药材丙'});
+  assert.equal(matched.length,1);assert.equal(matched[0].kind,'medication_document');
+  assert.match(matched[0].description||'',/合成汤剂/);assert.equal(matched[0].description?.includes('药材丙'),false);
+  assert.equal(healthRecordEntries(manager,{memberId:'member-a',category:'medication',query:'没有这味'}).length,0);
 }));
 
 test('formula constituent evidence follows page reorder and removal without rewriting confirmed snapshots',()=>fixture(db=>{

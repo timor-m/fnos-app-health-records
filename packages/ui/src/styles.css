@@ -425,6 +425,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .notification-list article small {
   color: var(--muted); font-size: 12px; line-height: 1.5;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  word-break: keep-all; overflow-wrap: break-word;
 }
 .duplicate-metrics-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 12px;
@@ -818,7 +819,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .trend-normalization-popover-header button:hover { background: var(--fill-1); color: var(--ink); }
 .trend-normalization-popover > div { display: grid; gap: 4px; }
 .trend-normalization-popover span { color: var(--muted); font-size: 12px; font-weight: 800; }
-.trend-normalization-popover p { color: var(--ink); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.trend-normalization-popover p { color: var(--ink); font-size: 12px; line-height: 1.45; word-break: keep-all; overflow-wrap: break-word; }
 .trend-normalization-popover .trend-detail-part-title {
   margin: 1px -2px 0; padding-top: 9px; border-top: 1px solid var(--line);
   color: var(--muted); font-size: 12px; font-weight: 800;
@@ -1837,6 +1838,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .appearance-select { flex: 0 0 auto; width: 132px; }
 .appearance-select .form-select-trigger { font-size: 14px; }
 .settings-band.appearance-band > header { min-height: 64px; border-bottom: 0; }
+.settings-band.appearance-band > header p { word-break: keep-all; overflow-wrap: break-word; }
 
 .settings-band { background: var(--surface); border-radius: var(--radius-l); box-shadow: var(--shadow-s); overflow: hidden; }
 .settings-band > header { min-height: 72px; border-bottom: 1px solid var(--line); padding: 15px 20px; display: flex; align-items: center; gap: 12px; }
@@ -2166,7 +2168,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .ai-task-bindings > article + article { border-top: 1px solid var(--line); }
 .ai-task-bindings > article > div { min-width: 0; display: grid; gap: 2px; }
 .ai-task-bindings > article strong { color: var(--ink); font-size: 12px; }
-.ai-task-bindings > article span { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.ai-task-bindings > article span { color: var(--muted); font-size: 12px; word-break: keep-all; overflow-wrap: break-word; }
 .ai-task-bindings .form-select, .ai-task-bindings input { min-width: 0; }
 
 /* ---------- AI 连接配置 ---------- */
@@ -2815,7 +2817,7 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
   :root { --mobile-topbar-height: calc(58px + var(--safe-top)); }
   .app-shell { display: block; }
   .sidebar { display: none; }
-  .workspace { padding-bottom: calc(78px + var(--safe-bottom)); min-height: 100vh; min-height: 100dvh; }
+  .workspace { padding-bottom: calc(94px + var(--safe-bottom)); min-height: 100vh; min-height: 100dvh; }
   .page-content { --page-content-inset: 8px; padding: 12px var(--page-content-inset) 32px; }
   .primary-button, .form-actions button { min-height: 44px; }
 
@@ -2908,11 +2910,35 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
   .mobile-nav {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
     height: calc(66px + var(--safe-bottom)); padding: 6px 8px var(--safe-bottom);
+    background: transparent; overflow: visible;
+    display: grid; grid-template-columns: repeat(5, 1fr); isolation: isolate;
+  }
+  .mobile-nav::after {
+    content: ""; position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 0; pointer-events: none;
     background: var(--glass-nav);
     backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
-    box-shadow: inset 0 1px 0 var(--hairline);
-    display: grid; grid-template-columns: repeat(5, 1fr);
   }
+  .mobile-nav-rules { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+  .mobile-nav-rules::before,
+  .mobile-nav-rules::after {
+    content: ""; position: absolute; top: -0.5px; width: calc(50% - 35.1px); height: 1px;
+    background: var(--hairline);
+  }
+  .mobile-nav-rules::before { left: 0; }
+  .mobile-nav-rules::after { right: 0; }
+  .mobile-nav-shoulder {
+    position: absolute; left: 50%; top: -18px; z-index: 0; width: 84px; height: 22px;
+    transform: translateX(-50%); pointer-events: none; background: var(--glass-nav);
+    backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
+    clip-path: path("M6.9 18 A16 16 0 0 0 17.912 13.608 A35 35 0 0 1 66.088 13.608 A16 16 0 0 0 77.1 18 L77.1 22 L6.9 22 Z");
+  }
+  .mobile-nav-edge {
+    position: absolute; left: 50%; top: -18px; z-index: 1; width: 84px; height: 22px;
+    transform: translateX(-50%); pointer-events: none; overflow: visible;
+    color: var(--hairline);
+  }
+  .mobile-nav-edge path { fill: none; stroke: currentColor; stroke-width: 1; stroke-linecap: butt; }
+  .mobile-nav > a, .mobile-nav > .quick-add { position: relative; z-index: 2; }
   .mobile-nav > a { min-width: 0; color: var(--muted); display: grid; justify-items: center; align-content: center; gap: 3px; font-size: 12px; font-weight: 600; }
   .back-to-top { right: 14px; bottom: calc(66px + var(--safe-bottom) + 58px); }
   .mobile-nav > a.router-link-active { color: var(--brand-strong); }
@@ -3169,6 +3195,8 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
   }
 
   .drop-zone { min-height: 210px; }
+  .upload-page .drop-hint { display: block; text-align: center; }
+  .upload-page .drop-hint-rest { display: block; }
   .drop-actions .file-button { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-s); }
   .drop-actions .camera-button { background: var(--brand-gradient); color: #fff; box-shadow: 0 3px 10px rgba(14, 124, 107, .24); }
   .drop-actions {
@@ -4105,10 +4133,15 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
   outline: 2px solid var(--amber);
 }
 .trend-chart-node.outlier .trend-chart-value { color: var(--amber); }
-.trend-point-outlier {
+.trend-points article small.trend-point-outlier {
   display: block;
+  overflow: visible;
   color: var(--amber);
   line-height: 1.45;
+  text-overflow: clip;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
 
 /* 重跑生命周期：旧结果在新一轮成功前继续可用，避免把“处理中/失败”误读为数据已失效。 */

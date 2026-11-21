@@ -119,6 +119,35 @@ it('historical prescriptions stay separate and a viewer can preview the source w
   wrapper.unmount();
 });
 
+it('a formula prescription shows its ingredient count, stays searchable by ingredient, and confirms as a whole formula',async()=>{
+  const formulaSource={...source,medicationId:'formula',medicationName:'合成汤剂',specification:null,dosageForm:null,dose:null,doseUnit:null,frequency:null,route:null,instructions:'合成用法',formula:syntheticFormula};
+  const base=mocks.request.getMockImplementation()!;
+  mocks.request.mockImplementation((path:string,options?:RequestInit)=>path.startsWith('medications/report-history')?Promise.resolve([formulaSource]):base(path,options));
+  const wrapper=mountRecords({});await flushPromises();
+  await button(wrapper,'从报告带入').trigger('click');await flushPromises();
+  expect(wrapper.text()).toContain('合成汤剂 · 6 味');
+  expect(wrapper.text()).toContain('合成用法');
+  expect(wrapper.text()).not.toContain('原报告未注明详细用法');
+  await wrapper.get('[aria-label="搜索报告用药"]').setValue('药材丙');await flushPromises();
+  expect(wrapper.text()).toContain('合成汤剂 · 6 味');
+  await wrapper.get('[aria-label="搜索报告用药"]').setValue('没有这味');await flushPromises();
+  expect(wrapper.text()).toContain('没有匹配的报告药品');
+  expect(wrapper.text()).not.toContain('合成汤剂');
+  await wrapper.get('[aria-label="搜索报告用药"]').setValue('');await flushPromises();
+  await button(wrapper,'确认整方使用').trigger('click');await flushPromises();
+  expect(wrapper.get('.medication-editor h3').text()).toBe('确认整方使用');
+  wrapper.unmount();
+});
+
+it('a formula confirmation dialog uses the whole-formula title',async()=>{
+  const formulaSource={...source,medicationName:'合成汤剂',formula:syntheticFormula};
+  const base=mocks.request.getMockImplementation()!;
+  mocks.request.mockImplementation((path:string,options?:RequestInit)=>path.startsWith('medications/report-history')?Promise.resolve([formulaSource]):base(path,options));
+  const wrapper=mount(ReportMedicationUseButton,{props:{memberId:'member',medicationId:'source',formula:true},attachTo:document.body});entryDialogs.push(wrapper);
+  await button(wrapper,'确认整方使用').trigger('click');await flushPromises();
+  expect(visibleEntryDialogs()[0]!.attributes('aria-label')).toBe('确认整方使用');
+});
+
 it('confirming a historical prescription preserves specification and explicitly selected contexts',async()=>{
   const wrapper=mountRecords({});await flushPromises();
   await button(wrapper,'从报告带入').trigger('click');await flushPromises();
@@ -488,7 +517,7 @@ it.each(['course','intake'] as const)('%s details keep their status and deletion
  overview={courses:[course],intakes:[intake]};
  const wrapper=mountRecords(kind==='course'?{courseId:'course'}:{intakeId:'intake'});await flushPromises();
  const toolbar=wrapper.get('.medication-detail > .record-detail-toolbar');
- expect(toolbar.get('.preview-heading').text()).toContain(kind==='course'?'用药中':'已服用');
+ expect(toolbar.get('.preview-heading').text()).toContain(kind==='course'?'正在使用':'已服用');
  expect(toolbar.get('[aria-label="移入回收站"]').exists()).toBe(true);
  expect(toolbar.get('.medication-toolbar-actions').findAll('button').map(item=>item.text())).toEqual(kind==='course'?['记服药','调整','暂停','停止']:['编辑']);
  expect(wrapper.find('.medication-detail > .medication-detail-actions').exists()).toBe(false);
@@ -497,7 +526,7 @@ it.each(['course','intake'] as const)('%s details keep their status and deletion
  expect(wrapper.findAll('.medication-detail > .record-detail-toolbar')).toHaveLength(1);
  expect(wrapper.findAll('button').some(item=>item.text()==='撤销')).toBe(false);
  app.selectedMember.value.permission='viewer';await flushPromises();
- expect(wrapper.get('.record-detail-toolbar .preview-heading').text()).toContain(kind==='course'?'用药中':'已服用');
+ expect(wrapper.get('.record-detail-toolbar .preview-heading').text()).toContain(kind==='course'?'正在使用':'已服用');
  expect(wrapper.find('[aria-label="移入回收站"]').exists()).toBe(false);wrapper.unmount();
 });
 

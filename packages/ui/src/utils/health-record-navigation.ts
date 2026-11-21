@@ -2,7 +2,8 @@ import type { HealthFeedEntry } from '../../../shared/health-categories';
 
 export const healthRecordTitles: Record<HealthFeedEntry['kind'], string> = {
   symptom: '症状', vaccination: '接种', report: '资料详情',
-  medication_document: '用药单', medication: '用药记录', intake: '用药记录'
+  medication_document: '用药单', medication: '用药记录', intake: '用药记录',
+  measurement: '测量记录',
 };
 
 export function isHealthRecordKind(value: unknown): value is HealthFeedEntry['kind'] {

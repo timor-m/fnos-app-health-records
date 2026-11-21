@@ -748,6 +748,9 @@ export type TrendPoint = {
   timeText?: string | null;
   comparisonMethod?: string | null;
   comparisonSpecimen?: string | null;
+  sourceKind?: 'report' | 'measurement';
+  sessionId?: string | null;
+  channel?: string | null;
   observationId: string;
   reportId: string;
   reportTitle: string;

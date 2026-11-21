@@ -111,18 +111,28 @@ export function listMedicationDocuments(user: RequestUser, input: Input): Medica
     .all(memberId) as Array<Omit<MedicationDocument, keyof MedicationContext | 'medicationCount' | 'medicationNames'>>)
     .map(row => ({ ...row, medicationCount: 0, medicationNames: [] as string[] }));
   const byId = new Map(documents.map(document => [document.id, document]));
-  const medications = db.prepare(`SELECT m.report_id AS reportId,m.medication_name AS medicationName,m.formula_json IS NOT NULL AS isFormula
+  const medications = db.prepare(`SELECT m.report_id AS reportId,m.medication_name AS medicationName,m.formula_json AS formulaJson
     FROM report_medications m JOIN reports r ON r.id=m.report_id
-    WHERE ${visibleReports} AND m.is_deleted=0 ORDER BY m.id`).all(memberId) as Array<{reportId: string; medicationName: string; isFormula: number}>;
+    WHERE ${visibleReports} AND m.is_deleted=0 ORDER BY m.id`).all(memberId) as Array<{reportId: string; medicationName: string; formulaJson: string | null}>;
   for (const medication of medications) {
     const document = byId.get(medication.reportId);
     if (!document) continue;
     document.medicationCount++;
-    if(medication.isFormula) document.formulaCount=(document.formulaCount || 0)+1;
+    if (medication.formulaJson != null) document.formulaCount = (document.formulaCount || 0) + 1;
     if (medication.medicationName.trim() && !document.medicationNames.includes(medication.medicationName))
       document.medicationNames.push(medication.medicationName);
+    for (const name of formulaIngredientNames(medication.formulaJson)) {
+      const names = document.ingredientNames ?? (document.ingredientNames = []);
+      if (!names.includes(name)) names.push(name);
+    }
   }
   return documents;
+}
+
+function formulaIngredientNames(formulaJson: string | null): string[] {
+  if (!formulaJson) return [];
+  try { return parseMedicationFormula(JSON.parse(formulaJson))?.ingredients.map(item => item.name).filter(Boolean) ?? []; }
+  catch { return []; }
 }
 
 const sourceSelect = `m.id AS medicationId,m.report_id AS reportId,r.title AS reportTitle,r.report_issued_at AS reportIssuedAt,

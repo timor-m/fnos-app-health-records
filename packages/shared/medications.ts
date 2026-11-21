@@ -16,6 +16,7 @@ export type MedicationContext = { processId?:string; relatedRecords?: import('./
 export type MedicationDocument = MedicationContext & {
   id: string; memberId: string; title: string; reportType: 'prescription'; status: string;
   date: string | null; medicationCount: number; formulaCount?: number; medicationNames: string[];
+  ingredientNames?: string[];
 };
 export type MedicationSource = MedicationFields & {
   formula?: import('./medication-formula').MedicationFormula | null;

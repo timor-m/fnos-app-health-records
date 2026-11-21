@@ -56,6 +56,19 @@ describe('date text input', () => {
   await input.trigger('focus'); expect(document.querySelector('[role=tooltip]')).not.toBeNull();
   await input.setValue('2026-12-01'); expect(document.querySelector('[role=tooltip]')).toBeNull();
  });
+ it('names a date-only picker as a date and a timed picker as date and time', async () => {
+  render();
+  expect(wrapper.get('.datetime-picker-trigger').attributes('aria-label')).toBe('选择日期');
+  await wrapper.get('.datetime-picker-trigger').trigger('click'); await nextTick();
+  expect(document.querySelector('.datetime-picker-title')?.textContent).toBe('请选择日期');
+  expect(document.querySelector('.datetime-picker-panel')?.getAttribute('aria-label')).toBe('请选择日期');
+  document.querySelector<HTMLButtonElement>('.datetime-picker-cancel')!.click(); await nextTick();
+  wrapper.unmount();
+  render({showTime:true, modelValue:'2026-10-12T08:30'});
+  expect(wrapper.get('.datetime-picker-trigger').attributes('aria-label')).toBe('选择日期和时间');
+  await wrapper.get('.datetime-picker-trigger').trigger('click'); await nextTick();
+  expect(document.querySelector('.datetime-picker-title')?.textContent).toBe('请选择时间');
+ });
  it('updates external values and disables both controls', async () => {
   const input = render(); await wrapper.setProps({modelValue:'2024-01-02'}); expect(input.element.value).toBe('2024-01-02');
   await wrapper.setProps({disabled:true}); expect(input.attributes('disabled')).toBeDefined(); expect(wrapper.get('button').attributes('disabled')).toBeDefined();

@@ -34,7 +34,7 @@ import ImageViewer, { type ImageViewerPage } from "./ImageViewer.vue";
 import MorphologyFindingEditor from "./MorphologyFindingEditor.vue";
 import { request, apiUrl } from "../utils/api";
 import { downloadDirectUrl, downloadStreamedFile } from "../utils/download";
-import { describeObservationAbnormal, observationAttentionHint, observationDetailGroup, formatReferenceRange } from "../utils/indicator-display";
+import { describeObservationAbnormal, observationAttentionHint, observationDetailGroup, formatRawIndicatorResult, formatReferenceRange } from "../utils/indicator-display";
 import { formatDatabaseTime, formatDatabaseTimeWithYear } from "../utils/time";
 import { hasEmptyCompletedOcr, resolveAiTriggerState } from "../utils/ai-trigger-state";
 import { resolveClinicalEvidenceNavigation } from "../utils/clinical-evidence-navigation";
@@ -990,14 +990,12 @@ function observationFlagClass(item: ReportDetail["observations"][number]) {
   };
 }
 
+function observationSectionLabel(item: ReportDetail["observations"][number]) {
+  return (item.sectionName || item.normalizedName || "").trim();
+}
+
 function observationValueLine(item: ReportDetail["observations"][number]) {
-  const result = (item.resultText || "").trim();
-  const unit = (item.unit || "").trim();
-  if (!result) return unit;
-  if (!unit) return result;
-  /* 部分报告的 resultText 已包含单位（如 “89 mmHg”），避免 “89 mmHg mmHg” 重复展示 */
-  if (result.toLowerCase().endsWith(unit.toLowerCase())) return result;
-  return `${result} ${unit}`;
+  return formatRawIndicatorResult(item.resultText, item.unit);
 }
 
 function observationReferenceLine(item: ReportDetail["observations"][number]) {
@@ -2681,7 +2679,7 @@ onActivated(() => {
             <article v-for="item in visibleObservations" :key="item.id">
               <div class="observation-title"><strong>{{ item.itemName }}</strong><IndicatorHint v-if="observationAttentionHint(item)" :text="observationAttentionHint(item)" label="查看指标待核对提示" /><span class="observation-source-label">{{ observationSourceLabel(item) }}</span></div>
               <p>{{ observationValueLine(item) }}<IndicatorHint v-if="observationComputedFlagHint(item)" :text="observationComputedFlagHint(item)" :label="`${item.itemName}的异常标记说明`"><template #trigger="{ toggle, open, panelId }"><button type="button" class="observation-flag" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined" :aria-expanded="open" :aria-controls="open ? panelId : undefined" @click="toggle">{{ observationFlagLabel(item) }}</button></template></IndicatorHint><em v-else-if="observationFlagVisible(item)" :class="observationFlagClass(item)" :title="item.abnormalReason || undefined">{{ observationFlagLabel(item) }}</em></p>
-                <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}</span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
+                <div v-if="observationSectionLabel(item) || observationReferenceLine(item)" class="observation-meta"><span v-if="observationSectionLabel(item)">{{ observationSectionLabel(item) }}</span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
             </article>
           </div>
           <div class="observation-panel-footer">
@@ -2973,7 +2971,7 @@ onActivated(() => {
                 <button v-if="canManageReport" class="observation-edit-button" type="button" title="编辑指标" @click.stop="openObservationEditor(item)"><Pencil :size="15" /></button>
                 <button v-if="canManageReport" class="observation-edit-button observation-delete-button" type="button" title="删除指标" aria-label="删除指标" @click.stop="removeObservation(item)"><Trash2 :size="15" /></button>
                 <div v-if="observationViewMode === 'source'" class="observation-source-order-status"><span>{{ item.displayTier === 'primary' ? '可用于趋势' : observationDetailGroup(item) === 'review' ? '待核对' : observationDetailGroup(item) === 'qualitative' ? '定性结果' : '其他检查记录' }}</span><span v-if="section.unpositionedIds.has(item.id)"> · 位置待确认</span></div>
-                <div class="observation-meta"><span>{{ item.sectionName || item.normalizedName || "未分组" }}<em v-if="item.manualReviewed" class="observation-manual-chip">人工校对</em></span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
+                <div v-if="observationSectionLabel(item) || item.manualReviewed || observationReferenceLine(item)" class="observation-meta"><span v-if="observationSectionLabel(item) || item.manualReviewed"><template v-if="observationSectionLabel(item)">{{ observationSectionLabel(item) }}</template><em v-if="item.manualReviewed" class="observation-manual-chip">人工校对</em></span><span v-if="observationReferenceLine(item)">{{ observationReferenceLine(item) }}</span></div>
               </article>
             </div>
           </section>

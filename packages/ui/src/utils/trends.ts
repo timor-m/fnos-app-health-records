@@ -6,10 +6,19 @@ export function trendMeasurementTime(point: Pick<TrendPoint,'reportIssuedAt'|'ex
   return point.reportIssuedAt.slice(0,length).replace('T',' ');
 }
 
-export function trendTimeSource(point: Pick<TrendPoint,'examinationId'|'timeKind'|'timeStatus'>) {
+export function trendTimeSource(point: Pick<TrendPoint,'examinationId'|'timeKind'|'timeStatus'|'sourceKind'|'channel'>) {
+  if (point.sourceKind === 'measurement') {
+    return point.channel === 'device' ? '设备测量时间' : point.channel === 'import' ? '导入测量时间' : '自测时间';
+  }
   if (!point.examinationId) return '沿用报告时间';
   const kind: Record<string,string> = {sampled:'采样时间',examined:'检查时间',issued:'签发时间',manual:'人工确认时间'};
   return `${kind[point.timeKind || ''] || '时间待确认'}${point.timeStatus === 'confirmed' ? ' · 已核对' : ''}`;
+}
+
+export function trendPointSessionId(point: Pick<TrendPoint,'sourceKind'|'sessionId'|'reportId'>) {
+  if (point.sourceKind === 'measurement' && point.sessionId) return point.sessionId;
+  if (point.reportId.startsWith('measurement:')) return point.reportId.slice('measurement:'.length);
+  return null;
 }
 
 export function normalizedTrendSearch(value: string | null | undefined) {

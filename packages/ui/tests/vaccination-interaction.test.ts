@@ -58,6 +58,16 @@ it('autofills a selected credential, keeps manual text and preserves the exact f
  const body=JSON.parse(mocks.request.mock.calls.find(([path,options])=>path==='vaccinations'&&options?.method==='POST')![1].body);
  expect(body).toMatchObject({sourceReportId:'document',sourceFactId:'fact-1',vaccineName:'手动核对的疫苗名称',doseNumber:'第 2 剂',manufacturer:'合成厂家'});
 });
+it('keeps a credential time written with a space when the selected day is unchanged',async()=>{
+ const fallback=mocks.request.getMockImplementation()!;
+ mocks.request.mockImplementation(async(path:string,options:any)=>path==='reports/document'?{id:'document',memberId:'member',hospitalName:null,vaccinations:[{id:'fact-1',vaccineName:'凭证疫苗',administeredAt:'2026-01-01 09:30:00',nextDueAt:'2026-02-01 08:00'}]}:fallback(path,options));
+ const wrapper=render(Editor);await flushPromises();
+ wrapper.findAllComponents(FormSelect).find(item=>item.props('ariaLabel')==='接种原件')!.vm.$emit('update:modelValue','document');await flushPromises();
+ expect(wrapper.findAllComponents(DateTimePicker)[0].props('modelValue')).toBe('2026-01-01');
+ await wrapper.get('form').trigger('submit');await flushPromises();
+ const body=JSON.parse(mocks.request.mock.calls.find(([path,options])=>path==='vaccinations'&&options?.method==='POST')![1].body);
+ expect(body.administeredAt).toBe('2026-01-01 09:30:00');expect(body.nextDueAt).toBe('2026-02-01 08:00');
+});
 it('requires choosing a fact when one credential describes multiple vaccinations',async()=>{
  const fallback=mocks.request.getMockImplementation()!;
  mocks.request.mockImplementation(async(path:string,options:any)=>path==='reports/document'?{id:'document',memberId:'member',hospitalName:null,vaccinations:[{id:'fact-1',vaccineName:'合成甲',administeredAt:'2026-01-01'},{id:'fact-2',vaccineName:'合成乙',administeredAt:'2026-01-02'}]}:fallback(path,options));

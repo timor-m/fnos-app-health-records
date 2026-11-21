@@ -37,7 +37,7 @@ export function trashHealthProcess(user:RequestUser,id:string,input:Record<strin
 function exists(memberId:string,value:ProcessRecordRef){
  const db=getDatabase();
  if(value.kind==='symptom')return !!db.prepare('SELECT 1 FROM health_process_symptoms s JOIN health_episodes e ON e.id=s.episode_id WHERE s.id=? AND e.member_id=?').get(value.id,memberId);
- const table={report:'reports',medication_document:'reports',medication:'medication_courses',intake:'medication_intakes',vaccination:'health_vaccinations'}[value.kind];
+ const table={report:'reports',medication_document:'reports',medication:'medication_courses',intake:'medication_intakes',vaccination:'health_vaccinations',measurement:'measurement_sessions'}[value.kind];
  return !!db.prepare(`SELECT 1 FROM ${table} WHERE id=? AND member_id=?`).get(value.id,memberId);
 }
 function purge(id:string,actor:string|null){

@@ -24,9 +24,9 @@ const showPage = computed(() => active.value && route.path.startsWith('/events/d
 const contentKey = computed(() => JSON.stringify([app.selectedMemberId.value, kind.value, recordId.value]));
 const backTo = computed(() => vaccinationReturnTo(route.query.returnTo,route.query.from === 'overview' ? '/overview' : '/events'));
 const heading = ref<HealthRecordHeading | null>(null);
-const category = computed(() => heading.value?.category || (kind.value==='symptom'?'symptom':kind.value==='vaccination'?'vaccination':kind.value==='report'?'report':'medication'));
+const category = computed(() => heading.value?.category || (kind.value==='symptom'?'symptom':kind.value==='vaccination'?'vaccination':kind.value==='measurement'?'monitoring':kind.value==='report'?'report':'medication'));
 watch(contentKey,()=>{heading.value=null;},{flush:'sync'});
-const title = computed(() => heading.value?.category==='vaccination' ? '接种详情' : heading.value && ['medication','symptom'].includes(heading.value.category) ? heading.value.title : kind.value ? healthRecordTitles[kind.value] : '记录详情');
+const title = computed(() => heading.value?.category==='vaccination' ? '接种详情' : heading.value?.category==='monitoring' ? '测量详情' : heading.value && ['medication','symptom'].includes(heading.value.category) ? heading.value.title : kind.value ? healthRecordTitles[kind.value] : '记录详情');
 
 function close() {
   if (active.value && onDetailRoute.value) void router.push(backTo.value);

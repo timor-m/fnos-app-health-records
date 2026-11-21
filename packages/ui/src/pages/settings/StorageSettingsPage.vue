@@ -155,6 +155,8 @@ onMounted(refresh);
 .archive-cleanup strong { font-size: 14px; font-weight: 500; }
 .archive-cleanup button { flex-shrink: 0; white-space: nowrap; }
 .archive-storage-panel p { line-height: 1.65; overflow-wrap: anywhere; }
+.archive-storage-panel .archive-guidance,
+.archive-storage-panel .archive-safety p { word-break: keep-all; overflow-wrap: break-word; }
 .archive-capacity { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; background: var(--fill-2); border-radius: var(--radius-m); }
 .archive-capacity > div { display: grid; gap: 6px; min-width: 0; }
 .archive-capacity span, .archive-capacity small { font-size: 12px; color: var(--muted); font-weight: 400; }

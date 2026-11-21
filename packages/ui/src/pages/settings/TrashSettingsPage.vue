@@ -81,7 +81,7 @@ async function perform(report:HealthTrashEntry,permanent:boolean) {
  if(restoringId.value || !canManage.value || revoked || report.memberId!==app.selectedMemberId.value) return;
  const token=generation; restoringId.value=report.id;
  const isVaccination=report.kind==='vaccination';
- const standalone=['symptom','medication','intake','process'].includes(report.kind);
+ const standalone=['symptom','medication','intake','measurement','process'].includes(report.kind);
  const label=report.kind==='report'?'报告':healthTrashLabels[report.kind];
  try {
    const result=standalone?await request<{pendingFileCount?:number|null;reminderNeedsReview?:boolean;omittedRecordCount?:number}>('health-records/trash',{method:'POST',body:JSON.stringify({kind:report.kind,id:report.id,revision:report.revision,operation:permanent?'purge':'restore'})}):await request<{pendingFileCount?:number|null;reminderNeedsReview?:boolean;omittedRecordCount?:number}>(`${isVaccination?'vaccinations':'reports'}/${encodeURIComponent(report.id)}${permanent?'?permanent=1':'/restore'}`,{method:permanent?'DELETE':'POST',...(isVaccination?{body:JSON.stringify({revision:report.revision})}:{})});

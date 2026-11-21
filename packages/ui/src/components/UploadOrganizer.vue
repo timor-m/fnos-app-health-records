@@ -140,9 +140,9 @@ function navigate(id = '') {
 onMounted(() => emit('mode', ''));
 let groupNumber = 0;
 const options = [
-  { value: 'independent' as const, label: '独立报告', hint: '每个文件一份报告', icon: Files },
-  { value: 'merge' as const, label: '合并报告', hint: '全部文件组成一份报告', icon: Layers },
-  { value: 'custom' as const, label: '自定义分组', hint: '手动指定文件归属', icon: LayoutGrid }
+  { value: 'independent' as const, label: '独立报告', hint: '每个文件一份报告', hintBreak: 0, icon: Files },
+  { value: 'merge' as const, label: '合并报告', hint: '全部文件组成一份报告', hintBreak: 6, icon: Layers },
+  { value: 'custom' as const, label: '自定义分组', hint: '手动指定文件归属', hintBreak: 0, icon: LayoutGrid }
 ];
 const unassigned = computed(() => props.files.filter(file => !groups.value.some(group => group.files.includes(file.id))));
 const groupOptions = computed(() => groups.value.filter(group => group.id !== currentFolderId.value).map(group => ({ value: group.id, label: group.name })));
@@ -224,7 +224,7 @@ watch(() => props.files.map(file => file.id), ids => {
       <span v-if="attention && !mode" :key="attention" class="organizer-attention" aria-hidden="true"></span>
       <button v-for="option in options" :key="option.value" type="button" :class="{ selected: mode === option.value }"
         :aria-pressed="mode === option.value" @click="choose(option.value)">
-        <component :is="option.icon" :size="19" /><span><strong>{{ option.label }}</strong><small>{{ option.hint }}</small></span>
+        <component :is="option.icon" :size="19" /><span><strong>{{ option.label }}</strong><small :class="{ 'has-mobile-break': option.hintBreak }">{{ option.hint.slice(0, option.hintBreak || option.hint.length) }}<span v-if="option.hintBreak">{{ option.hint.slice(option.hintBreak) }}</span></small></span>
         <Check v-if="mode === option.value" :size="16" />
       </button>
     </div>
@@ -381,7 +381,8 @@ watch(() => props.files.map(file => file.id), ids => {
   .organizer-modes button > svg:first-child { display: none; }
   .organizer-modes button > svg:last-child { position: absolute; top: 3px; right: 3px; width: 10px; height: 10px; }
   .organizer-modes strong { font-size: 12px; line-height: 1.5; }
-  .organizer-modes small { margin-top: 2px; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+  .organizer-modes small { margin-top: 2px; font-size: 12px; line-height: 1.4; overflow-wrap: normal; word-break: keep-all; }
+  .organizer-modes small.has-mobile-break > span { display: block; }
 }
 @media (max-width: 359px) {
   .organizer-files { grid-template-columns: repeat(2, minmax(0, 1fr)); }

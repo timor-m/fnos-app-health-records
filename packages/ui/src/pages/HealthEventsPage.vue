@@ -66,7 +66,7 @@ async function loadMore(){
  }catch(cause){if(current===sequence)moreError.value=cause instanceof Error?cause.message:'加载更多失败';}finally{if(current===sequence)loadingMore.value=false;}
 }
 function submit(){clearTimeout(timer);if(applied!==search.value.trim()){writeFilters();void load();}}
-function activateSearch(){app.setTopbarSearch({key:'events',model:search,placeholder:'搜索记录',expandedPlaceholder:'搜索报告、影像、症状、药品或疫苗',submit});}
+function activateSearch(){app.setTopbarSearch({key:'events',model:search,placeholder:'搜索记录',expandedPlaceholder:'搜索报告、影像、症状、监测、药品或疫苗',submit});}
 function observe(){observer?.disconnect();observer=null;if(!active.value||!sentinel.value||recordOpen.value||medicationOpen.value)return;observer=new IntersectionObserver(items=>{if(items.some(item=>item.isIntersecting)&&!moreError.value)void loadMore();},{rootMargin:'260px 0px',threshold:0.01});observer.observe(sentinel.value);}
 const {pullDistance,refreshing,refresh}=usePullRefresh(root,async()=>{if(!recordOpen.value&&!medicationOpen.value)await load();});
 function activateRecord(entry:HealthFeedEntry,event:MouseEvent){if(!touch.value||event.defaultPrevented||event.button!==0||event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;event.preventDefault();if(entry.memberId!==app.selectedMemberId.value)return;const token=createUuid();owned={token,memberId:entry.memberId};void router.push({path:'/events',query:{...route.query,recordKind:entry.kind,recordId:entry.resourceId},state:{healthRecordTimelineEntry:token}});}
@@ -103,7 +103,7 @@ activateSearch();useRefreshOnActivate(load);
 </script>
 <template>
  <section ref="root" class="events-page">
-  <header class="page-intro"><div><h2>健康时间轴</h2><p>报告、影像、症状、用药与接种</p></div><div class="event-page-links">
+  <header class="page-intro"><div><h2>健康时间轴</h2><p>报告、影像、症状、监测、用药与接种</p></div><div class="event-page-links">
    <label class="search-field page-search-field"><Search :size="18" aria-hidden="true"/><input v-model="search" aria-label="搜索记录" placeholder="搜索名称或日期" maxlength="200" @keydown.enter="submit"/></label>
    <button class="icon-button refresh-action" type="button" title="刷新" aria-label="刷新记录" :disabled="loading||refreshing" @click="refresh"><RefreshCw :size="18" :class="{'spin-icon':loading||refreshing}"/></button>
    <span v-if="loaded" class="count-label">{{cursor?'已显示 ':''}}{{entries.length}} 条记录</span>
@@ -117,7 +117,7 @@ activateSearch();useRefreshOnActivate(load);
   <div v-if="loading&&!loaded" class="loading-list" role="status" aria-label="正在加载健康记录"><span v-for="index in 8" :key="index"/></div>
   <p v-if="error" class="inline-panel-error" role="alert">{{error}} <button type="button" class="error-retry" @click="load">重试</button></p>
   <div v-if="entries.length" class="events-list" :aria-busy="loading"><section v-for="group in groups" :key="group.key" class="health-timeline-group" :aria-label="group.label"><h3 class="health-timeline-month">{{group.label}}</h3><div class="health-timeline-entries"><HealthTimelineCard v-for="entry in group.entries" :key="entry.id" :entry="entry" :return-to="route.fullPath" :selected="recordOpen&&dialog?.kind===entry.kind&&dialog?.recordId===entry.resourceId" @activate="activateRecord"/></div></section></div>
-  <EmptyState v-else-if="!loading&&!error" :title="search.trim()?'没有找到相关记录':category?'暂无这类记录':'暂无健康记录'" :description="search.trim()?'试试其他关键词，或清空搜索查看全部记录。':'上传资料，或从新增菜单填写症状、用药和接种。'"/>
+  <EmptyState v-else-if="!loading&&!error" :title="search.trim()?'没有找到相关记录':category?'暂无这类记录':'暂无健康记录'" :description="search.trim()?'试试其他关键词，或清空搜索查看全部记录。':category==='monitoring'?'还没有测量记录，可从新增里记录血压、体格、血糖或血氧。':'上传资料，或从新增菜单填写症状、测量、用药和接种。'"/>
   <div v-if="cursor" ref="sentinel" class="form-actions load-more-indicator" aria-live="polite"><button :disabled="loading||loadingMore||applied!==search.trim()" @click="loadMore">{{loadingMore?'正在加载…':moreError?'加载失败，点击重试':'加载更多'}}</button></div><p v-if="moreError" class="inline-panel-error" role="alert">{{moreError}}</p>
   <p v-if="text('add')==='medication'&&(text('processId')||text('relatedId'))&&text('memberId')&&text('memberId')!==app.selectedMemberId.value" class="inline-panel-error" role="alert">关联来源不属于当前成员，请返回健康历程后重新填写。</p>
   <MedicationRecordModal v-if="medicationOpen" :open="true" add="course" :initial-related-records="initialRelatedRecords" :process-id="text('processId')||undefined" @close="closeMedication" @updated="load"/>

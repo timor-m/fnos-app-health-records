@@ -151,7 +151,7 @@
 .new-vaccination-page .vaccination-save-bar { background: transparent; }
 .vaccination-previous-dose { flex: 0 0 auto; margin-bottom: 8px; }
 @media(max-width:760px) {
-  .app-shell.is-vaccination-entry .workspace { display: flex; flex-direction: column; height: 100vh; height: 100dvh; min-height: 0; padding-bottom: calc(66px + var(--safe-bottom)); }
+  .app-shell.is-vaccination-entry .workspace { display: flex; flex-direction: column; height: 100vh; height: 100dvh; min-height: 0; padding-bottom: calc(82px + var(--safe-bottom)); }
   .app-shell.is-vaccination-entry .mobile-topbar { flex: 0 0 auto; }
   .app-shell.is-vaccination-entry .page-content { flex: 1 1 auto; min-height: 0; padding-top: 8px; padding-bottom: 0; overflow: hidden; }
   .new-vaccination-page { height: 100%; }
@@ -160,8 +160,6 @@
   .vaccination-editor-actions.form-actions > button { position: relative; flex: 0 0 auto; height: 32px; min-height: 32px; min-width: 72px; padding-inline: 14px; }
   .vaccination-editor-actions.form-actions > button::after { content: ''; position: absolute; inset: -8px 0 -4px; }
   .vaccination-editor-actions.form-actions > .primary-button { min-width: 104px; }
-}
-@media(max-width:390px) {
   .vaccination-fields .form-grid.vaccination-core-secondary { grid-template-columns: minmax(0,1fr); }
 }
 
