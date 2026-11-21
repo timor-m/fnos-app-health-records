@@ -1835,10 +1835,19 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 }
 .subpage-back:hover { background: var(--brand-softer); }
 .subpage-back:active { transform: scale(.94); }
-.appearance-select { flex: 0 0 auto; width: 132px; }
-.appearance-select .form-select-trigger { font-size: 14px; }
-.settings-band.appearance-band > header { min-height: 64px; border-bottom: 0; }
-.settings-band.appearance-band > header p { word-break: keep-all; overflow-wrap: break-word; }
+.settings-band.appearance-band > header > .appearance-select {
+  flex: 0 0 auto;
+  width: max-content;
+  max-width: 108px;
+  align-self: center;
+}
+.appearance-select .form-select-trigger {
+  width: 100%;
+  height: 36px;
+  padding: 0 8px;
+  gap: 2px;
+  font-size: 14px;
+}
 
 .settings-band { background: var(--surface); border-radius: var(--radius-l); box-shadow: var(--shadow-s); overflow: hidden; }
 .settings-band > header { min-height: 72px; border-bottom: 1px solid var(--line); padding: 15px 20px; display: flex; align-items: center; gap: 12px; }
@@ -2830,16 +2839,13 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
     box-shadow: inset 0 -1px 0 var(--hairline);
     transition: gap .22s ease;
   }
-  .mobile-topbar::after {
-    content: ""; position: absolute; z-index: 1;
-    left: 0; right: 0; top: var(--safe-top); bottom: 0;
-    background: color-mix(in srgb, var(--surface) 90%, transparent);
-    backdrop-filter: saturate(180%) blur(18px);
-    -webkit-backdrop-filter: saturate(180%) blur(18px);
-    opacity: 0; pointer-events: none;
-    transition: opacity .18s ease;
+  /* 飞牛 WebView 会把触摸高亮留在宽度过渡上，搜索框保留展开过渡，并关掉点击高亮。 */
+  .mobile-topbar.has-topbar-search {
+    background: var(--surface);
+    backdrop-filter: none; -webkit-backdrop-filter: none;
+    box-shadow: inset 0 -1px 0 var(--hairline);
   }
-  .mobile-topbar.has-topbar-search.topbar-search-focused::after { opacity: 1; }
+  .topbar-search-focused .topbar-search-context { opacity: 0; transition: none; }
   .topbar-brand-icon {
     flex: 0 0 auto; width: 30px; height: 30px; border-radius: 8px;
     transition: width .22s ease, opacity .16s ease, transform .22s ease;
@@ -2867,17 +2873,23 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
     width: clamp(120px, 40vw, 168px); min-width: 0;
     display: flex; align-items: center; justify-content: flex-end; gap: 0;
     transition: width .22s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .topbar-search-field,
+  .topbar-search-field input {
+    -webkit-tap-highlight-color: transparent;
   }
   .topbar-search-field {
     width: 100%; height: 36px; min-width: 0; flex: 1 1 auto; padding: 0 10px;
-    border: 1px solid transparent; border-radius: 999px; background: var(--surface);
-    color: var(--muted); box-shadow: var(--shadow-s);
+    border: 1px solid var(--line); border-radius: 999px; background: var(--fill-2);
+    color: var(--muted); box-shadow: none;
     display: flex; align-items: center; gap: 7px;
-    transition: width .22s ease, flex-grow .22s ease, border-color .18s ease, box-shadow .18s ease;
+    transition: border-color .18s ease;
   }
   .topbar-search-field:focus-within {
     border-color: color-mix(in srgb, var(--brand) 34%, transparent);
-    box-shadow: 0 0 0 3px var(--brand-soft);
+    background: var(--surface);
+    box-shadow: none;
   }
   .topbar-search-field > svg { flex: 0 0 auto; }
   .topbar-search-field input {

@@ -1863,7 +1863,7 @@ function requestReportReprocess(closeDiagnosticReview = false) {
   const title = source.value?.title || "当前报告";
   confirmDialog.ask({
     title: "重新识别",
-    message: `确认重新识别「${title}」？\n\n系统会基于原件重新生成 OCR、AI 整理结果和指标。在新结果完整成功前，当前已保存的报告数据和趋势会继续显示；本次失败也不会覆盖旧结果。已人工校对的字段会保留且不会被 AI 自动覆盖。`,
+    message: `确认重新识别「${title}」？\n\n· 按原件重新识别文字，并重新生成 AI 整理和指标\n· 新结果还没全部完成前，现在的报告和趋势照常显示\n· 这次失败，也不会覆盖原来的结果\n· 你手工改过的内容会保留，AI 不会再自动改掉`,
     confirmText: "重新识别",
     run: async () => {
       reprocessingReport.value = true;

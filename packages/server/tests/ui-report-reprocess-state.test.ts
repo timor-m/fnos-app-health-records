@@ -131,6 +131,10 @@ test("report detail and trends use consistent preserved-result language", () => 
   assert.match(reportDetail, /当前已保存的报告数据和趋势会继续显示/);
   assert.match(reportDetail, /本次失败也不会覆盖旧结果/);
   assert.match(reportDetail, /已人工校对的字段会保留且不会被 AI 自动覆盖/);
+  assert.match(reportDetail, /按原件重新识别文字，并重新生成 AI 整理和指标/);
+  assert.match(reportDetail, /新结果还没全部完成前，现在的报告和趋势照常显示/);
+  assert.match(reportDetail, /这次失败，也不会覆盖原来的结果/);
+  assert.match(reportDetail, /你手工改过的内容会保留，AI 不会再自动改掉/);
   assert.match(reprocessState, /当前仍展示上一次成功的报告数据和趋势/);
   assert.match(reprocessState, /原有报告数据和趋势未受影响/);
   assert.match(reprocessState, /重新运行 OCR \+ AI/);

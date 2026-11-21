@@ -45,7 +45,7 @@ const reminderBadge = computed(() => {
     <section class="settings-band appearance-band">
       <header>
         <SunMoon :size="20" />
-        <div><h3>外观</h3><p>主题跟随系统，也可固定浅色或深色</p></div>
+        <div><h3>外观</h3><p>跟随系统，或固定浅色、深色</p></div>
         <FormSelect v-model="themeSetting" :options="themeOptions" aria-label="外观主题" class="appearance-select" />
       </header>
     </section>
