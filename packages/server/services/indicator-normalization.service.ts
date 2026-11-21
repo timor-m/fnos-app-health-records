@@ -22,7 +22,7 @@ import { linkedObservationUnitQuotes } from "./observation-unit-evidence.service
 import { unitFromResultCell } from "./measurement-units.service";
 
 export function activeIndicatorNormalizationVersion() {
-  return `indicator-normalization-p17-total-t4-unit-conversion-${activeIndicatorDictionaryVersion()}`;
+  return `indicator-normalization-p18-thyroid-unit-conversion-${activeIndicatorDictionaryVersion()}`;
 }
 
 function normalizationVersion() {
@@ -1187,6 +1187,9 @@ export function convertUnit(canonicalKey: string, value: number, fromUnit: strin
   // This analyte-specific mass/molar factor must not apply to free T4 or total T3.
   if (canonicalKey === "thyroid_t4_total" && fromUnit === "μg/dL" && toUnit === "nmol/L") return value * 12.87;
   if (canonicalKey === "thyroid_t4_total" && fromUnit === "nmol/L" && toUnit === "μg/dL") return value / 12.87;
+  // Free T3: Mayo Clinic Laboratories SI conversion, 1 pg/mL = 1.54 pmol/L.
+  if (canonicalKey === "thyroid_ft3" && fromUnit === "pg/mL" && toUnit === "pmol/L") return value * 1.54;
+  if (canonicalKey === "thyroid_ft3" && fromUnit === "pmol/L" && toUnit === "pg/mL") return value / 1.54;
   const lipidKeys = new Set(["lipid_tc", "lipid_hdl_c", "lipid_ldl_c"]);
   if (lipidKeys.has(canonicalKey) && fromUnit === "mg/dL" && toUnit === "mmol/L") return value / 38.67;
   if (lipidKeys.has(canonicalKey) && fromUnit === "mmol/L" && toUnit === "mg/dL") return value * 38.67;
