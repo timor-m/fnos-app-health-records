@@ -6,6 +6,7 @@ import Detail from '../src/components/VaccinationDetail.vue';
 import NewPage from '../src/pages/NewVaccinationPage.vue';
 import DateTimePicker from '../src/components/DateTimePicker.vue';
 import FormSelect from '../src/components/FormSelect.vue';
+import FormSuggest from '../src/components/FormSuggest.vue';
 import ReminderEditor from '../src/components/VaccinationReminderEditor.vue';
 const mocks=vi.hoisted(()=>({request:vi.fn(),upload:vi.fn(),ask:vi.fn(),push:vi.fn(),replace:vi.fn()}));
 const app={selectedMemberId:ref('member'),selectedMember:ref({id:'member',permission:'manager'}),notifyDataChanged:vi.fn()};
@@ -124,7 +125,7 @@ it('opens the credential list directly from the upper-right picker without leavi
  const wrapper=render(Editor);await flushPromises();await wrapper.get('[aria-label="疫苗名称"]').setValue('手动名称');
  await wrapper.findAll('button').find(button=>button.text()==='关联原件')!.trigger('click');await flushPromises();
  expect(wrapper.get('.vaccination-source-toolbar [aria-label="接种原件"]').attributes('aria-expanded')).toBe('true');expect(document.querySelector('[role="listbox"][aria-label="接种原件"]')?.textContent).toContain('合成接种凭证');expect(wrapper.get('[aria-label="疫苗名称"]').element.value).toBe('手动名称');expect(wrapper.text()).not.toContain('凭证与备注');
- expect(wrapper.get('datalist').findAll('option').map(option=>option.attributes('value'))).toEqual(['第 1 剂','第 2 剂','第 3 剂','加强剂']);
+ expect(wrapper.getComponent(FormSuggest).props('options').map((option:{value:string})=>option.value)).toEqual(['第 1 剂','第 2 剂','第 3 剂','加强剂']); expect(wrapper.find('datalist').exists()).toBe(false);
 });
 it('does not describe a canceled reminder as active when editing clinical fields',async()=>{
  const wrapper=render(Editor,{entry:{...entry,reminderStatus:'dismissed'}});await flushPromises();

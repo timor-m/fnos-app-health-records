@@ -913,7 +913,7 @@ onDeactivated(() => {
     <p v-else-if="!snapshots.version.value" class="mini-loading trend-building" role="status">{{ snapshots.status.value === 'retrying' ? '趋势准备暂未完成，正在重试…' : '正在准备趋势数据…' }}<button class="soft-action-button" type="button" @click="retryLoad">刷新状态</button></p>
     <EmptyState v-else-if="!snapshots.total.value && !hasActiveFilters" title="暂无可比较指标" description="AI 整理出结构化数值后，这里会展示单次基线值和多次趋势。"><button class="soft-action-button" @click="groupManagerOpen=true">管理我的分组</button></EmptyState>
     <template v-else>
-      <div class="trend-filter-row" :class="{'trend-filter-pending':filterMaskVisible}">
+      <div class="trend-filter-row">
         <label class="search-field trend-search-field page-search-field">
           <Search :size="18" />
           <input v-model="query" placeholder="搜索指标名" />
@@ -1184,7 +1184,6 @@ onDeactivated(() => {
 
 <style scoped>
 .trend-group-loading { min-height: 144px; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--muted); font-size: 14px; }
-.trend-filter-pending { position: relative; z-index: 31; }
 .trend-filter-mask { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: color-mix(in srgb, var(--surface) 62%, transparent); }
 .trend-filter-loading { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-radius: var(--radius-l); background: var(--surface); box-shadow: var(--shadow-s); color: var(--ink); font-size: 14px; }
 

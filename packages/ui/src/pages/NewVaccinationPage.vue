@@ -52,14 +52,14 @@ function saved(entry:VaccinationEntry) { if (alive && route.path === '/add/vacci
 onBeforeUnmount(() => { alive = false; sequence++; });
 </script>
 <template>
-  <section class="new-vaccination-page">
+  <section class="new-vaccination-page page-stack">
     <SubPageHeader category="vaccination" :title="previousDose?'记录下一剂':'记录接种'" :back-to="backTo" back-label="返回上一页"><div v-if="!loading && !error && app.selectedMember.value?.permission==='manager'" ref="credentialTarget" class="vaccination-header-actions" /></SubPageHeader>
     <RecordLoading v-if="loading" label="正在读取来源接种…"/>
     <p v-else-if="error" role="alert" class="inline-panel-error">{{error}} <button class="error-retry" type="button" @click="load">重试</button></p>
-    <template v-else-if="app.selectedMember.value?.permission==='manager'">
+    <div v-else-if="app.selectedMember.value?.permission==='manager'" class="settings-band vaccination-create-panel">
       <p v-if="previousDose" class="record-detail-caption vaccination-previous-dose">上一剂：{{previousDose.vaccineName}} · {{formatMedicationDate(previousDose.administeredAt)}}<template v-if="previousDose.doseNumber"> · {{previousDose.doseNumber}}</template>。请填写本次实际接种日期和剂次。</p>
       <VaccinationEditor :key="scope" :source="source" :report="reportSource||undefined" :credential-target="credentialTarget" :initial-related-records="relatedRecords" :process-id="typeof route.query.processId==='string'?route.query.processId:undefined" @saved="saved" @cancel="router.push(backTo)"/>
-    </template>
+    </div>
     <p v-else>当前成员仅有查看权限。</p>
   </section>
 </template>

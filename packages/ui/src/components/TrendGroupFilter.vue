@@ -52,8 +52,10 @@ function expand(key: string) {
 
 <style scoped>
 .trend-group-heading { position: sticky; top: -6px; z-index: 2; background: var(--surface); border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 8px 8px; font-size: 16px; }
-.trend-group-search { display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin: 0 4px 8px; border: 1px solid var(--line); border-radius: var(--radius-m); }
-.trend-group-search input { width: 100%; min-width: 0; padding: 0; background: transparent; border: 0; font: inherit; }
+.trend-group-search { display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin: 5px 4px 3px; border: 1px solid var(--line); border-radius: var(--radius-m); transition: border-color .18s ease, box-shadow .18s ease; -webkit-tap-highlight-color: transparent; }
+.trend-group-search:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.trend-group-search input { width: 100%; min-width: 0; padding: 0; background: transparent; border: 0; outline: 0; box-shadow: none; font: inherit; -webkit-tap-highlight-color: transparent; }
+.trend-group-search input:focus, .trend-group-search input:focus-visible { outline: none; box-shadow: none; }
 .trend-group-personal { margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
 .trend-group-domain { justify-content: flex-start; }
 .trend-group-content small { margin-left: auto; white-space: nowrap; color: var(--muted); font-size: 12px; }

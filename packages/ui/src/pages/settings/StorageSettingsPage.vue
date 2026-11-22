@@ -149,7 +149,8 @@ onMounted(refresh);
 
 <style scoped>
 .archive-storage-panel { min-width: 0; }
-.archive-storage-body { padding: 20px; display: grid; gap: 18px; }
+.archive-storage-body { padding: 20px; display: grid; gap: 18px; min-width: 0; }
+.archive-storage-body > * { min-width: 0; max-width: 100%; }
 .archive-cleanup { display: flex; align-items: center; gap: 16px; border-top: 1px solid var(--line); padding-top: 16px; }
 .archive-cleanup > div { flex: 1; min-width: 0; }
 .archive-cleanup strong { font-size: 14px; font-weight: 500; }
@@ -164,14 +165,18 @@ onMounted(refresh);
 .archive-capacity .archive-status { flex-shrink: 0; color: var(--brand); background: var(--brand-soft); padding: 4px 10px; border-radius: var(--radius-s); }
 .archive-capacity .unavailable { color: var(--danger); background: var(--danger-soft); }
 .archive-directories { margin: 0; display: grid; gap: 16px; }
-.archive-directories > div { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 16px; }
+.archive-directories > div { display: grid; grid-template-columns: minmax(0, 180px) minmax(0, 1fr); gap: 16px; min-width: 0; }
 .archive-directories > div + div { border-top: 1px solid var(--line); padding-top: 16px; }
 .archive-directories dt { font-size: 12px; color: var(--ink); }
 .archive-directories dt span { display: block; margin-top: 5px; font-size: 12px; color: var(--muted); }
 .archive-directories dd { margin: 0; font-size: 14px; line-height: 1.7; color: var(--ink-2); overflow-wrap: anywhere; }
-.archive-migration-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 16px; }
-.archive-target { min-width: 0; display: grid; gap: 8px; font-size: 14px; }
-.archive-migration-form button { white-space: nowrap; }
+.archive-migration-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 16px; min-width: 0; max-width: 100%; }
+.archive-target { min-width: 0; max-width: 100%; display: grid; gap: 8px; font-size: 14px; }
+.archive-target :deep(.form-select),
+.archive-target :deep(.form-select-trigger) { width: 100%; min-width: 0; max-width: 100%; }
+.archive-migration-form .form-actions { display: flex; justify-content: flex-start; min-width: 0; max-width: 100%; }
+.archive-migration-form .form-actions button { width: auto; max-width: 100%; min-width: 0; white-space: nowrap; }
+.archive-guidance, .archive-safety { min-width: 0; max-width: 100%; }
 .archive-safety { border-top: 1px solid var(--line); padding-top: 14px; font-size: 12px; color: var(--muted); }
 .archive-safety summary { cursor: pointer; width: fit-content; }
 .archive-safety p { margin-top: 10px; }
@@ -180,7 +185,8 @@ onMounted(refresh);
   .archive-storage-body { padding: 16px; gap: 16px; }
   .archive-directories > div { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .archive-migration-form { grid-template-columns: minmax(0, 1fr); gap: 12px; }
-  .archive-migration-form .form-actions button { width: 100%; }
+  .archive-migration-form .form-actions { justify-content: stretch; }
+  .archive-migration-form .form-actions button { flex: 1 1 auto; width: 100%; }
   .archive-capacity { padding: 12px; }
   .archive-capacity strong { font-size: 20px; }
 }

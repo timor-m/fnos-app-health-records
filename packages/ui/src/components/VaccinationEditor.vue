@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onDeactivated, reactive, ref, useId, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onDeactivated, reactive, ref, watch } from 'vue';
 import { useAppContext } from '../composables/useAppContext';
 import { useUnsavedRecord } from '../composables/useUnsavedRecord';
 import { Paperclip, Upload, X } from '@lucide/vue';
@@ -12,6 +12,7 @@ import HealthRecordAssociationField from './HealthRecordAssociationField.vue';
 import type { HealthRecordRef } from '../../../shared/health-record-associations';
 import DateTimePicker from './DateTimePicker.vue';
 import FormSelect from './FormSelect.vue';
+import FormSuggest from './FormSuggest.vue';
 import ReportDetailModal from './ReportDetailModal.vue';
 import type { ReportDetail, VaccinationRecord } from '../types/api';
 import type { VaccinationEntry } from '../../../shared/health-categories';
@@ -20,7 +21,7 @@ const props = defineProps<{entry?: VaccinationEntry; source?: Partial<Vaccinatio
 const emit = defineEmits<{saved: [entry: VaccinationEntry]; cancel: []}>();
 const app = useAppContext();
 const root = ref<HTMLFormElement | null>(null);
-const doseOptionsId = useId();
+const doseOptions = ['第 1 剂', '第 2 剂', '第 3 剂', '加强剂'].map(dose => ({ value: dose, label: dose }));
 const attachmentInput = ref<HTMLInputElement|null>(null);
 const attachments = ref<Array<{id:string;file:File}>>([]);
 const uploadProgress = ref(0);
@@ -190,7 +191,7 @@ onBeforeUnmount(() => { alive = false; sequence++; credentialSequence++; });
         <small v-if="fieldErrors.administeredAt" class="vaccination-field-error">{{fieldErrors.administeredAt}}</small>
       </div>
       <div class="form-grid vaccination-core-secondary">
-        <label>剂次（选填）<input v-model="form.doseNumber" aria-label="剂次" maxlength="80" :list="doseOptionsId" placeholder="选择或填写剂次"/><datalist :id="doseOptionsId"><option v-for="dose in ['第 1 剂','第 2 剂','第 3 剂','加强剂']" :key="dose" :value="dose"/></datalist></label>
+        <label>剂次（选填）<FormSuggest v-model="form.doseNumber" :options="doseOptions" label="剂次" maxlength="80" placeholder="选择或填写剂次" :disabled="busy" /></label>
         <label>接种机构（选填）<input v-model="form.organizationName" aria-label="接种机构" maxlength="180" placeholder="接种医院或门诊"/></label>
       </div>
       <section v-if="!form.sourceReportId" class="vaccination-attachments" aria-label="原件附件">

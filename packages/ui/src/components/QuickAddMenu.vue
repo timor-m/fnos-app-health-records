@@ -265,7 +265,7 @@ onUnmounted(() => { mounted = false; window.removeEventListener('keydown', onKey
 </template>
 
 <style scoped>
-.quick-photo-status { position:fixed;left:16px;right:16px;bottom:calc(90px + env(safe-area-inset-bottom));z-index:80;max-width:440px;margin:auto;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface);box-shadow:var(--shadow-l);font-size:14px;overflow-wrap:anywhere; }
+.quick-photo-status { position:fixed;left:16px;right:16px;bottom:calc(90px + var(--nav-safe-bottom));z-index:80;max-width:440px;margin:auto;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface);box-shadow:var(--shadow-l);font-size:14px;overflow-wrap:anywhere; }
 .quick-photo-status button { margin:8px 12px 0 0;border:0;background:none;color:var(--brand-strong);font:inherit;cursor:pointer; }
 .quick-add-panel .quick-photo-entry:disabled { opacity:.45;cursor:not-allowed; }
 .quick-add-backdrop.quick-add-backdrop--inline { z-index: 69; }

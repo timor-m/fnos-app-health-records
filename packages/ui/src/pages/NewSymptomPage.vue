@@ -231,7 +231,6 @@ onDeactivated(()=>{pageActive.value=false;generation++;candidateGeneration++;can
 @media (max-width: 760px) {
   .create-form { gap: 12px; }
   .create-fields { padding: 14px; gap: 12px; }
-  .create-form > .record-form-actions { position: sticky; bottom: calc(66px + var(--safe-bottom, 0px)); z-index: 11; padding: 8px 0; background: var(--background); }
   .create-page :deep(.subpage-header h2) { display: none; }
   .create-more > summary { padding: 12px 14px; }
 }

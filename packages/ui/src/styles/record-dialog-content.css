@@ -63,6 +63,8 @@
 .vaccination-fields summary { padding: 4px 0; color: var(--ink-2); font-size: 12px; cursor: pointer; }
 .vaccination-extra-fields { padding-top: 10px; }
 .vaccination-fields .datetime-picker-field input { border: 0; box-shadow: none; background: transparent; }
+.vaccination-fields .form-suggest > input,
+.vaccination-fields .form-suggest > input:focus { width: 0; height: auto; margin: 0; padding: 11px 0 11px 12px; border: 0; box-shadow: none; background: transparent; }
 .symptom-record-detail > .process-symptoms { margin-bottom: 0; }
 @media (hover:hover) { .record-document-switch button:hover:not([aria-pressed=true]) { background: var(--fill-2); } }
 @media (max-width:760px) {
@@ -141,7 +143,10 @@
 .vaccination-confirmed-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .vaccination-original > .preview-stack { margin-top: 10px; }
 .vaccination-original > .preview-stack > .preview-card { padding-inline: 0; }
-.new-vaccination-page { height: calc(100vh - 94px); height: calc(100dvh - 94px); display: flex; flex-direction: column; min-height: 0; }
+.new-vaccination-page { display: grid; align-content: start; min-width: 0; max-width: 100%; }
+.vaccination-create-panel { width: min(760px, 100%); margin-inline: auto; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.new-vaccination-page .settings-form.vaccination-form { display: grid; flex: none; min-height: auto; }
+.new-vaccination-page .vaccination-form > .vaccination-fields { overflow: visible; flex: none; min-height: auto; padding: 0; }
 .new-vaccination-page > .subpage-header { flex: 0 0 auto; margin-bottom: 12px; }
 .new-vaccination-page > .subpage-header h2 { font-size: 16px; white-space: nowrap; }
 .new-vaccination-page > .subpage-header > div:not(.vaccination-header-actions) { flex: 1 0 auto; }
@@ -151,10 +156,7 @@
 .new-vaccination-page .vaccination-save-bar { background: transparent; }
 .vaccination-previous-dose { flex: 0 0 auto; margin-bottom: 8px; }
 @media(max-width:760px) {
-  .app-shell.is-vaccination-entry .workspace { display: flex; flex-direction: column; height: 100vh; height: 100dvh; min-height: 0; padding-bottom: calc(82px + var(--safe-bottom)); }
-  .app-shell.is-vaccination-entry .mobile-topbar { flex: 0 0 auto; }
-  .app-shell.is-vaccination-entry .page-content { flex: 1 1 auto; min-height: 0; padding-top: 8px; padding-bottom: 0; overflow: hidden; }
-  .new-vaccination-page { height: 100%; }
+  .vaccination-create-panel { width: 100%; padding: 14px; }
   .vaccination-form > .vaccination-save-bar { padding-top: 4px; padding-bottom: max(4px, env(safe-area-inset-bottom)); border-top: 0; }
   .new-vaccination-page .vaccination-save-bar { padding-bottom: 4px; }
   .vaccination-editor-actions.form-actions > button { position: relative; flex: 0 0 auto; height: 32px; min-height: 32px; min-width: 72px; padding-inline: 14px; }

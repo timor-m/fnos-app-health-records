@@ -1,6 +1,16 @@
 import { apiUrl, request } from './api';
 import { createUuid } from './uuid';
 export const feedbackStatus:Record<string,string>={received:'已收到',needs_info:'待补充',confirmed:'已确认',in_progress:'处理中',fixed_pending_release:'已修复，待发布',released_pending_verification:'已发布，待验证',resolved:'已解决',closed:'已关闭'};
+export function feedbackStatusTone(status:string) {
+  if (status==='needs_info'||status==='released_pending_verification') return 'is-attention';
+  if (status==='confirmed'||status==='in_progress'||status==='fixed_pending_release') return 'is-active';
+  if (status==='resolved') return 'is-done';
+  if (status==='closed') return 'is-closed';
+  return 'is-received';
+}
+export function feedbackHasUnseenUpdate(version:number,seen?:number) {
+  return Number.isSafeInteger(version)&&version>1&&(seen===undefined||seen<version);
+}
 export const feedbackCategory:Record<string,string>={problem:'使用问题',suggestion:'功能建议',other:'其他反馈'};
 export type FeedbackDraft = {category:'other';title:string;description:string};
 // One navigation handoff, kept in memory rather than URLs or browser storage.

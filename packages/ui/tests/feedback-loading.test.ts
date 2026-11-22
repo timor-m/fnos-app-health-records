@@ -74,3 +74,36 @@ it('keeps the loading overlay until the latest search finishes and ignores an ea
  expect(page.get('.feedback-row').text()).toContain('最新搜索结果');
  expect(page.find('[role="status"]').exists()).toBe(false);
 });
+
+it('marks an unseen admin update, colors the status, and lets the detail title use the full row',async()=>{
+ localStorage.removeItem('health-records.feedback-seen');
+ const updated={...ticket,status:'needs_info',version:2,events:[{id:2,actorType:'admin',content:'请补充',createdAt:'2026-01-02T00:00:00Z',attachments:[]}]};
+ request.mockImplementation(async(path:string)=>path.includes('/B0001')?updated:{items:[updated],total:1});
+ render();await flushPromises();
+ expect(page.get('.feedback-unseen').text()).toBe('有新回复');
+ expect(page.get('.feedback-status').classes()).toContain('is-attention');
+ await page.get('.feedback-row').trigger('click');await flushPromises();
+ const header=page.get('.feedback-detail header');
+ expect(header.get('.feedback-status').element.parentElement).toBe(header.get('.row-meta').element);
+ expect(header.get('h3').element.parentElement).toBe(header.element);
+ await page.get('.feedback-back').trigger('click');await flushPromises();
+ expect(page.find('.feedback-unseen').exists()).toBe(false);
+});
+
+it('puts the newest progress update first and marks it',async()=>{
+ localStorage.removeItem('health-records.feedback-seen');
+ const detail={...ticket,status:'needs_info',version:3,updatedAt:'2026-01-03T00:00:00Z',events:[
+  {id:1,actorType:'user',content:'先补充',createdAt:'2026-01-01T00:00:00Z',toStatus:'received',attachments:[]},
+  {id:3,actorType:'admin',content:'请再补充',createdAt:'2026-01-03T00:00:00Z',toStatus:'needs_info',attachments:[]}
+ ],eventTotal:2};
+ request.mockImplementation(async(path:string)=>String(path).includes('/B0001')?detail:{items:[detail],total:1});
+ render();await flushPromises();
+ await page.get('.feedback-row').trigger('click');await flushPromises();
+ const items=page.findAll('.feedback-timeline li');
+ expect(items[0].classes()).toContain('is-latest');
+ expect(items[0].text()).toContain('最新');
+ expect(items[0].text()).toContain('管理员');
+ expect(items[0].text()).toContain('请再补充');
+ expect(items[1].text()).toContain('我');
+ expect(items[1].text()).not.toContain('最新');
+});

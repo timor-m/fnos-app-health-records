@@ -10,7 +10,7 @@ import { copyTextToClipboard } from "../../utils/clipboard";
 import { useScrollLock } from "../../composables/useScrollLock";
 import { request } from "../../utils/api";
 import { feedbackEnvironment, feedbackEnvironmentPayload, feedbackSnapshotDisplay, type FeedbackAbout, type FeedbackEnvironment } from "../../utils/feedback-environment";
-import { requestFeedback, feedbackStatus, feedbackCategory, createFeedbackOperation, postFeedback, takeFeedbackDraft, type FeedbackDraft, type FeedbackTicket } from "../../utils/feedback-service";
+import { requestFeedback, feedbackStatus, feedbackStatusTone, feedbackHasUnseenUpdate, feedbackCategory, createFeedbackOperation, postFeedback, takeFeedbackDraft, type FeedbackDraft, type FeedbackTicket } from "../../utils/feedback-service";
 import { createUuid } from "../../utils/uuid";
 import { useToast } from "../../composables/useToast";
 
@@ -25,6 +25,11 @@ const page=ref(1), total=ref(0), eventPage=ref(1);
 const message=ref('');
 const operation=createFeedbackOperation();
 const uploaded=new WeakMap<File,{key:string;id?:number;at?:number}>();
+const seenKey='health-records.feedback-seen';
+function readSeen(){try{const value=JSON.parse(localStorage.getItem(seenKey)||'{}');return value&&typeof value==='object'?value as Record<string,number>:{};}catch{return {};}}
+const seen=ref(readSeen());
+function remember(raw:FeedbackTicket){if(!raw.number||!Number.isSafeInteger(raw.version))return;const next={...seen.value,[raw.number]:raw.version};seen.value=next;try{localStorage.setItem(seenKey,JSON.stringify(next));}catch{/* 记不住已读版本时，列表仍显示未读标记 */}}
+function unseenReply(item:Feedback){const known=seen.value[item.id];return feedbackHasUnseenUpdate(item.raw.version,typeof known==='number'?known:undefined);}
 function present(raw:FeedbackTicket):Feedback {return {raw,id:raw.number,title:raw.title,category:feedbackCategory[raw.category]||raw.category,status:feedbackStatus[raw.status]||raw.status,description:raw.description||'',reply:raw.fixedVersion?'修复版本 '+raw.fixedVersion:'更新于 '+new Date(raw.updatedAt).toLocaleString()};}
 let listSequence=0, detailSequence=0;
 async function loadList() {
@@ -38,7 +43,7 @@ async function loadList() {
 async function loadDetail() {
   if(!selected.value) return;
   const number=selected.value.id,seq=++detailSequence;detailError.value='';detailLoading.value=true;
-  try {const result=await requestFeedback<FeedbackTicket>('tickets/'+number+'?eventPage='+eventPage.value+'&eventPageSize=10');if(seq===detailSequence&&selected.value?.id===number){selected.value=present(result);return true;}}
+  try {const result=await requestFeedback<FeedbackTicket>('tickets/'+number+'?eventPage='+eventPage.value+'&eventPageSize=10');if(seq===detailSequence&&selected.value?.id===number){selected.value=present(result);remember(result);return true;}}
   catch(e){if(seq===detailSequence)detailError.value=e instanceof Error?e.message:'详情加载失败';}
   finally {if(seq===detailSequence)detailLoading.value=false;}
 }
@@ -73,7 +78,7 @@ watch(() => route?.query.feedback, async number => {
   try {
     const result = await requestFeedback<FeedbackTicket>('tickets/'+number+'?eventPage=1&eventPageSize=10');
     if (route?.query.feedback !== number) return;
-    selected.value=present(result);eventPage.value=1;screen.value='detail';detailError.value='';
+    selected.value=present(result);remember(result);eventPage.value=1;screen.value='detail';detailError.value='';
   } catch (cause) { detailError.value=cause instanceof Error ? cause.message : '反馈详情加载失败';toast.show(detailError.value); }
 }, { immediate: true });
 const attachments = ref<File[]>([]);
@@ -157,7 +162,7 @@ async function submit() {
     const kind=category.value==='使用问题'?'problem':category.value==='功能建议'?'suggestion':'other';
     const body={category:kind,title:title.value.trim(),description:description.value.trim(),...(kind==='problem'?{reproductionSteps:steps.value.trim()}:{}),attachmentIds:ids,environment:environmentPayload.value};
     const result=await postFeedback<{number:string;status:string;version:number;createdAt:string}>('tickets',body,operation.key('submit',JSON.stringify(body)));
-    selected.value=present({number:result.number,title:body.title,description:body.description,category:kind,status:result.status,version:result.version,createdAt:result.createdAt,updatedAt:result.createdAt,fixedVersion:null});
+    const created={number:result.number,title:body.title,description:body.description,category:kind,status:result.status,version:result.version,createdAt:result.createdAt,updatedAt:result.createdAt,fixedVersion:null};selected.value=present(created);remember(created);
     title.value='';description.value='';steps.value='';
     attachments.value=[];operation.clear('submit');eventPage.value=1;modal.value='success';page.value=1;query.value='';void loadList();
   } catch(e) {error.value=e instanceof Error?e.message:'提交失败，请重试';if((e as {status?:number})?.status===410) {for(const image of attachments.value)uploaded.delete(image);operation.clear('submit');}}
@@ -185,6 +190,26 @@ async function copyNumber() {
   toast.show(copied ? "反馈编号已复制" : "复制失败，请手动选择编号");
 }
 function openDetail(item: Feedback) { selected.value = item; screen.value = "detail";eventPage.value=1;message.value="";void loadDetail(); }
+function sortedProgress(events: FeedbackTicket['events']) {
+  return [...(events ?? [])].sort((a, b) => {
+    const time = Date.parse(b.createdAt) - Date.parse(a.createdAt);
+    if (Number.isFinite(time) && time !== 0) return time;
+    return b.id - a.id;
+  });
+}
+function latestProgressId(raw: FeedbackTicket) {
+  if (eventPage.value !== 1) return null;
+  const events = raw.events ?? [];
+  const latest = sortedProgress(events)[0];
+  if (!latest) return null;
+  const updated = Date.parse(raw.updatedAt);
+  const at = Date.parse(latest.createdAt);
+  if ((raw.eventTotal ?? events.length) > events.length && Number.isFinite(updated) && Number.isFinite(at) && updated - at > 120000) return null;
+  return latest.id;
+}
+function progressActor(actorType: string) {
+  return actorType === 'admin' ? '管理员' : actorType === 'user' ? '我' : '系统';
+}
 </script>
 
 <template>
@@ -219,8 +244,8 @@ function openDetail(item: Feedback) { selected.value = item; screen.value = "det
             <button v-if="!query" class="feedback-secondary" @click="openForm">提交第一条反馈</button>
           </div>
           <button v-for="item in items" :key="item.id" class="feedback-row" :disabled="loading" @click="openDetail(item)">
-            <div><div class="row-meta"><span>{{ item.id }}</span><span>{{ item.category }}</span></div><h3>{{ item.title }}</h3><p>{{ item.reply }}</p></div>
-            <span class="feedback-status" :class="{ active: item.status === '处理中' }">{{ item.status }}</span><ChevronRight :size="17" />
+            <div><div class="row-meta"><span>{{ item.id }}</span><span>{{ item.category }}</span><span v-if="unseenReply(item)" class="feedback-unseen">有新回复</span></div><h3>{{ item.title }}</h3><p>{{ item.reply }}</p></div>
+            <span class="feedback-status" :class="feedbackStatusTone(item.raw.status)">{{ item.status }}</span><ChevronRight :size="17" />
           </button>
         </div>
       </section>
@@ -230,11 +255,11 @@ function openDetail(item: Feedback) { selected.value = item; screen.value = "det
     <template v-else>
       <button class="feedback-back" :disabled="actionBusy" @click="screen = 'list'"><ArrowLeft :size="16" />返回反馈列表</button>
       <section v-if="selected" class="feedback-card feedback-detail">
-        <header><div><div class="row-meta"><span>{{ selected.id }}</span><span>{{ selected.category }}</span></div><h3>{{ selected.title }}</h3></div><span class="feedback-status">{{ selected.status }}</span></header>
+        <header><div class="row-meta"><span>{{ selected.id }}</span><span>{{ selected.category }}</span><span class="feedback-status" :class="feedbackStatusTone(selected.raw.status)">{{ selected.status }}</span></div><h3>{{ selected.title }}</h3></header>
         <div class="detail-section"><h4>问题描述</h4><p class="description">{{ selected.description }}</p></div>
         <div v-if="selected.raw.attachments?.length" class="detail-section"><h4>问题附件 · {{ selected.raw.attachments.length }} 个</h4><FeedbackAttachments :attachments="selected.raw.attachments" /></div>
         <div v-if="selected.raw.reproductionSteps" class="detail-section"><h4>复现步骤</h4><p class="description">{{ selected.raw.reproductionSteps }}</p></div>
-        <div class="detail-section"><h4 class="feedback-progress-heading">处理进度<button type="button" class="plain-icon-button" :disabled="actionBusy || detailLoading" :aria-busy="detailLoading" :aria-label="detailLoading ? '正在刷新进度' : '刷新进度'" :title="detailLoading ? '正在刷新进度' : '刷新进度'" @click="refreshDetail"><RefreshCw :size="15" :class="{ 'spin-icon': detailLoading }" aria-hidden="true" /></button></h4><p v-if="selected.raw.fixedVersion">修复版本：{{ selected.raw.fixedVersion }}</p><p v-if="detailError" role="alert">{{ detailError }}</p><ol class="feedback-timeline"><li v-for="event in selected.raw.events" :key="event.id"><strong>{{ event.actorType==='admin'?'管理员':event.actorType==='user'?'用户':'系统' }} · {{ event.toStatus ? feedbackStatus[event.toStatus] : '补充回复' }}</strong><p>{{ new Date(event.createdAt).toLocaleString() }}<span v-if="event.fixedVersion"> · 修复版本 {{ event.fixedVersion }}</span></p><p class="description">{{ event.content }}</p><FeedbackAttachments v-if="event.attachments?.length" :attachments="event.attachments" /></li></ol><div v-if="(selected.raw.eventTotal||0)>10" class="list-toolbar"><button :disabled="eventPage===1||actionBusy" @click="eventPage--;loadDetail()">上一页</button><span>第 {{ eventPage }} 页</span><button :disabled="eventPage*10>=(selected.raw.eventTotal||0)||actionBusy" @click="eventPage++;loadDetail()">下一页</button></div></div>
+        <div class="detail-section"><h4 class="feedback-progress-heading">处理进度<button type="button" class="plain-icon-button" :disabled="actionBusy || detailLoading" :aria-busy="detailLoading" :aria-label="detailLoading ? '正在刷新进度' : '刷新进度'" :title="detailLoading ? '正在刷新进度' : '刷新进度'" @click="refreshDetail"><RefreshCw :size="15" :class="{ 'spin-icon': detailLoading }" aria-hidden="true" /></button></h4><p v-if="selected.raw.fixedVersion">修复版本：{{ selected.raw.fixedVersion }}</p><p v-if="detailError" role="alert">{{ detailError }}</p><ol class="feedback-timeline"><li v-for="event in sortedProgress(selected.raw.events)" :key="event.id" :class="{ 'is-latest': latestProgressId(selected.raw) === event.id }"><div class="feedback-event-heading"><span v-if="latestProgressId(selected.raw) === event.id" class="feedback-latest">最新</span><strong :class="event.actorType === 'admin' ? 'is-admin' : event.actorType === 'user' ? 'is-user' : 'is-system'">{{ progressActor(event.actorType) }}</strong><span v-if="event.toStatus" class="feedback-status" :class="feedbackStatusTone(event.toStatus)">{{ feedbackStatus[event.toStatus] }}</span><span v-else class="feedback-reply-kind">补充回复</span></div><p>{{ new Date(event.createdAt).toLocaleString() }}<span v-if="event.fixedVersion"> · 修复版本 {{ event.fixedVersion }}</span></p><p v-if="event.content" class="description">{{ event.content }}</p><FeedbackAttachments v-if="event.attachments?.length" :attachments="event.attachments" /></li></ol><div v-if="(selected.raw.eventTotal||0)>10" class="list-toolbar"><button :disabled="eventPage===1||actionBusy" @click="eventPage--;loadDetail()">上一页</button><span>第 {{ eventPage }} 页</span><button :disabled="eventPage*10>=(selected.raw.eventTotal||0)||actionBusy" @click="eventPage++;loadDetail()">下一页</button></div></div>
         <div class="detail-section"><h4>补充说明</h4><textarea v-model="message" aria-label="补充说明" rows="3" maxlength="3000" :disabled="actionBusy" placeholder="补充问题情况，请勿填写健康报告、检查结果或账号密钥" /><FeedbackAttachmentPicker v-model="messageAttachments" :key="selected.id" :disabled="actionBusy" @editing="editingImage = $event" /><div class="modal-actions"><button class="feedback-secondary" :disabled="actionBusy||(!message.trim()&&!messageAttachments.length)" @click="updateFeedback('message')">{{ actionBusy ? '发送中…' : '发送补充' }}</button><button v-if="selected.raw.status==='released_pending_verification'" class="feedback-primary" :disabled="actionBusy" @click="updateFeedback('confirm')">确认已解决</button><button v-if="['released_pending_verification','resolved'].includes(selected.raw.status)" class="feedback-secondary" :disabled="actionBusy||!message.trim()" @click="updateFeedback('reopen')">仍未解决</button></div></div>
         <details v-if="selected.raw.environment" class="environment-info detail-section"><summary>提交时的环境信息</summary><dl><div v-for="item in feedbackSnapshotDisplay(selected.raw.environment)" :key="item.label"><dt>{{ item.label }}</dt><dd>{{ item.value }}</dd></div></dl></details>
         <footer><span>请通过反馈编号跟进问题；如需紧急了解处理进展，可在 QQ 群发送此编号进行跟进。</span><button class="feedback-secondary" @click="copyNumber"><Copy :size="15" />复制编号</button></footer>
@@ -278,13 +303,15 @@ function openDetail(item: Feedback) { selected.value = item; screen.value = "det
 </template>
 
 <style scoped>
-.feedback-page { gap: 18px; }
+.feedback-page { gap: 18px; min-width: 0; max-width: 100%; }
 .feedback-fields { display:grid; gap:14px; min-width:0; }
 .feedback-detail textarea { width:100%; box-sizing:border-box; margin:12px 0; padding:12px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--ink); }
 .preview-notice { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
-.feedback-hero { display: flex; align-items: center; gap: 18px; padding: 26px; background: var(--brand-softer); border: 1px solid var(--brand-soft); border-radius: 18px; }
+.feedback-hero { display: flex; align-items: center; gap: 18px; min-width: 0; max-width: 100%; padding: 26px; background: var(--brand-softer); border: 1px solid var(--brand-soft); border-radius: 18px; }
 .hero-symbol,.success-icon { display: grid; place-items: center; width: 54px; height: 54px; border-radius: 17px; background: var(--brand-soft); color: var(--brand); flex-shrink: 0; }
-.feedback-hero > div:nth-child(2) { flex: 1; }
+.feedback-hero > div:nth-child(2) { flex: 1; min-width: 0; }
+.feedback-hero h3,.feedback-hero p { max-width: 100%; overflow-wrap: break-word; word-break: keep-all; }
+.feedback-hero > .feedback-primary { flex: 0 0 auto; max-width: 100%; }
 h3,h4,p { margin: 0; }
 h3 { font-size: 16px; line-height: 1.6; } h4 { font-size: 16px; }
 p { color: var(--muted); font-size: 12px; line-height: 1.8; }
@@ -304,8 +331,10 @@ button[aria-pressed="true"] { background: var(--brand-soft); color: var(--brand-
 .type-options button[aria-pressed="true"] { color: var(--brand-strong); background: var(--surface); border-color: var(--brand-soft); box-shadow: 0 2px 5px var(--hairline); font-weight: 600; }
 .type-options button svg { flex-shrink: 0; }
 @media(max-width:360px) { .type-options button { gap: 4px; font-size: 12px; } }
-.feedback-search { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-radius: 9px; background: var(--fill-2); color: var(--muted); }
-.feedback-search input { width: 160px; border: 0; outline: 0; background: transparent; font-size: 14px; color: var(--ink); }
+.feedback-search { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--fill-2); color: var(--muted); transition: border-color .18s ease, box-shadow .18s ease, background-color .18s ease; -webkit-tap-highlight-color: transparent; }
+.feedback-search:focus-within { border-color: var(--brand); background: var(--surface); box-shadow: 0 0 0 3px var(--brand-soft); }
+.feedback-search input { width: 160px; min-width: 0; border: 0; outline: 0; background: transparent; font-size: 14px; color: var(--ink); box-shadow: none; -webkit-tap-highlight-color: transparent; }
+.feedback-search input:focus,.feedback-search input:focus-visible { outline: none; box-shadow: none; }
 .feedback-list-body { position: relative; }
 .feedback-list-loading { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; cursor: progress; }
 .feedback-list-loading.is-refreshing { background: color-mix(in srgb, var(--surface) 75%, transparent); }
@@ -329,7 +358,13 @@ button[aria-pressed="true"] { background: var(--brand-soft); color: var(--brand-
 .feedback-row:disabled { cursor: progress; }
 .feedback-row > div { flex: 1; min-width: 0; }.feedback-row h3 { font-size: 16px; margin: 6px 0; }.feedback-row > svg { color: var(--arrow-muted); flex-shrink: 0; }
 .row-meta { display: flex; flex-wrap: wrap; gap: 10px; color: var(--muted); font-size: 12px; }
-.feedback-status { padding: 5px 9px; border-radius: 6px; background: var(--fill-1); color: var(--muted); font-size: 12px; white-space: nowrap; }.feedback-status.active { color: var(--brand-strong); background: var(--brand-soft); }
+.feedback-status { padding: 5px 9px; border-radius: 6px; background: var(--fill-1); color: var(--muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.feedback-status.is-received { color: var(--info); background: var(--info-soft); }
+.feedback-status.is-attention { color: var(--amber); background: var(--amber-soft); }
+.feedback-status.is-active { color: var(--brand-strong); background: var(--brand-soft); }
+.feedback-status.is-done { color: var(--green-ok); background: var(--green-ok-soft); }
+.feedback-status.is-closed { color: var(--muted); background: var(--fill-1); }
+.feedback-unseen { padding: 2px 8px; border-radius: 999px; background: var(--amber-soft); color: var(--amber); font-size: 12px; font-weight: 600; white-space: nowrap; }
 .feedback-back { display: flex; align-items: center; gap: 7px; justify-self: start; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; }
 .feedback-form { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .feedback-form-body { padding: 18px 20px; min-height:0; flex:1 1 auto; overflow-y:auto; overscroll-behavior:contain; }.section-heading p { margin-top: 4px; }
@@ -339,11 +374,11 @@ button[aria-pressed="true"] { background: var(--brand-soft); color: var(--brand-
 .environment-preview { padding: 11px 12px; border-radius: 10px; background: var(--fill-2); font-size: 12px; }.environment-preview summary { cursor: pointer; }.environment-preview span { color: var(--muted); margin-left: 8px; }.environment-preview p { margin-top: 10px; }
 footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid var(--line); padding-top: 18px; }footer > span { font-size: 12px; color: var(--muted); }
 .success-card { display: grid; justify-items: center; gap: 16px; padding: 40px 24px; text-align: center; }.number-box { display: grid; justify-items: center; gap: 12px; width: min(100%, 320px); padding: 24px; border-radius: 14px; background: var(--fill-2); }.number-box > span { font-size: 12px; color: var(--muted); }.number-box strong { font-size: 28px; letter-spacing: .05em; }
-.feedback-detail { padding: 26px; }.feedback-detail header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }.feedback-detail h3 { margin-top: 7px; }.detail-section { margin-top: 26px; }.detail-section > p { margin-top: 10px; }.description { white-space: pre-wrap; overflow-wrap: anywhere; }.feedback-timeline { padding: 0 0 0 18px; margin: 18px 0 24px; border-left: 2px solid var(--brand-soft); list-style: none; }.feedback-timeline li { position: relative; margin-bottom: 20px; }.feedback-timeline li::before { content: ''; position: absolute; left: -24px; top: 5px; width: 10px; height: 10px; border-radius: 50%; background: var(--brand); border: 2px solid var(--surface); }.feedback-timeline strong { font-size: 14px; }
+.feedback-detail { padding: 26px; }.feedback-detail header { display: grid; gap: 8px; min-width: 0; }.feedback-detail header .row-meta { align-items: center; min-width: 0; }.feedback-detail header .feedback-status { margin-left: auto; }.feedback-detail header h3 { margin-top: 0; min-width: 0; overflow-wrap: break-word; word-break: keep-all; }.detail-section { margin-top: 26px; }.detail-section > p { margin-top: 10px; }.description { white-space: pre-wrap; overflow-wrap: anywhere; }.feedback-timeline { padding: 0 0 0 18px; margin: 18px 0 24px; border-left: 2px solid var(--brand-soft); list-style: none; }.feedback-timeline li { position: relative; margin-bottom: 20px; min-width: 0; }.feedback-timeline li::before { content: ''; position: absolute; left: -24px; top: 5px; width: 10px; height: 10px; border-radius: 50%; background: var(--line-strong); border: 2px solid var(--surface); }.feedback-timeline li.is-latest { margin-bottom: 16px; padding: 10px 12px 2px; border: 1px solid var(--brand-soft); border-radius: 12px; background: var(--brand-softer); }.feedback-timeline li.is-latest::before { width: 12px; height: 12px; left: -25px; top: 16px; background: var(--brand); box-shadow: 0 0 0 4px var(--brand-soft); }.feedback-event-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }.feedback-timeline strong { font-size: 14px; font-weight: 600; }.feedback-timeline .is-admin { color: var(--brand-strong); }.feedback-timeline .is-user { color: var(--ink-2); }.feedback-timeline .is-system { color: var(--info); }.feedback-latest { padding: 2px 8px; border-radius: 999px; background: var(--brand); color: #fff; font-size: 12px; font-weight: 600; }.feedback-reply-kind { color: var(--muted); font-size: 12px; }
 .feedback-progress-heading { display: flex; align-items: center; gap: 6px; }
 button:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
 @media(max-width:600px) {
-.feedback-hero { flex-wrap: wrap; padding: 20px; gap: 12px; }.hero-symbol { display: none; }.feedback-hero > div:nth-child(2) { flex-basis: 100%; }.list-toolbar { flex-direction: column; align-items: stretch; padding: 14px; }.feedback-search input { width: 100%; }.feedback-row { padding: 18px 14px; gap: 10px; flex-wrap: wrap; }.feedback-row > div { flex-basis: 100%; }.feedback-row > svg { margin-left: auto; }.feedback-detail { padding: 20px 16px; }footer { flex-direction: column; align-items: stretch; }.feedback-detail header { align-items: flex-start; }.number-box { box-sizing: border-box; }
+.feedback-hero { flex-wrap: wrap; padding: 20px; gap: 12px; }.hero-symbol { display: none; }.feedback-hero > div:nth-child(2) { flex-basis: 100%; }.list-toolbar { flex-direction: column; align-items: stretch; padding: 14px; }.feedback-search input { width: 100%; }.feedback-row { padding: 18px 14px; gap: 10px; flex-wrap: wrap; }.feedback-row > div { flex-basis: 100%; }.feedback-row > svg { margin-left: auto; }.feedback-detail { padding: 20px 16px; }footer { flex-direction: column; align-items: stretch; }.number-box { box-sizing: border-box; }
 }
 .feedback-overlay { position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--overlay); backdrop-filter: blur(4px); }
 .feedback-modal { width: min(600px, 100%); max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); display: flex; flex-direction: column; overflow: hidden; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow-m); outline: none; }

@@ -98,7 +98,7 @@ it('centers initial group loading when every group was collapsed',async()=>{
  }finally{wrapper.unmount();}
 });
 
-it('keeps filters above the mask and scrolls after results render before hiding it',async()=>{
+it('covers the filter row while loading and scrolls after results render before hiding the mask',async()=>{
  const first=sampleTrend(['2']),target={...first,name:'目标指标'};
  let finish!:(value:unknown)=>void;
  request.mockImplementation(async(path:string,init?:RequestInit)=>path==='trends/snapshot/charts'?snapshotParts([first,target],init)
@@ -112,7 +112,7 @@ it('keeps filters above the mask and scrolls after results render before hiding 
  try{
   await flushPromises();Object.defineProperty(window,'scrollY',{configurable:true,value:600});
   await wrapper.get('input[placeholder="搜索指标名"]').setValue('目标');
-  expect(wrapper.get('.trend-filter-row').classes()).toContain('trend-filter-pending');
+  expect(wrapper.get('.trend-filter-row').classes()).not.toContain('trend-filter-pending');
   expect(wrapper.find('.trend-filter-mask').exists()).toBe(true);
   expect(wrapper.get('input[placeholder="搜索指标名"]').attributes('disabled')).toBeUndefined();
   await vi.advanceTimersByTimeAsync(251);await flushPromises();

@@ -42,7 +42,7 @@ test("back-to-top styles keep the button above the mobile bottom nav", () => {
   assert.match(styles, /\.back-to-top \{/);
   /* 断言结构（底部导航 66px + 安全区 + 额外间距 ≥28px），不钉死具体像素，方便后续微调 */
   const offset = styles.match(
-    /\.back-to-top \{ right: 14px; bottom: calc\(66px \+ var\(--safe-bottom\) \+ (\d+)px\); \}/,
+    /\.back-to-top \{ right: 14px; bottom: calc\(66px \+ var\(--nav-safe-bottom\) \+ (\d+)px\); \}/,
   );
   assert.ok(offset, "back-to-top 触屏端定位结构缺失");
   assert.ok(Number(offset[1]) >= 28);
