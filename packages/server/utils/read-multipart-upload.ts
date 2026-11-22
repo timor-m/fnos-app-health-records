@@ -1,12 +1,13 @@
 import busboy from 'busboy';
 import { createWriteStream } from 'node:fs';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { getHeader, HTTPError, type H3Event } from 'h3';
 import { apiError, classifySystemError } from './api-error';
 import { getAppConfig } from './runtime-config';
+import { ensureWritableArchiveDirectory } from './writable-archive-directory';
 
 type UploadedPart = { name: string; filename: string; type: string; path: string; size: number };
 type MultipartUpload = { fields: Record<string, string>; files: UploadedPart[] };
@@ -27,8 +28,7 @@ export async function withMultipartUpload<T>(event: H3Event, limits: UploadLimit
   } catch { throw invalid(); }
 
   // This directory lives on the archive volume, outside directories replaced by restore.
-  const root = join(getAppConfig().storageDir, 'uploads');
-  await mkdir(root, { recursive: true, mode: 0o700 });
+  const root = ensureWritableArchiveDirectory(join(getAppConfig().storageDir, 'uploads'));
   const directory = await mkdtemp(join(root, 'incoming-'));
   const controller = new AbortController();
   const writes: Promise<void>[] = [];

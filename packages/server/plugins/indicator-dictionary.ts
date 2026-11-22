@@ -8,6 +8,7 @@ import {
   backfillLegacyMorphologyFindings,
   rebuildMorphologyTrackingIfNeeded
 } from "../services/morphology-finding.service";
+import { collapseStoredUnverifiedObservationDuplicates } from "../services/ai-extraction.service";
 import { backfillDocumentWideObservationDates, backfillMorphologyExaminationAssignments } from "../services/report-examination-inference.service";
 
 export default definePlugin(() => {
@@ -18,6 +19,7 @@ export default definePlugin(() => {
   syncBuiltinTrendGroups(getDatabase());
   backfillLegacyMorphologyFindings();
   backfillDocumentWideObservationDates();
+  collapseStoredUnverifiedObservationDuplicates();
   backfillMorphologyExaminationAssignments();
   rebuildMorphologyTrackingIfNeeded();
 });

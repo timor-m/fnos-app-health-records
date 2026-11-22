@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { createError } from 'h3';
 import type { RequestUser } from '../domain/request-user';
 import { getAppConfig } from '../utils/runtime-config';
+import { ensureWritableArchiveDirectory } from '../utils/writable-archive-directory';
 import { assertMemberManage, requireAuthenticated } from './member.service';
 import { createUploadFromStagedFiles, detectUploadType } from './upload.service';
 
@@ -14,6 +15,7 @@ type StagedManifest = { memberId: string; context?: HealthUploadContext; files: 
 export function cleanupExpiredStagedUploads(now = Date.now()) {
   const root = join(getAppConfig().storageDir, 'upload-staging');
   if (!existsSync(root)) return;
+  ensureWritableArchiveDirectory(root);
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (!entry.isDirectory() || !/^[a-f0-9]{64}$/.test(entry.name)) continue;
     const path = join(root, entry.name);

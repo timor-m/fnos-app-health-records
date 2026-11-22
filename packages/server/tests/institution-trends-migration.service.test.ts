@@ -25,12 +25,29 @@ test("v17 draft completion preserves manual associations and defaults to disable
   } finally { closeDatabaseForTests(); delete process.env.STORAGE_DIR; rmSync(dir,{recursive:true,force:true}); }
 });
 
-test("existing v18 test databases are rejected without renumbering or deleting data", () => {
-  const dir = mkdtempSync(join(tmpdir(), 'institution-v18-protected-'));
+test("development v18 institution-rule databases open without deleting rows", () => {
+  const dir = mkdtempSync(join(tmpdir(), 'institution-v18-compatible-'));
   process.env.STORAGE_DIR = dir;
   try {
     const db = getDatabase();
     db.exec(`DELETE FROM schema_migrations WHERE version>=18; INSERT INTO schema_migrations(version,name,checksum) VALUES (18,'add_institution_trend_auto_rules','manual:018-institution-trend-auto-rules');
+      INSERT INTO users(id,display_name) VALUES ('keep','fixture');`);
+    closeDatabaseForTests();
+    const upgraded = getDatabase();
+    assert.ok(upgraded.prepare("SELECT id FROM users WHERE id='keep'").get());
+    assert.equal((upgraded.prepare("SELECT checksum FROM schema_migrations WHERE version=18").get() as {checksum:string}).checksum, "manual:018-preserve-ocr-page-orientation");
+    assert.equal((upgraded.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as {v:number}).v, 19);
+    assert.ok(upgraded.prepare("PRAGMA table_info(report_pages)").all().some(column => column.name === "ocr_rotation"));
+    assert.ok(readdirSync(join(dir, "backups", "db")).some(name => name.includes("v18-to-v19")));
+  } finally { closeDatabaseForTests(); delete process.env.STORAGE_DIR; rmSync(dir,{recursive:true,force:true}); }
+});
+
+test("unknown v18 checksums are still rejected without renumbering or deleting data", () => {
+  const dir = mkdtempSync(join(tmpdir(), 'institution-v18-protected-'));
+  process.env.STORAGE_DIR = dir;
+  try {
+    const db = getDatabase();
+    db.exec(`DELETE FROM schema_migrations WHERE version>=18; INSERT INTO schema_migrations(version,name,checksum) VALUES (18,'add_institution_trend_auto_rules','manual:018-unknown');
       INSERT INTO users(id,display_name) VALUES ('keep','fixture');`);
     closeDatabaseForTests();
     assert.throws(() => getDatabase(), /schema v18 conflicts/);

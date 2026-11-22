@@ -18,6 +18,7 @@ import { executeAiTask } from "../services/ai-task.service.ts";
 import { aiProviderCatalog, isMiniMaxM2Model } from "../services/ai-provider.ts";
 import { H3 } from "h3";
 import modelsHandler from "../routes/api/ai/models.get.ts";
+import enhancedTest from "../routes/api/ai/test-enhanced.post.ts";
 
 async function withDatabase(run: () => Promise<void> | void) {
   const storageDir = mkdtempSync(join(tmpdir(), "health-records-ai-settings-"));
@@ -636,6 +637,57 @@ test("uses the Kimi-compatible temperature for configured AI tasks", async () =>
         timeoutMs: 15_000
       });
       assert.equal(requestBody.temperature, 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test("does not report a successful connection test when vision is enabled without a model name", async () => {
+  await withDatabase(async () => {
+    const originalFetch = globalThis.fetch;
+    let called = false;
+    globalThis.fetch = async () => {
+      called = true;
+      return new Response("{}", { status: 200 });
+    };
+    try {
+      await assert.rejects(
+        () => testAiConnection({
+          provider: "deepseek",
+          apiKey: "synthetic-key",
+          textModel: "synthetic-text",
+          visionModel: "",
+          visionEnabled: true
+        }),
+        (error: unknown) => {
+          const value = error as { statusCode?: number; status?: number; statusMessage?: string; message?: string; data?: { code?: string } };
+          const detail = `${value.statusMessage || ""} ${value.message || ""}`;
+          return (value.statusCode === 400 || value.status === 400)
+            && detail.includes("请先填写视觉模型名称")
+            && value.data?.code === "AI_CONFIG_INVALID";
+        }
+      );
+      assert.equal(called, false);
+      const app = new H3();
+      app.use((event) => {
+        event.context.requestUser = { id: "synthetic-admin", displayName: "Synthetic", provider: "development", authenticated: true, isGatewayAdmin: true };
+      });
+      app.post("/enhanced", enhancedTest);
+      const response = await app.request("http://localhost/enhanced", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          provider: "deepseek",
+          apiKey: "synthetic-key",
+          textModel: "synthetic-text",
+          visionModel: "",
+          visionEnabled: true
+        })
+      });
+      assert.equal(response.status, 400);
+      assert.match(`${response.statusText} ${await response.text()}`, /请先填写视觉模型名称/);
+      assert.equal(called, false);
     } finally {
       globalThis.fetch = originalFetch;
     }

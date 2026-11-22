@@ -3229,13 +3229,15 @@ function enrichPersistedObservationEvidence(
   }));
 }
 
-function semanticObservationNames(observation: AiObservation) {
+function semanticObservationNameParts(observation: Pick<AiObservation, "itemName" | "normalizedName">) {
   const names = new Set<string>();
+  const serialStems = new Set<string>();
   const protectedSubtype = /^(?:igg|igm|iga|ige|igd|i型|ii型|ⅰ型|ⅱ型)$/i;
   const add = (value: string | null | undefined) => {
     const raw = value?.normalize("NFKC").trim();
     if (!raw) return;
     const variants = new Set([raw]);
+    const serial = raw.match(/^(.*\S)\s+(\d{1,3})$/u);
     for (const match of raw.matchAll(/[（(]([^（）()]*)[）)]/g)) {
       const content = (match[1] || "").trim();
       if (!content || protectedSubtype.test(content)) continue;
@@ -3249,10 +3251,22 @@ function semanticObservationNames(observation: AiObservation) {
         .replace(/(?:检测|测定|定量|检查|检验|结果)$/g, "");
       if (semantic.length >= 2) names.add(semantic);
     }
+    // A trailing serial such as "项目 2" is a row number, not a second analyte.
+    // Keep it distinct from another numbered name; only the unnumbered stem can absorb it.
+    if (serial) {
+      const stem = compactObservationIdentity(serial[1])
+        .replace(/^(?:血清|血浆|全血|尿液|尿)/, "")
+        .replace(/(?:检测|测定|定量|检查|检验|结果)$/g, "");
+      if (stem.length >= 2) serialStems.add(stem);
+    }
   };
   add(observation.itemName);
   add(observation.normalizedName);
-  return names;
+  return { names, serialStems };
+}
+
+function semanticObservationNames(observation: AiObservation) {
+  return semanticObservationNameParts(observation).names;
 }
 
 function observationNamesOverlap(left: Set<string>, right: Set<string>) {
@@ -3273,14 +3287,34 @@ function observationIdentityNamesMatch(
   rightNames: Set<string>,
   leftCanonicalKey: string | null,
   rightCanonicalKey: string | null,
+  leftSerialStems: Set<string> = new Set(),
+  rightSerialStems: Set<string> = new Set(),
 ) {
   if (observationNamesOverlap(leftNames, rightNames)) return true;
+  for (const stem of leftSerialStems) if (rightNames.has(stem)) return true;
+  for (const stem of rightSerialStems) if (leftNames.has(stem)) return true;
   return Boolean(
     leftCanonicalKey &&
     leftCanonicalKey === rightCanonicalKey &&
     (!hasDescriptiveChineseObservationName(leftNames) ||
       !hasDescriptiveChineseObservationName(rightNames)),
   );
+}
+
+function unverifiedSamePageDuplicate(
+  left: { pageNumber: number | null; hasInferredTime: boolean; unverified: boolean },
+  right: { pageNumber: number | null; hasInferredTime: boolean; unverified: boolean },
+) {
+  if (!left.pageNumber || left.pageNumber !== right.pageNumber) return false;
+  return (left.hasInferredTime && !right.hasInferredTime && right.unverified)
+    || (right.hasInferredTime && !left.hasInferredTime && left.unverified);
+}
+
+function preferredObservationName(left: string, right: string) {
+  const serial = (value: string) => /^(.*\S)\s+\d{1,3}$/u.test(value.normalize("NFKC").trim());
+  if (serial(left) && !serial(right)) return right;
+  if (serial(right) && !serial(left)) return left;
+  return left;
 }
 
 /**
@@ -3317,10 +3351,14 @@ export function deduplicateReportObservations(
   const merged: AiObservation[] = [];
   const identities: Array<{
     names: Set<string>;
+    serialStems: Set<string>;
     canonicalKey: string | null;
     result: string;
     unit: string | null;
     examinationKey: string | null;
+    pageNumber: number | null;
+    hasInferredTime: boolean;
+    unverified: boolean;
     temporalKind: string;
     measuredAt: string | null;
     specimen: string | null;
@@ -3356,8 +3394,11 @@ export function deduplicateReportObservations(
       inferredExamination?.examinedAt ||
       inferredExamination?.issuedAt,
     );
+    const nameParts = semanticObservationNameParts(observation);
+    const ambiguousTime = inferredExamination?.risks.some((risk) => /_ambiguous$/.test(risk)) ?? false;
     const identity = {
-      names: semanticObservationNames(observation),
+      names: nameParts.names,
+      serialStems: nameParts.serialStems,
       canonicalKey: safeDedupCanonicalKey,
       result: observationResultIdentity(
         usesCanonicalValue
@@ -3386,6 +3427,9 @@ export function deduplicateReportObservations(
             ])
           : inferredExamination.sourceKey
         : null,
+      pageNumber: observation.evidence[0]?.pageNumber ?? null,
+      hasInferredTime,
+      unverified: Boolean(inferredExamination?.risks.includes("source_unverified") && !ambiguousTime && !hasInferredTime),
     };
     const existingIndex = identities.findIndex(
       (candidate) =>
@@ -3394,12 +3438,14 @@ export function deduplicateReportObservations(
           identity.names,
           candidate.canonicalKey,
           identity.canonicalKey,
+          candidate.serialStems,
+          identity.serialStems,
         ) &&
         candidate.result === identity.result &&
         (!candidate.unit ||
           !identity.unit ||
           candidate.unit === identity.unit) &&
-        candidate.examinationKey === identity.examinationKey &&
+        (candidate.examinationKey === identity.examinationKey || unverifiedSamePageDuplicate(candidate, identity)) &&
         candidate.temporalKind === identity.temporalKind &&
         (!candidate.measuredAt ||
           !identity.measuredAt ||
@@ -3416,13 +3462,21 @@ export function deduplicateReportObservations(
       identities.push(identity);
       continue;
     }
-    merged[existingIndex] = mergeReportObservationPair(
+    const mergedObservation = mergeReportObservationPair(
       merged[existingIndex],
       observation,
     );
+    merged[existingIndex] = {
+      ...mergedObservation,
+      itemName: preferredObservationName(merged[existingIndex].itemName, observation.itemName),
+    };
     identities[existingIndex] = {
       ...identities[existingIndex],
       names: new Set([...identities[existingIndex].names, ...identity.names]),
+      serialStems: new Set([...identities[existingIndex].serialStems, ...identity.serialStems]),
+      pageNumber: identities[existingIndex].pageNumber || identity.pageNumber,
+      hasInferredTime: identities[existingIndex].hasInferredTime || identity.hasInferredTime,
+      unverified: identities[existingIndex].unverified && identity.unverified,
       canonicalKey:
         identities[existingIndex].canonicalKey || identity.canonicalKey,
       unit: identities[existingIndex].unit || identity.unit,
@@ -3432,6 +3486,84 @@ export function deduplicateReportObservations(
     };
   }
   return merged;
+}
+
+/** Drop an already stored same-page copy whose examination time never resolved. */
+export function collapseStoredUnverifiedObservationDuplicates() {
+  const db = getDatabase();
+  const marker = "observation.unverified_duplicate_collapse_v1";
+  if (db.prepare("SELECT 1 FROM app_settings WHERE setting_key = ?").get(marker)) {
+    return { reports: 0, removed: 0, alreadyCompleted: true as const };
+  }
+  const reportIds = db.prepare(`
+    SELECT DISTINCT o.report_id AS reportId
+    FROM observations o
+    JOIN observation_examinations l ON l.observation_id = o.id
+    JOIN report_examinations e ON e.id = l.examination_id
+    WHERE l.assignment_source = 'automatic' AND e.confirmation_status = 'pending' AND e.occurred_at IS NULL
+  `).all() as Array<{ reportId: string }>;
+  let removed = 0;
+  const loadRows = db.prepare(`
+    SELECT o.id, o.item_name AS itemName, o.normalized_name AS normalizedName, o.result_text AS resultText,
+      o.numeric_value AS numericValue, o.unit, o.method, o.evidence_json AS evidenceJson,
+      e.occurred_at AS occurredAt, e.confirmation_status AS confirmationStatus, e.id AS examinationId,
+      l.assignment_source AS assignmentSource,
+      EXISTS(SELECT 1 FROM observation_field_overrides v WHERE v.observation_id = o.id) AS manualReviewed
+    FROM observations o
+    LEFT JOIN observation_examinations l ON l.observation_id = o.id
+    LEFT JOIN report_examinations e ON e.id = l.examination_id
+    WHERE o.report_id = ?
+  `);
+  for (const { reportId } of reportIds) {
+    const rows = loadRows.all(reportId) as Array<{
+      id: string; itemName: string; normalizedName: string | null; resultText: string;
+      numericValue: number | null; unit: string | null; method: string | null; evidenceJson: string;
+      occurredAt: string | null; confirmationStatus: string | null; examinationId: string | null;
+      assignmentSource: string | null; manualReviewed: number;
+    }>;
+    const described = rows.map((row) => {
+      let pageNumber: number | null = null;
+      try {
+        const evidence = JSON.parse(row.evidenceJson) as Array<{ pageNumber?: number }>;
+        pageNumber = evidence.find((item) => Number.isSafeInteger(item?.pageNumber))?.pageNumber ?? null;
+      } catch { /* Rows without readable evidence stay unmatched. */ }
+      return { ...row, pageNumber, ...semanticObservationNameParts({ itemName: row.itemName, normalizedName: row.normalizedName }) };
+    });
+    const dated = described.filter((row) => row.occurredAt && row.assignmentSource === "automatic" && !row.manualReviewed);
+    for (const extra of described) {
+      if (extra.manualReviewed || extra.assignmentSource !== "automatic" || extra.confirmationStatus !== "pending" || extra.occurredAt || !extra.pageNumber) continue;
+      const match = dated.find((row) => {
+        if (row.id === extra.id || row.pageNumber !== extra.pageNumber) return false;
+        const sameValue = row.numericValue !== null && extra.numericValue !== null
+          ? Math.abs(row.numericValue - extra.numericValue) <= Math.max(1, Math.abs(row.numericValue), Math.abs(extra.numericValue)) * 1e-10
+          : compactObservationIdentity(row.resultText) === compactObservationIdentity(extra.resultText);
+        if (!sameValue) return false;
+        const leftUnit = compactObservationIdentity(row.unit);
+        const rightUnit = compactObservationIdentity(extra.unit);
+        if (leftUnit && rightUnit && leftUnit !== rightUnit) return false;
+        const leftMethod = compactObservationIdentity(row.method);
+        const rightMethod = compactObservationIdentity(extra.method);
+        if (leftMethod && rightMethod && leftMethod !== rightMethod) return false;
+        return observationIdentityNamesMatch(row.names, extra.names, null, null, row.serialStems, extra.serialStems);
+      });
+      if (!match) continue;
+      db.prepare("DELETE FROM observations WHERE id = ?").run(extra.id);
+      const itemName = preferredObservationName(match.itemName, extra.itemName);
+      if (itemName !== match.itemName) db.prepare("UPDATE observations SET item_name = ? WHERE id = ?").run(itemName, match.id);
+      if (extra.examinationId) {
+        db.prepare(`DELETE FROM report_examinations WHERE id = ? AND confirmation_status = 'pending'
+          AND NOT EXISTS (SELECT 1 FROM observation_examinations WHERE examination_id = ?)
+          AND NOT EXISTS (SELECT 1 FROM morphology_finding_examinations WHERE examination_id = ?)`).run(extra.examinationId, extra.examinationId, extra.examinationId);
+      }
+      removed += 1;
+    }
+  }
+  db.prepare(`INSERT INTO app_settings(setting_key, value_json, updated_at) VALUES(?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(setting_key) DO UPDATE SET value_json = excluded.value_json, updated_at = CURRENT_TIMESTAMP`).run(
+    marker,
+    JSON.stringify({ reports: reportIds.length, removed }),
+  );
+  return { reports: reportIds.length, removed, alreadyCompleted: false as const };
 }
 
 type ProtectedClinicalFact = {

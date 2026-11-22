@@ -231,3 +231,17 @@ it('uses unsaved custom headers in model listing and both tests without putting 
  }
  expect(puts()).toHaveLength(0);
 });
+
+it("asks for a vision model before a successful text test can be saved", async () => {
+  await start(); await edit();
+  await wrapper.get('[role="dialog"] input.switch').setValue(true);
+  await flushPromises();
+  expect(wrapper.get(".ai-editor-message").text()).toBe("已开启视觉增强，请先填写视觉模型名称");
+  await button("快速测试").trigger("click");
+  await button("完整测试").trigger("click");
+  await editorSave().trigger("click");
+  await flushPromises();
+  expect(mocks.request.mock.calls.some(([path]) => path === "ai/test" || path === "ai/test-enhanced")).toBe(false);
+  expect(puts()).toHaveLength(0);
+  expect(wrapper.get(".ai-editor-message").text()).toBe("已开启视觉增强，请先填写视觉模型名称");
+});

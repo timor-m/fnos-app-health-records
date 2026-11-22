@@ -745,7 +745,11 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
   const apiKey = typeof input.apiKey === "string" && input.apiKey.trim() ? input.apiKey.trim() : current.apiKey;
   const textModel = String(input.textModel || current.textModel).trim();
   const testVision = input.testVision === true;
-  const model = testVision ? String(input.visionModel || current.visionModel).trim() : textModel;
+  const configuredVisionModel = typeof input.visionModel === "string"
+    ? input.visionModel.trim()
+    : String(current.visionModel || "").trim();
+  const visionEnabled = input.visionEnabled === undefined ? current.visionEnabled === true : input.visionEnabled === true;
+  const model = testVision ? configuredVisionModel : textModel;
   if (isMiniMaxM2Model(model) && testVision) {
     throw createError({ statusCode: 400, data: { code: "AI_CONFIG_INVALID" }, statusMessage: "MiniMax M2 系列当前不支持图片输入，请使用文本模型测试" });
   }
@@ -756,6 +760,10 @@ export async function testAiConnection(input: AiSettingsInput = {}) {
         ? `请先配置 ${aiProviderCatalog[provider].label} ${testVision ? "视觉" : "文本"}模型`
         : `请先配置 ${aiProviderCatalog[provider].label} API Key 和${testVision ? "视觉" : "文本"}模型`
     });
+  }
+  // 文本测试成功不代表这份配置能保存：视觉增强打开时必须带上视觉模型名称。
+  if (!testVision && visionEnabled && !configuredVisionModel) {
+    throw createError({ statusCode: 400, data: { code: "AI_CONFIG_INVALID" }, statusMessage: "已开启视觉增强，请先填写视觉模型名称" });
   }
   const baseUrl = resolveAiBaseUrl(provider, input.baseUrl, current.baseUrl);
   const testStructuredOutput = !testVision && (provider === "ollama" || provider === "minimax" || provider === "opencode-go");

@@ -132,9 +132,24 @@ const currentEditorProvider = computed(() =>
   ai.value.providers.find((provider) => provider.key === editor.value.provider) || null
 );
 const supportsVision = computed(() => !isMiniMaxM2Model(editor.value.visionModel));
+const visionModelRequiredMessage = "已开启视觉增强，请先填写视觉模型名称";
 watch(supportsVision, (supported) => {
   if (!supported) editor.value.visionEnabled = false;
 });
+watch(
+  () => [editor.value.visionEnabled, editor.value.visionModel, supportsVision.value] as const,
+  ([enabled, model, supported]) => {
+    const missing = enabled && supported && !model.trim();
+    if (missing) editorMessage.value = visionModelRequiredMessage;
+    else if (editorMessage.value === visionModelRequiredMessage) editorMessage.value = "";
+  }
+);
+
+function visionModelMissing() {
+  if (!editor.value.visionEnabled || !supportsVision.value || editor.value.visionModel.trim()) return false;
+  editorMessage.value = visionModelRequiredMessage;
+  return true;
+}
 
 const modelListLoading = ref(false);
 const textModelList = ref<Array<{ id: string; name: string }>>([]);
@@ -246,6 +261,7 @@ async function applyEditor() {
     editorMessage.value = "请填写 API 地址";
     return;
   }
+  if (visionModelMissing()) return;
   const label = currentEditorProvider.value?.label || "自定义";
   const typedKey = editor.value.apiKey.trim();
 
@@ -350,7 +366,9 @@ function selectModel(type: "text" | "vision", modelId: string) {
 }
 
 async function test() {
-  testing.value = true; editorMessage.value = "";
+  editorMessage.value = "";
+  if (visionModelMissing()) return;
+  testing.value = true;
   try {
     const result = await request<{ model: string; elapsedMs: number }>("ai/test", {
       method: "POST",
@@ -376,9 +394,10 @@ async function testVision() {
 }
 
 async function testEnhanced() {
+  editorMessage.value = "";
+  if (visionModelMissing()) return;
   enhancedTesting.value = true;
   testSteps.value = [];
-  editorMessage.value = "";
   try {
     const result = await request<{
       provider: string;

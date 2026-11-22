@@ -1,4 +1,4 @@
-import { closeSync, fsyncSync, mkdirSync, openSync, rmSync } from 'node:fs';
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -9,6 +9,9 @@ export function writeDatabaseSnapshot(db: DatabaseSync, path: string) {
   closeSync(openSync(path, 'wx', 0o600));
   try {
     db.exec(`VACUUM INTO '${path.replaceAll("'", "''")}'`);
+    // VACUUM INTO 会按源库权限重建文件。源库在飞牛卷上可以是 000，快照必须改成所有者可读再校验。
+    chmodSync(dirname(path), 0o700);
+    chmodSync(path, 0o600);
     const snapshot = new DatabaseSync(path, { readOnly: true });
     try {
       const checks = snapshot.prepare('PRAGMA quick_check').all();

@@ -26,6 +26,7 @@ import { activeStorageRequests, atomicStorageJson } from '../utils/storage-migra
 import { isStorageMaintenanceActive } from './maintenance-runner.service';
 import { isStorageNormalizationActive } from './indicator-normalization-task.service';
 import { apiError, classifySystemError } from "../utils/api-error";
+import { ensureWritableArchiveDirectory, removeOrRetireDirectory } from "../utils/writable-archive-directory";
 import {
   rollbackAfterError,
   prepareRestoredDatabase,
@@ -7492,9 +7493,7 @@ function assertGatewayAdmin(user: RequestUser, action: string) {
 }
 
 function backupDirectory() {
-  const directory = join(getAppConfig().storageDir, "backups", "full");
-  mkdirSync(directory, { recursive: true });
-  return directory;
+  return ensureWritableArchiveDirectory(join(getAppConfig().storageDir, "backups", "full"));
 }
 
 /*
@@ -7503,9 +7502,7 @@ function backupDirectory() {
  * 存储卷才是备份数据真正的落盘位置，空间一致且可预估。
  */
 function backupStagingBaseDirectory() {
-  const directory = join(getAppConfig().storageDir, "backups");
-  mkdirSync(directory, { recursive: true });
-  return directory;
+  return ensureWritableArchiveDirectory(join(getAppConfig().storageDir, "backups"));
 }
 
 function createBackupStagingDirectory() {
@@ -7671,11 +7668,42 @@ function copyDatabaseSnapshot(snapshotPath: string) {
   writeDatabaseSnapshot(getDatabase(), snapshotPath);
 }
 
+function sealBackupStagingPermissions(stagingRoot: string) {
+  // 飞牛卷新建出来的目录和数据库快照会是 000。tar 会把这个权限写进包，换一台设备就解不开。
+  chmodSync(stagingRoot, 0o700);
+  const databaseDirectory = join(stagingRoot, "db");
+  if (existsSync(databaseDirectory)) chmodSync(databaseDirectory, 0o700);
+  const database = join(databaseDirectory, "health-records.sqlite");
+  if (existsSync(database)) chmodSync(database, 0o600);
+  const manifest = join(stagingRoot, "manifest.json");
+  if (existsSync(manifest)) chmodSync(manifest, 0o600);
+}
+
 function createTarArchive(sourceDirectory: string, archivePath: string) {
+  sealBackupStagingPermissions(sourceDirectory);
   execFileSync("tar", ["-czf", archivePath, "-C", sourceDirectory, "."], {
     stdio: "pipe",
   });
   chmodSync(archivePath, 0o600);
+}
+
+function grantExtractedBackupAccess(root: string) {
+  const info = lstatSync(root);
+  if (info.isSymbolicLink() || !info.isDirectory()) return;
+  // 旧包里的 ./ 和 db 是 000。所有者仍能改自己的目录，先放开再往下读。
+  chmodSync(root, 0o700);
+  for (const name of readdirSync(root)) grantExtractedBackupEntry(join(root, name));
+}
+
+function grantExtractedBackupEntry(path: string) {
+  const info = lstatSync(path);
+  if (info.isSymbolicLink()) return;
+  if (info.isDirectory()) {
+    chmodSync(path, 0o700);
+    for (const name of readdirSync(path)) grantExtractedBackupEntry(join(path, name));
+    return;
+  }
+  if (info.isFile()) chmodSync(path, 0o600);
 }
 
 function extractTarArchive(archivePath: string, targetDirectory: string) {
@@ -7683,6 +7711,7 @@ function extractTarArchive(archivePath: string, targetDirectory: string) {
   execFileSync("tar", ["-xzf", archivePath, "-C", targetDirectory], {
     stdio: "pipe",
   });
+  grantExtractedBackupAccess(targetDirectory);
 }
 
 function countBackupSourceRows() {
@@ -8207,22 +8236,69 @@ function isArchiveControlFile(name: string) {
   return /^archive-(location|migration|cleanup)\.json(?:\..*)?$/.test(name);
 }
 
+function isAccessDenied(error: unknown) {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EACCES" || code === "EPERM";
+}
+
+function directoryAcceptsWrites(directory: string) {
+  let probe: string | undefined;
+  try {
+    probe = mkdtempSync(join(directory, ".write-"));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (probe) {
+      try { rmSync(probe, { recursive: true, force: true }); } catch { /* 探测目录清不掉时，恢复仍按原错误中止 */ }
+    }
+  }
+}
+
+function clearStorageDirectory(directory: string) {
+  try {
+    rmSync(directory, { recursive: true, force: true });
+  } catch (error) {
+    if (!isAccessDenied(error)) throw error;
+    removeOrRetireDirectory(directory);
+  }
+}
+
+function readArchiveControlFiles(directory: string) {
+  const saved: Array<[string, Buffer]> = [];
+  let names: string[] = [];
+  try { names = readdirSync(directory); } catch { return saved; }
+  for (const name of names) {
+    if (!isArchiveControlFile(name)) continue;
+    try { saved.push([name, readFileSync(join(directory, name))]); } catch { /* 读不到的位置记录留在改名后的旧目录 */ }
+  }
+  return saved;
+}
+
 function replaceStorageDirectory(
   directoryName: (typeof backupIncludedDirectories)[number],
   extractRoot: string,
 ) {
   const source = join(extractRoot, directoryName);
   const target = safeStorageTarget(directoryName);
-  if (directoryName === 'config') {
+  if (directoryName === "config") {
     // Machine-local storage pointers and migration journals must survive business-data restore.
-    mkdirSync(target, { recursive: true });
-    for (const name of readdirSync(target)) {
-      if (!isArchiveControlFile(name)) rmSync(join(target, name), { recursive: true, force: true });
+    try {
+      mkdirSync(target, { recursive: true });
+      for (const name of readdirSync(target)) {
+        if (!isArchiveControlFile(name)) rmSync(join(target, name), { recursive: true, force: true });
+      }
+    } catch (error) {
+      if (!isAccessDenied(error)) throw error;
+      const preserved = readArchiveControlFiles(target);
+      clearStorageDirectory(target);
+      mkdirSync(target, { recursive: true, mode: 0o700 });
+      for (const [name, bytes] of preserved) writeFileSync(join(target, name), bytes, { mode: 0o600 });
     }
-  } else rmSync(target, { recursive: true, force: true });
+  } else clearStorageDirectory(target);
   if (existsSync(source)) {
     cpSync(source, target, { recursive: true, force: true,
-      filter: path => directoryName !== 'config' || !isArchiveControlFile(basename(path)) });
+      filter: path => directoryName !== "config" || !isArchiveControlFile(basename(path)) });
   } else {
     mkdirSync(target, { recursive: true });
   }
@@ -8232,17 +8308,28 @@ function replaceDatabaseFromBackup(extractRoot: string) {
   const targetDatabase = getDatabasePath();
   const safetyDirectory = safeStorageTarget(join("backups", "restore-safety"));
   mkdirSync(safetyDirectory, { recursive: true });
-  for (const suffix of ["", "-wal", "-shm"]) {
-    const target = `${targetDatabase}${suffix}`;
-    if (existsSync(target)) {
-      renameSync(
-        target,
-        join(
-          safetyDirectory,
-          `restore-current-${timestampForFilename()}${suffix || ".sqlite"}`,
-        ),
-      );
+  try {
+    for (const suffix of ["", "-wal", "-shm"]) {
+      const target = `${targetDatabase}${suffix}`;
+      if (existsSync(target)) {
+        renameSync(
+          target,
+          join(
+            safetyDirectory,
+            `restore-current-${timestampForFilename()}${suffix || ".sqlite"}`,
+          ),
+        );
+      }
     }
+  } catch (error) {
+    if (!isAccessDenied(error) || directoryAcceptsWrites(dirname(targetDatabase))) throw error;
+    for (const suffix of ["", "-wal", "-shm"]) {
+      const target = `${targetDatabase}${suffix}`;
+      try {
+        if (existsSync(target)) copyFileSync(target, join(safetyDirectory, `restore-current-${timestampForFilename()}${suffix || ".sqlite"}`));
+      } catch { /* 读不到的数据库留在改名后的目录 */ }
+    }
+    removeOrRetireDirectory(dirname(targetDatabase));
   }
   mkdirSync(dirname(targetDatabase), { recursive: true });
   copyFileSync(
@@ -8369,7 +8456,7 @@ function restoreBackupFromArchive(user:RequestUser,archivePath:string,backupId:s
   const db=getDatabase();
   if((db.prepare('PRAGMA integrity_check').get() as {integrity_check:string}).integrity_check!=='ok' || db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('恢复完整性校验失败');
   insertRestoreAudit(identityRebind.userId,backupId,safetyBackup.id);
-  rmSync(join(getAppConfig().storageDir,'upload-staging'),{recursive:true,force:true});
+  clearStorageDirectory(join(getAppConfig().storageDir,'upload-staging'));
   mkdirSync(join(getAppConfig().storageDir,'upload-staging'),{recursive:true,mode:0o700});
   rmSync(journal,{force:true});completed=true;
   return {restored:true,backupId,safetyBackupId:safetyBackup.id,identityRebind,validation};

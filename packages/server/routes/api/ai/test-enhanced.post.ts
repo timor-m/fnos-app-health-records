@@ -53,7 +53,8 @@ export default defineEventHandler(async (event) => {
     ? body.apiKey.trim()
     : current.apiKey;
   const textModel = String(body.textModel || current.textModel).trim();
-  const visionModel = String(body.visionModel || current.visionModel).trim();
+  const visionModel = (typeof body.visionModel === "string" ? body.visionModel : String(current.visionModel || "")).trim();
+  const visionEnabled = typeof body.visionEnabled === "boolean" ? body.visionEnabled : fallback?.visionEnabled === true;
   const baseUrl = resolveAiBaseUrl(provider, body.baseUrl, current.baseUrl);
   const modelTimeoutMs = provider === "ollama" ? 120_000 : 15_000;
 
@@ -74,6 +75,10 @@ export default defineEventHandler(async (event) => {
       statusCode: 400, data: { code: "AI_CONFIG_INVALID" },
       statusMessage: "请先配置文本模型"
     });
+  }
+
+  if (visionEnabled && !visionModel) {
+    throw createError({ statusCode: 400, data: { code: "AI_CONFIG_INVALID" }, statusMessage: "已开启视觉增强，请先填写视觉模型名称" });
   }
 
   const steps: TestStep[] = [];

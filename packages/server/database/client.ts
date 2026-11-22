@@ -328,7 +328,13 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
   }
   if (hasMigrationTable && currentVersion >= 18) {
     const recorded = db.prepare("SELECT checksum FROM schema_migrations WHERE version = 18").get() as { checksum: string } | undefined;
-    if (recorded && recorded.checksum !== "manual:018-preserve-ocr-page-orientation") {
+    // 0.2.7 开发库把 v18 用在机构趋势自动规则上。这些表正式版仍会按 IF NOT EXISTS 保留，
+    // 正式 v18 只补 OCR 方向列，随后的启动补齐可以安全接上。其它未知校验值仍然拒绝。
+    const compatibleV18 = new Set([
+      "manual:018-preserve-ocr-page-orientation",
+      "manual:018-institution-trend-auto-rules",
+    ]);
+    if (recorded && !compatibleV18.has(recorded.checksum)) {
       throw new Error("Database schema v18 conflicts with an earlier development migration; preserve the database and use a separately reviewed compatibility procedure.");
     }
   }

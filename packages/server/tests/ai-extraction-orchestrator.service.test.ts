@@ -22,6 +22,7 @@ import { installRemoteDictionarySnapshotForTests } from "../services/indicator-d
 import { buildProcessingJobDiagnostics } from "../services/processing-job-diagnostics.service.ts";
 import { medicationLayouts } from "./fixtures/medication-layouts.ts";
 import {
+  collapseStoredUnverifiedObservationDuplicates,
   deduplicateReportMorphologyFindings,
   deduplicateReportObservations,
   normalizeAiExtraction,
@@ -1597,6 +1598,48 @@ test("merges one source row quoted with different table separators instead of re
       assert.match(merged[0].evidence[0].quote, /肌酸激酶/);
     }
   }, () => ['检验日期：2026-01-03', '肌酸激酶 | 83 | U/L']);
+});
+
+test("merges a dated row with the same-page unverified copy that only adds a serial number", async () => {
+  await withReport(1, async ({ reportId }) => {
+    const base = {
+      sectionName: "检验结果", itemCode: null, normalizedName: null, resultText: "4.57", numericValue: 4.57,
+      unit: "mg/L", referenceLow: 0, referenceHigh: 10, referenceText: "0-10", abnormalFlag: null, method: null,
+    } as const;
+    const merged = deduplicateReportObservations(reportId, [
+      { ...base, itemName: "示例蛋白(EX-P) 1", evidence: [{ pageNumber: 1, quote: "示例蛋白(EX-P) | 4.57 | mg/L | 0-10" }] },
+      { ...base, sectionName: "", itemName: "示例蛋白(EX-P)", evidence: [{ pageNumber: 1, quote: "示例蛋白(EX-P) 结果 4.57" }] },
+    ]);
+    assert.equal(merged.length, 1);
+    assert.equal(merged[0].itemName, "示例蛋白(EX-P)");
+    const distinctSerials = deduplicateReportObservations(reportId, [
+      { ...base, itemName: "示例蛋白(EX-P) 1", resultText: "4.57", evidence: [{ pageNumber: 1, quote: "示例蛋白(EX-P) | 4.57 | mg/L | 0-10" }] },
+      { ...base, itemName: "示例蛋白(EX-P) 2", resultText: "8.10", numericValue: 8.1, evidence: [{ pageNumber: 1, quote: "另一行没有对应原文" }] },
+    ]);
+    assert.equal(distinctSerials.length, 2);
+  }, () => ["检验日期：2026-04-25", "示例蛋白(EX-P) | 4.57 | mg/L | 0-10"]);
+});
+
+test("startup removes an already stored unverified duplicate without rerunning recognition", async () => {
+  await withReport(1, async ({ reportId }) => {
+    const db = getDatabase();
+    const insertObservation = db.prepare(`INSERT INTO observations(id, report_id, section_name, item_name, result_text, numeric_value, unit, reference_low, reference_high, reference_text, evidence_json)
+      VALUES (?, ?, ?, ?, '4.57', 4.57, 'mg/L', 0, 10, '0-10', ?)`);
+    insertObservation.run("dated", reportId, "检验结果", "示例蛋白(EX-P) 1", JSON.stringify([{ pageNumber: 1, quote: "示例蛋白(EX-P) | 4.57 | mg/L | 0-10" }]));
+    insertObservation.run("pending", reportId, "", "示例蛋白(EX-P)", JSON.stringify([{ pageNumber: 1, quote: "示例蛋白(EX-P) 结果 4.57" }]));
+    db.prepare(`INSERT INTO report_examinations(id, report_id, source_key, occurred_at, confirmation_status, evidence_json)
+      VALUES ('exam-dated', ?, 'dated', '2026-04-25', 'automatic', '[]'),
+             ('exam-pending', ?, 'pending', NULL, 'pending', '[]')`).run(reportId, reportId);
+    db.prepare(`INSERT INTO observation_examinations(observation_id, examination_id, assignment_source) VALUES
+      ('dated', 'exam-dated', 'automatic'), ('pending', 'exam-pending', 'automatic')`).run();
+    const first = collapseStoredUnverifiedObservationDuplicates();
+    assert.equal(first.removed, 1);
+    const remaining = db.prepare("SELECT id, item_name AS itemName FROM observations WHERE report_id = ?").all(reportId) as Array<{ id: string; itemName: string }>;
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0].id, "dated");
+    assert.equal(remaining[0].itemName, "示例蛋白(EX-P)");
+    assert.equal(collapseStoredUnverifiedObservationDuplicates().alreadyCompleted, true);
+  }, () => ["检验日期：2026-04-25", "示例蛋白(EX-P) | 4.57 | mg/L | 0-10"]);
 });
 
 test("preserves summary and detail aliases when their examination identity cannot be verified", async () => {
