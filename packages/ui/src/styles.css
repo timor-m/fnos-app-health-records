@@ -1301,8 +1301,8 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
 .observation-review-loading { padding: 24px; display: grid; gap: 16px; }
 .observation-all-title p { color: var(--muted); font-size: 12px; }
 .observation-all-actions { display: flex; align-items: center; gap: 6px; }
-.observation-add-button { flex: 0 0 auto; white-space: nowrap; }
-.modal-panel.observation-all-modal > header .observation-add-button { display: inline-flex; flex-flow: row nowrap; gap: 4px; width: auto; min-width: 62px; height: 36px; padding: 0 10px; border-radius: 999px; background: var(--brand-softer); color: var(--brand-strong); }
+.observation-add-button, .bone-density-add-button { flex: 0 0 auto; white-space: nowrap; }
+.modal-panel.observation-all-modal > header :is(.observation-add-button, .bone-density-add-button) { display: inline-flex; flex-flow: row nowrap; gap: 4px; width: auto; min-width: 62px; height: 36px; padding: 0 10px; border-radius: 999px; background: var(--brand-softer); color: var(--brand-strong); }
 .observation-all-body { flex: 1; min-height: 0; overflow: hidden; overscroll-behavior: contain; }
 .observation-all-layout {
   min-height: 0; height: 100%; display: grid;
@@ -3055,8 +3055,8 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
   .observation-all-modal > header > div:first-child { flex: 1 1 auto; }
   .observation-all-modal > header h3 { font-size: 16px; }
   .observation-all-modal > header .observation-all-actions { flex: 0 0 auto; flex-flow: row nowrap; gap: 4px; }
-  .observation-all-actions .observation-add-button { display: inline-flex; flex-flow: row nowrap; white-space: nowrap; gap: 4px; min-height: 36px; }
-  .observation-all-actions .observation-add-button svg { flex-shrink: 0; }
+  .observation-all-actions :is(.observation-add-button, .bone-density-add-button) { display: inline-flex; flex-flow: row nowrap; white-space: nowrap; gap: 4px; min-height: 36px; }
+  .observation-all-actions :is(.observation-add-button, .bone-density-add-button) svg { flex-shrink: 0; }
   .observation-all-body { flex: 0 1 auto; overflow: auto; }
   .observation-all-layout { height: auto; grid-template-columns: minmax(0, 1fr); grid-template-areas: "list"; }
   .observation-all-list { max-height: none; padding: 10px 14px calc(16px + var(--safe-bottom)); overflow: visible; border-right: 0; }
@@ -4517,4 +4517,17 @@ input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: poi
 .record-sheet .datetime-picker-field input,
 .record-sheet .datetime-picker-field input:focus {
   border: 0; box-shadow: none; outline: 0; background: transparent; border-radius: 0;
+}
+
+/* Keep the bone switch appearance; long measurement labels wrap within touch cards. */
+.trend-measurement-switches { display: grid; gap: 4px; margin-top: 5px; min-width: 0; }
+.trend-measurement-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.trend-measurement-row > span { flex-shrink: 0; color: var(--muted); font-size: 12px; }
+.trend-measurement-switch { min-width: 0; max-width: 100%; flex-wrap: wrap; }
+.trend-measurement-switch > button { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
+@media (max-width: 760px), (pointer: coarse) {
+  .trend-measurement-switches { gap: 2px; margin-top: 2px; }
+  .trend-measurement-row { gap: 4px; }
+  .trend-measurement-switch { gap: 2px; }
+  .trend-measurement-switch > button { min-height: 30px; padding: 4px 8px; font-size: 11px; }
 }

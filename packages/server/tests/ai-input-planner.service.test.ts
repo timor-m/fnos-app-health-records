@@ -41,14 +41,14 @@ test("routes medication layouts and continuation pages at both extraction depths
 test("overview does not route billing, leaflets, allergies, or unrelated following pages as medication", () => {
   for (const lines of nonMedicationLayouts) {
     const plan = planRebuiltOcrPages("report", rebuildOcrPages([page(1, [...lines])]), "overview");
-    assert.ok(!plan.units.some(unit => unit.route === "narrative"));
+    assert.ok(!plan.units.some(unit => unit.route === "narrative" && unit.includesMedicationContent));
   }
   const pages = rebuildOcrPages([
     page(1, ['用药清单', '阿莫西林胶囊 0.25g', '用法：口服 每日3次']),
     page(2, ['医疗收费票据', '阿莫西林胶囊 0.25g', '总金额：12.00']),
   ]);
   const plan = planRebuiltOcrPages("report", pages, "overview");
-  assert.deepEqual(plan.units.filter(unit => unit.route === "narrative").flatMap(unit => unit.pageNumbers), [1]);
+  assert.deepEqual(plan.units.filter(unit => unit.route === "narrative" && unit.includesMedicationContent).flatMap(unit => unit.pageNumbers), [1]);
 });
 
 test("medication continuation requires adjacent pages and retains Chinese quantity units", () => {
@@ -4897,7 +4897,7 @@ test("overview prescriptions retain medication units for single and merged multi
   }
 });
 
-test("overview depth keeps scalar and morphology extraction but drops narrative units", () => {
+test("overview depth preserves original narrative routing alongside scalar and morphology extraction", () => {
   const rows = [
     page(1, [
       "出院小结",
@@ -4926,7 +4926,7 @@ test("overview depth keeps scalar and morphology extraction but drops narrative 
   assert.equal(overview.extractionDepth, "overview");
   assert.deepEqual(
     overview.units.map((unit) => unit.route).sort(),
-    ["document", "morphology", "scalar"],
+    ["document", "morphology", "narrative", "scalar"],
   );
   const overviewScalar = overview.units.find(
     (unit) => unit.route === "scalar",

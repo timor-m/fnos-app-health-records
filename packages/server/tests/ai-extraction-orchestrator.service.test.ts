@@ -460,7 +460,7 @@ test("processes a long report as multiple persisted units and merges every page"
     assert.equal(calls, execution.plan.unitCount);
     assert.equal(execution.result.fields.observations.length, 10);
     assert.equal(execution.result.promptTokens, execution.plan.unitCount * 100);
-    assert.equal(execution.result.fields.summary, "单元1摘要");
+    assert.equal(execution.result.fields.summary, null, "AI-generated summaries without OCR sources must not be published");
     assert.equal((getDatabase().prepare(`
       SELECT COUNT(*) AS count FROM observations WHERE id = 'old-observation'
     `).get() as { count: number }).count, 1);
@@ -3759,9 +3759,12 @@ test('keeps narrative findings and interpretive text that only names indicators'
     const execution = await executeAiExtractionPlan(jobId, reportId, executor);
     persistAiExtraction(reportId, jobId, execution.result, execution.inputCharacters);
     const row = getDatabase().prepare("SELECT findings FROM reports WHERE id = ?").get(reportId) as { findings: string | null };
-    assert.equal(row.findings, '白细胞总数及中性粒细胞总数升高，提示炎症可能，建议结合临床复查。');
+    assert.ok(row.findings?.includes('白细胞总数及中性粒细胞总数升高，提示炎症可能，建议结合临床复查。'));
   }, () => [
     '检验报告',
+    '检查所见：',
+    '白细胞总数及中性粒细胞总数升高，提示炎症可能，建议结合临床复查。',
+    '检验结果：',
     '白细胞总数 29.59 109/L 参考范围 3.5-9.5',
     '中性粒细胞总数 4.36 109/L 参考范围 1.8-6.3',
     '血红蛋白 153 g/L 参考范围 130-175',
@@ -4215,3 +4218,41 @@ test('deduplicates only unique explicit adjacent-page numbered medication contin
  assert.equal(deduplicateMedicationContinuations(makePlan(),[medications[0],{...medications[1],specification:'20mg/片'}]).length,2);
  assert.equal(deduplicateMedicationContinuations(makePlan(),[medications[0],{...medications[0]},medications[1]]).length,3);
 });});
+
+test('publishes all original narrative sections of a long multi-department report without AI rewriting or field truncation',async()=>{
+ const source=(p:number,field:string,index:number)=>`合成${field}第${p}页第${index}段：${'完整保留报告原文、顺序和标点，不以模型摘要替代。'.repeat(18)}`;
+ const fields=['summary','findings','impression','recommendation'] as const;
+ const titles={summary:'内科小结：',findings:'检查所见：',impression:'结论：',recommendation:'医生建议：'};
+ await withReport(8,async({reportId,jobId})=>{
+  const executor:AiExecutor=async()=>({provider:'test',model:'source-routing-test',promptVersion:aiExtractionPromptVersion,
+   ...normalizeAiExtraction({title:'合成长报告',summary:'模型缩写摘要不应被保存',findings:'模型重写所见不应被保存',impression:'模型重写结论不应被保存',recommendation:'模型缩写建议不应被保存'}),
+   rawResponseJson:'{}',promptTokens:1,completionTokens:1,elapsedMs:1});
+  const execution=await executeAiExtractionPlan(jobId,reportId,executor);
+  persistAiExtraction(reportId,jobId,execution.result,execution.inputCharacters);
+  const saved=getDatabase().prepare('SELECT summary,findings,impression,recommendation FROM reports WHERE id=?').get(reportId) as Record<string,string>;
+  const stored=JSON.parse((getDatabase().prepare('SELECT fields_json FROM report_extractions WHERE job_id=?').get(jobId) as {fields_json:string}).fields_json);
+  for(const field of fields) {
+   assert.equal(saved[field],execution.result.fields[field]);assert.equal(stored[field],saved[field]);
+   assert.ok(saved[field].length>16000);
+   assert.ok(!/模型(?:缩写|重写)/.test(saved[field]));assert.ok(saved[field].includes('第 8 页'));
+   for(let p=1;p<=8;p++) for(let i=1;i<=6;i++) assert.equal(saved[field].split(source(p,field,i)).length-1,1);
+  }
+ },p=>['合成体检报告',...fields.flatMap(field=>[titles[field],...Array.from({length:6},(_,i)=>source(p,field,i+1))]),`第 ${p} 页`]);
+});
+
+test('AI section references survive unit validation and merge, publishing only bounded original OCR spans',async()=>{
+ await withReport(2,async({reportId,jobId})=>{
+  const executor:AiExecutor=async()=>({provider:'test',model:'routing-only',promptVersion:aiExtractionPromptVersion,
+   ...normalizeAiExtraction({narrativeSections:[
+    {field:'summary',p:1,startQuote:'非标准章节甲',endQuote:'第一处末段原文。'},
+    {field:'recommendation',p:2,startQuote:'非标准章节乙',endQuote:'第二处末段原文。'},
+   ]}),rawResponseJson:'{}',promptTokens:1,completionTokens:1,elapsedMs:1});
+  const execution=await executeAiExtractionPlan(jobId,reportId,executor);
+  persistAiExtraction(reportId,jobId,execution.result,execution.inputCharacters);
+  const row=getDatabase().prepare('SELECT summary,recommendation FROM reports WHERE id=?').get(reportId) as {summary:string;recommendation:string};
+  assert.ok(row.summary.includes('非标准章节甲\n第一处首段原文。\n第一处末段原文。'));
+  assert.ok(row.recommendation.includes('非标准章节乙\n第二处首段原文。\n第二处末段原文。'));
+  assert.ok(!row.summary.includes('第二处'));assert.ok(!row.recommendation.includes('第一处'));
+  assert.equal(row.summary.split('第一处首段原文。').length-1,1);
+ },p=>p===1?['非标准章节甲','第一处首段原文。','第一处末段原文。']:['非标准章节乙','第二处首段原文。','第二处末段原文。']);
+});

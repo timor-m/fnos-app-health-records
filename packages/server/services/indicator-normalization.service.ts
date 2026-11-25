@@ -1,3 +1,4 @@
+import {boneSites,boneSiteLabel} from '../../shared/bone-density';
 import { repairLegacyObservationUnitEvidence } from './observation-evidence-repair.service';
 import { hasLostMeasurementBound, hasLostMeasurementInterval, parseExactMeasurement, leadingMeasurementNumber, measurementEvidenceRegions } from '../utils/measurement-bound';
 import { splitMeasurementBound } from '../../shared/measurement-result';
@@ -22,7 +23,7 @@ import { linkedObservationUnitQuotes } from "./observation-unit-evidence.service
 import { unitFromResultCell } from "./measurement-units.service";
 
 export function activeIndicatorNormalizationVersion() {
-  return `indicator-normalization-p18-thyroid-unit-conversion-${activeIndicatorDictionaryVersion()}`;
+  return `indicator-normalization-p19-bone-density-sites-${activeIndicatorDictionaryVersion()}`;
 }
 
 function normalizationVersion() {
@@ -32,6 +33,10 @@ function normalizationVersion() {
 type ObservationRow = {
   id: string;
   reportId: string;
+  examinationModality?: string|null;
+  measurementSite?: string|null;
+  measurementLaterality?: string|null;
+  method?: string|null;
   sectionName: string | null;
   itemCode: string | null;
   itemName: string;
@@ -1081,6 +1086,8 @@ export function assessTrendAdmission(input: {
   if (input.normalizationQuality === 'excluded' || isPolicyFilteredNormalization(input.normalizationMatchedBy || '')) {
     return deny(input.normalizationExcludedReason || '已排除或不适用数值趋势');
   }
+  if(input.canonicalKey?.startsWith('dxa_') && input.normalizationQuality==='low')return deny(input.normalizationExcludedReason || '骨密度部位待核对');
+  if(input.canonicalKey?.startsWith('qus_bone_') && input.normalizationExcludedReason?.includes('DXA'))return deny(input.normalizationExcludedReason);
   const value = input.numericValue ?? parseNumericResultText(input.resultText);
   if (value === null || !Number.isFinite(value)) return deny('不是可用的数值结果');
   const textValue = parseNumericResultText(input.resultText);
@@ -1308,6 +1315,13 @@ function candidateNameSet(values: Array<string | null | undefined>) {
 }
 
 function aliasAppliesToObservation(alias: AliasRow, row: ObservationRow) {
+  // An AI-normalized name must not invent or reverse the measured side.
+  if(['hip_axis_length_left','hip_axis_length_right'].includes(alias.canonicalKey)) {
+    const left=alias.canonicalKey==='hip_axis_length_left';
+    const expected=left ? /左|^Left\s*Hip/i : /右|^Right\s*Hip/i;
+    const conflicting=left ? /右|双侧|双髋|right|bilateral|both/i : /左|双侧|双髋|left|bilateral|both/i;
+    if(!expected.test(row.itemName) || conflicting.test(row.itemName))return false;
+  }
   if (alias.scope === "global") return true;
   if (alias.scope === "report_type") {
     return compactIndicatorKey(alias.reportType) === compactIndicatorKey(row.reportType);
@@ -1343,7 +1357,7 @@ function candidateAliases(row: ObservationRow): AliasCandidate[] {
     sourceName: string | null;
     names: Set<string>;
   }> = [
-    { origin: "item_name", sourceName: row.itemName, names: candidateNameSet([row.itemName]) },
+    { origin: "item_name", sourceName: row.itemName, names: candidateNameSet([row.itemName,...(row.method==='DXA' && row.measurementSite ? [/T[ -]*(?:值|score)/i.test(row.itemName)?'DXA T 值':/Z[ -]*(?:值|score)/i.test(row.itemName)?'DXA Z 值':/BMD|骨密度/.test(row.itemName)?'DXA 骨密度':null] : [])]) },
     { origin: "item_code", sourceName: row.itemCode, names: candidateNameSet([row.itemCode]) },
     {
       origin: "combined",
@@ -1804,7 +1818,7 @@ function manuallyConfirmedNormalization(
   };
 }
 
-function normalizeObservationWithReadyCatalog(row: ObservationRow): NormalizationResult {
+function normalizeObservationWithReadyCatalogUnchecked(row: ObservationRow): NormalizationResult {
   const automatic = normalizeObservationAutomatically(row);
   const decision = governanceDecisionForObservation(row);
   if (decision?.action === "exclude") {
@@ -1866,6 +1880,17 @@ function normalizeObservationWithReadyCatalog(row: ObservationRow): Normalizatio
     };
   }
   return manuallyConfirmedNormalization(row, decision, indicator);
+}
+
+function normalizeObservationWithReadyCatalog(row:ObservationRow):NormalizationResult {
+ const result=normalizeObservationWithReadyCatalogUnchecked(row);
+ if(result.canonicalKey?.startsWith('qus_bone_') && /DXA|双能.*(?:X|Ｘ)/i.test([row.method,row.sectionName,row.itemName].join(' ')))
+  return {...result,quality:'low',excludedReason:'DXA 与定量超声检查不能混用，请核对骨密度方法和部位',matchReason:'骨密度检查方法不兼容'};
+ if(!result.canonicalKey?.startsWith('dxa_'))return result;
+ if((row.examinationModality && row.examinationModality!=='DXA') || (row.method!=='DXA' && row.examinationModality!=='DXA') || !boneSites.some(site=>site[0]===row.measurementSite) || !['left','right','unspecified'].includes(row.measurementLaterality || ''))
+  return {...result,quality:'low',excludedReason:'DXA 测量部位或左右侧待核对',matchReason:'DXA 测量部位或左右侧待核对'};
+ if(row.measurementSite?.startsWith('femur_') && row.measurementLaterality==='unspecified')return {...result,quality:'low',excludedReason:'股骨测量左右侧待核对',matchReason:'股骨测量左右侧待核对'};
+ return {...result,canonicalName:`DXA ${boneSiteLabel(row.measurementSite!,row.measurementLaterality || 'unspecified')} ${result.canonicalKey==='dxa_bmd'?'BMD':result.canonicalKey==='dxa_t_score'?'T 值':'Z 值'}`};
 }
 
 export function normalizeObservation(row: ObservationRow): NormalizationResult {
@@ -2210,6 +2235,7 @@ function observationRowsForReport(reportId: string) {
       o.item_name AS itemName, o.normalized_name AS normalizedName, o.result_text AS resultText,
       o.numeric_value AS numericValue, o.unit, o.reference_low AS referenceLow,
       o.reference_high AS referenceHigh, o.reference_text AS referenceText, o.evidence_json AS evidenceJson,
+      o.method, o.examination_modality AS examinationModality, o.measurement_site AS measurementSite, o.measurement_laterality AS measurementLaterality,
       EXISTS (SELECT 1 FROM report_extractions extraction WHERE extraction.report_id = o.report_id) AS hasAiExtraction,
       EXISTS (SELECT 1 FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewed,
       (SELECT canonical_key FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualCanonicalKey,
@@ -2230,6 +2256,7 @@ function staleBuiltinNormalizationRows() {
       o.item_name AS itemName, o.normalized_name AS normalizedName, o.result_text AS resultText,
       o.numeric_value AS numericValue, o.unit, o.reference_low AS referenceLow,
       o.reference_high AS referenceHigh, o.reference_text AS referenceText, o.evidence_json AS evidenceJson,
+      o.method, o.examination_modality AS examinationModality, o.measurement_site AS measurementSite, o.measurement_laterality AS measurementLaterality,
       EXISTS (SELECT 1 FROM report_extractions extraction WHERE extraction.report_id = o.report_id) AS hasAiExtraction,
       EXISTS (SELECT 1 FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewed,
       (SELECT canonical_key FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualCanonicalKey,
@@ -2261,6 +2288,7 @@ function pendingObservationRowsForReport(reportId: string) {
       o.item_name AS itemName, o.normalized_name AS normalizedName, o.result_text AS resultText,
       o.numeric_value AS numericValue, o.unit, o.reference_low AS referenceLow,
       o.reference_high AS referenceHigh, o.reference_text AS referenceText, o.evidence_json AS evidenceJson,
+      o.method, o.examination_modality AS examinationModality, o.measurement_site AS measurementSite, o.measurement_laterality AS measurementLaterality,
       EXISTS (SELECT 1 FROM report_extractions extraction WHERE extraction.report_id = o.report_id) AS hasAiExtraction,
       EXISTS (SELECT 1 FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewed,
       (SELECT canonical_key FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualCanonicalKey,
@@ -2867,6 +2895,7 @@ function observationRowsForIds(observationIds: string[]) {
       o.item_name AS itemName, o.normalized_name AS normalizedName, o.result_text AS resultText,
       o.numeric_value AS numericValue, o.unit, o.reference_low AS referenceLow,
       o.reference_high AS referenceHigh, o.reference_text AS referenceText, o.evidence_json AS evidenceJson,
+      o.method, o.examination_modality AS examinationModality, o.measurement_site AS measurementSite, o.measurement_laterality AS measurementLaterality,
       EXISTS (SELECT 1 FROM report_extractions extraction WHERE extraction.report_id = o.report_id) AS hasAiExtraction,
       EXISTS (SELECT 1 FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewed,
       (SELECT canonical_key FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualCanonicalKey,
@@ -2886,6 +2915,7 @@ function allActiveObservationRows() {
       o.item_name AS itemName, o.normalized_name AS normalizedName, o.result_text AS resultText,
       o.numeric_value AS numericValue, o.unit, o.reference_low AS referenceLow,
       o.reference_high AS referenceHigh, o.reference_text AS referenceText, o.evidence_json AS evidenceJson,
+      o.method, o.examination_modality AS examinationModality, o.measurement_site AS measurementSite, o.measurement_laterality AS measurementLaterality,
       EXISTS (SELECT 1 FROM report_extractions extraction WHERE extraction.report_id = o.report_id) AS hasAiExtraction,
       EXISTS (SELECT 1 FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualReviewed,
       (SELECT canonical_key FROM observation_field_overrides override WHERE override.observation_id = o.id) AS manualCanonicalKey,

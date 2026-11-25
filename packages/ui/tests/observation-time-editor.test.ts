@@ -85,4 +85,30 @@ describe('inline observation time',()=>{
   expect(wrapper.find('form').exists()).toBe(false);
   expect(wrapper.emitted('updated')).toHaveLength(1);
  });
+ it('defaults to page confirmation with a visible count and allows current-only correction',async()=>{
+  const state={version:3,reportVersion:8,examinations:[{id:'e',occurredAt:null,timeKind:'unknown',confirmationStatus:'pending'}],pageTimeGroups:[{pageNumber:5,observationIds:['o','peer']}]};
+  request.mockResolvedValue(state);
+  const wrapper=mount(ObservationTimeEditor,{props:{reportId:'r',observation:{...observation,examinationTime:null},canManage:true}});
+  await wrapper.get('button').trigger('click');await flushPromises();
+  expect(wrapper.text()).toContain('第 5 页其余 1 项');
+  expect(wrapper.get('button[type="submit"]').text()).toBe('保存本页 2 项时间');
+  wrapper.getComponent(DateTimePicker).vm.$emit('update:modelValue','2026-09-03');await wrapper.vm.$nextTick();
+  await wrapper.get('form').trigger('submit');await flushPromises();
+  let body=JSON.parse(request.mock.calls[1][1].body);
+  expect(body).toMatchObject({applyToPage:true,observationIds:['o']});
+  await wrapper.get('button').trigger('click');await flushPromises();
+  const checkboxes=wrapper.findAll('input[type="checkbox"]');
+  await checkboxes[1].setValue(false);
+  wrapper.getComponent(DateTimePicker).vm.$emit('update:modelValue','2026-09-04');await wrapper.vm.$nextTick();
+  expect(wrapper.get('button[type="submit"]').text()).toBe('保存时间');
+  await wrapper.get('form').trigger('submit');await flushPromises();
+  body=JSON.parse(request.mock.calls[3][1].body);expect(body.applyToPage).toBeUndefined();expect(body.observationIds).toEqual(['o']);
+ });
+ it('does not offer page confirmation without a safe page group or for a reader',async()=>{
+  request.mockResolvedValue({version:1,reportVersion:1,examinations:[],pageTimeGroups:[{pageNumber:2,observationIds:['another','peer']}]});
+  const wrapper=mount(ObservationTimeEditor,{props:{reportId:'r',observation,canManage:true}});
+  await wrapper.get('button').trigger('click');await flushPromises();
+  expect(wrapper.text()).not.toContain('同时确认');expect(wrapper.text()).toContain('只调整当前指标');
+ });
+
 });

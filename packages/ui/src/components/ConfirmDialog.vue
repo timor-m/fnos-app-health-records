@@ -13,12 +13,12 @@ const messageBlocks = computed((): MessageBlock[] => {
   for (const raw of (confirmDialog.state.value?.message || "").split("\n")) {
     const item = raw.match(/^\s*·\s+(.*)$/);
     if (item) {
-      const last = blocks.at(-1);
+      const last = blocks[blocks.length - 1];
       if (last?.type === "list") last.items.push(item[1]);
       else blocks.push({ type: "list", items: [item[1]] });
       continue;
     }
-    const last = blocks.at(-1);
+    const last = blocks[blocks.length - 1];
     if (last?.type === "text") last.text += `\n${raw}`;
     else blocks.push({ type: "text", text: raw });
   }

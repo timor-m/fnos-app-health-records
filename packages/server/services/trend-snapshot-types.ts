@@ -1,6 +1,6 @@
 import type { computeTrendSeries } from './records.service';
 
-export const trendSnapshotAlgorithmVersion = 'trend-analysis-1';
+export const trendSnapshotAlgorithmVersion = 'trend-analysis-5-measurement-identity';
 export type ComputedTrendSeries = ReturnType<typeof computeTrendSeries>[number];
 export type TrendSnapshotJob = {
   memberId: string;

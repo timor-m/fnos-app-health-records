@@ -41,7 +41,7 @@ export type HealthFeedEntry = {
 export type HealthFeedPage = {items: HealthFeedEntry[]; nextCursor: string | null; hasMore: boolean};
 
 export const healthSubtypeOptions: Record<HealthCategory, readonly (readonly [string,string])[]> = {
-  report:[['checkup','体检'],['laboratory','检验'],['pathology','病理'],['functional','功能检查'],['outpatient','门诊病历'],['inpatient','住院资料'],['billing','费用凭证'],['other','其他资料']],
+  report:[['checkup','体检'],['laboratory','检验'],['pathology','病理'],['functional','功能检查'],['ultrasound','超声检查'],['outpatient','门诊病历'],['inpatient','住院资料'],['billing','费用凭证'],['other','其他资料']],
   imaging:[],symptom:[],
   // Device/import ingest has no user entry yet; keep only the category chip until those channels ship.
   monitoring:[],

@@ -2,6 +2,8 @@ export type TrendGroupNode = {
   key: string;
   name: string;
   indicatorCount: number;
+  /** Matches in the current search/status filters; absent on older responses. */
+  matchCount?: number;
   configuredIndicatorCount: number;
   indicatorKeys: string[];
   searchText: string;

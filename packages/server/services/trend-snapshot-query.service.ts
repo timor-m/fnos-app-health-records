@@ -1,3 +1,4 @@
+import {trendCardKey} from '../../shared/trend-card';
 import { createHash } from 'node:crypto';
 import { createError } from 'h3';
 import { getDatabase } from '../database/client';
@@ -18,16 +19,29 @@ export type TrendSnapshotFilters = {
   version?: number;
 };
 type MemberState = {desired: number;active: number;invalidated: number;error: string|null};
-type Available = {indicatorKey: string;name: string;searchText: string};
+type Available = {indicatorKey: string;name: string;searchText: string;key:string;unit:string|null};
 const normalize = (value: string) => value.normalize('NFKC').toLocaleLowerCase('zh-CN').replace(/\s+/g, '');
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('base64url');
 const source = `FROM trend_snapshot_entries e JOIN trend_snapshot_series s USING(member_id,series_key,content_hash)`;
+// Use the shared presentation identity for counts, pagination and whole-card pins.
+const cardIdentitySql = 'trend_card_key(s.indicator_key,s.unit_key)';
+const pinnedSql = `EXISTS(SELECT 1 FROM user_trend_pins p WHERE p.member_id=e.member_id AND p.user_id=?
+  AND trend_card_key(p.indicator_key,p.unit_key)=${cardIdentitySql})`;
+const registeredConnections = new WeakSet<ReturnType<typeof getDatabase>>();
+function cardIdentity(item:{indicatorKey:string;unit?:string|null}) {
+ return trendCardKey(item.indicatorKey,item.unit);
+}
+
 
 function context(user: RequestUser, memberId: string, version?: number) {
   if (!user.authenticated) throw createError({statusCode:401,statusMessage:'请先登录'});
   if (!memberId) throw createError({statusCode:400,statusMessage:'请选择成员'});
   assertMemberAccess(user, memberId);
   const db = getDatabase();
+  if(!registeredConnections.has(db)){
+    db.function('trend_card_key',{deterministic:true},(key,unit)=>trendCardKey(String(key),String(unit || '')));
+    registeredConnections.add(db);
+  }
   const state = db.prepare(`SELECT desired_revision AS desired,active_revision AS active,
     invalidated,error_code AS error FROM trend_snapshot_members WHERE member_id=?`).get(memberId) as MemberState | undefined;
   const available = Boolean(state?.active && !state.invalidated);
@@ -54,14 +68,14 @@ export function queryTrendSnapshotSeries(user: RequestUser, memberId: string, fi
   }
   if (!available) return {version:revision,status,groups:[],sections:[],items:[],total:0,pointCount:0,pinnedCount:0,nextCursor:null,hasMore:false,
     desiredRevision:state?.desired || 0};
-  const availableIndicators = db.prepare(`SELECT s.indicator_key AS indicatorKey,s.name,s.search_text AS searchText
+  const availableIndicators = db.prepare(`SELECT s.indicator_key AS indicatorKey,s.name,s.search_text AS searchText,s.series_key AS key,s.unit_key AS unit
     ${source} WHERE e.member_id=? AND e.revision=? ORDER BY e.sort_order`).all(memberId, revision!) as Available[];
   const tree = buildTrendGroupTree(availableIndicators.map(item => ({...item,searchAliases:[item.searchText]})), user.id, db, false);
   const keyword = normalize(filters.query || '');
   const matchingGroupKeys = new Set(keyword ? flattenTrendGroups(tree).filter(group => normalize(group.name).includes(keyword)).flatMap(group => group.indicatorKeys) : []);
   const groupKeys = filters.group ? [...resolveTrendGroupKeys(tree, [filters.group])] : null;
   const pins = db.prepare('SELECT indicator_key,unit_key FROM user_trend_pins WHERE member_id=? AND user_id=? ORDER BY indicator_key,unit_key').all(memberId,user.id);
-  const signature = digest({memberId,version:revision,keyword,groupKeys,attention:filters.attention || 'all',
+  const signature = digest({pagination:"measurement-cards-v2",memberId,version:revision,keyword,groupKeys,attention:filters.attention || 'all',
     matchingGroupKeys:[...matchingGroupKeys],section:filters.section || '',pin:filters.pin || 'all',pins,userId:user.id});
   let offset = 0;
   if (filters.cursor) {
@@ -73,8 +87,7 @@ export function queryTrendSnapshotSeries(user: RequestUser, memberId: string, fi
     if (!Number.isSafeInteger(cursor.offset) || cursor.offset! < 0 || cursor.offset! > 1000000) throw createError({statusCode:400,statusMessage:'趋势加载位置无效'});
     offset = cursor.offset!;
   }
-  const pinned = `EXISTS(SELECT 1 FROM user_trend_pins p WHERE p.member_id=e.member_id
-    AND p.user_id=? AND p.indicator_key=s.indicator_key AND p.unit_key=s.unit_key)`;
+  const pinned = pinnedSql;
   const where = ['e.member_id=?','e.revision=?'];
   const values: Array<string|number> = [memberId,revision!];
   if (keyword) {
@@ -87,38 +100,49 @@ export function queryTrendSnapshotSeries(user: RequestUser, memberId: string, fi
   if (filters.pin && filters.pin !== 'all') {where.push(filters.pin === 'only' ? pinned : `NOT ${pinned}`);values.push(user.id);}
   // Facet counts apply search/status/attention; choosing one group does not hide
   // the counts of other groups or double-count overlapping memberships.
-  const matches = db.prepare(`SELECT s.indicator_key AS indicatorKey,s.series_key AS key,s.attention_level AS attentionLevel
-    ${source} WHERE ${where.join(' AND ')}`).all(...values) as Array<{indicatorKey:string;key:string;attentionLevel:string|null}>;
+  const matches = db.prepare(`SELECT s.indicator_key AS indicatorKey,s.series_key AS key,s.unit_key AS unit,s.attention_level AS attentionLevel
+    ${source} WHERE ${where.join(' AND ')}`).all(...values) as Array<{indicatorKey:string;key:string;unit:string|null;attentionLevel:string|null}>;
   const groupView = (group: TrendGroupNode): TrendGroupNode & {seriesCount:number;matchCount:number;matchSeriesCount:number;abnormalCount:number} => {
     const keys = new Set(group.indicatorKeys);
     const rows = matches.filter(item => keys.has(item.indicatorKey));
-    return {...group,children:group.children.map(groupView),seriesCount:availableIndicators.filter(item => keys.has(item.indicatorKey)).length,
-      matchCount:new Set(rows.map(item => item.indicatorKey)).size,matchSeriesCount:rows.length,
-      abnormalCount:rows.filter(item => item.attentionLevel === 'abnormal').length};
+    const available=availableIndicators.filter(item=>keys.has(item.indicatorKey));
+    const indicatorCount=new Set(group.indicatorKeys.map(indicatorKey=>cardIdentity({indicatorKey}))).size;
+    const collapsed=group.indicatorCount-indicatorCount;
+    return {...group,indicatorCount,configuredIndicatorCount:group.configuredIndicatorCount-collapsed,
+      children:group.children.map(groupView),seriesCount:new Set(available.map(cardIdentity)).size,
+      matchCount:new Set(rows.map(cardIdentity)).size,
+      matchSeriesCount:new Set(rows.map(cardIdentity)).size,
+      abnormalCount:new Set(rows.filter(item=>item.attentionLevel==='abnormal').map(cardIdentity)).size};
   };
   const groups = tree.map(groupView);
   if (groupKeys) {where.push('s.indicator_key IN (SELECT value FROM json_each(?))');values.push(JSON.stringify(groupKeys));}
   const sectionRows = db.prepare(`SELECT s.group_key AS key,s.group_name AS name,s.group_order AS sortOrder,
-    COUNT(*) AS count,SUM(s.point_count) AS pointCount,SUM(s.attention_level='abnormal') AS abnormalCount
+    COUNT(DISTINCT ${cardIdentitySql}) AS count,SUM(s.point_count) AS pointCount,COUNT(DISTINCT CASE WHEN s.attention_level='abnormal' THEN ${cardIdentitySql} END) AS abnormalCount
     ${source} WHERE ${where.join(' AND ')} GROUP BY s.group_key,s.group_name,s.group_order
     ORDER BY s.group_order,s.group_key`).all(...values) as Array<{key:string;name:string;sortOrder:number;count:number;pointCount:number;abnormalCount:number|null}>;
   const subgroupRows = db.prepare(`SELECT s.group_key AS groupKey,
     COALESCE(s.subgroup_key,'laboratory_other') AS key,COALESCE(s.subgroup_name,'其他检验') AS name,
-    s.subgroup_order AS sortOrder,COUNT(*) AS count ${source} WHERE ${where.join(' AND ')}
+    s.subgroup_order AS sortOrder,COUNT(DISTINCT ${cardIdentitySql}) AS count ${source} WHERE ${where.join(' AND ')}
     GROUP BY s.group_key,s.subgroup_key,s.subgroup_name,s.subgroup_order ORDER BY s.subgroup_order`)
     .all(...values) as Array<{groupKey:string;key:string;name:string;sortOrder:number;count:number}>;
-  const pinnedCount = Number(db.prepare(`SELECT COUNT(*) AS n ${source} WHERE ${where.join(' AND ')} AND ${pinned}`).get(...values,user.id)!.n);
+  const pinnedCount = Number(db.prepare(`SELECT COUNT(DISTINCT ${cardIdentitySql}) AS n ${source} WHERE ${where.join(' AND ')} AND ${pinned}`).get(...values,user.id)!.n);
   if (filters.section) {where.push('s.group_key=?');values.push(filters.section);}
-  const total = Number(db.prepare(`SELECT COUNT(*) AS n ${source} WHERE ${where.join(' AND ')}`).get(...values)!.n);
+  const total=Number(db.prepare(`SELECT COUNT(DISTINCT ${cardIdentitySql}) AS n
+    ${source} WHERE ${where.join(' AND ')}`).get(...values)!.n);
   const pointCount = Number(db.prepare(`SELECT COALESCE(SUM(s.point_count),0) AS n ${source} WHERE ${where.join(' AND ')}`).get(...values)!.n);
-  const sort = 'e.sort_order';
-  const rank = groupKeys ? 'COALESCE((SELECT CAST(key AS INTEGER) FROM json_each(?) WHERE value=s.indicator_key),2147483647),' : '';
-  const rows = db.prepare(`SELECT s.series_key AS key,s.summary_json AS summary,${pinned} AS pinned
-    ${source} WHERE ${where.join(' AND ')} ORDER BY pinned DESC,${rank}${sort} LIMIT ? OFFSET ?`)
-    .all(user.id,...values,...(groupKeys ? [JSON.stringify(groupKeys)] : []),limit,offset) as Array<{key:string;summary:string;pinned:number}>;
+  const rank=groupKeys ? 'MIN(COALESCE((SELECT CAST(key AS INTEGER) FROM json_each(?) WHERE value=s.indicator_key),2147483647)),' : '';
+  // Paginate visible cards, then fetch their matching metrics together. No empty
+  // continuation pages containing only peers of cards already shown.
+  const cardKeys=db.prepare(`SELECT ${cardIdentitySql} AS key ${source} WHERE ${where.join(' AND ')}
+    GROUP BY ${cardIdentitySql} ORDER BY MAX(${pinned}) DESC,${rank}MIN(e.sort_order) LIMIT ? OFFSET ?`)
+    .all(...values,user.id,...(groupKeys ? [JSON.stringify(groupKeys)] : []),limit,offset).map(row=>String(row.key));
+  const rows=cardKeys.length ? db.prepare(`SELECT s.series_key AS key,s.summary_json AS summary,${pinned} AS pinned
+    ${source} WHERE ${where.join(' AND ')} AND (${cardIdentitySql}) IN (SELECT value FROM json_each(?))
+    ORDER BY (SELECT CAST(key AS INTEGER) FROM json_each(?) WHERE value=(${cardIdentitySql})),e.sort_order`)
+    .all(user.id,...values,JSON.stringify(cardKeys),JSON.stringify(cardKeys)) as Array<{key:string;summary:string;pinned:number}> : [];
   const items = rows.map(row => ({...JSON.parse(row.summary) as ComputedTrendSeries,
     snapshotKey:row.key,pinned:Boolean(row.pinned),chartLoaded:false,detailLoaded:false}));
-  const next = offset + rows.length;
+  const next = offset + cardKeys.length;
   return {version:revision,status,groups,sections:sectionRows.map(row => ({...row,abnormalCount:Number(row.abnormalCount || 0),subgroups:subgroupRows.filter(group => group.groupKey===row.key)})),items,total,pointCount,pinnedCount,hasMore:next<total,
     nextCursor:next<total ? Buffer.from(JSON.stringify({version:revision,query:signature,offset:next})).toString('base64url') : null,
     desiredRevision:state!.desired};
@@ -164,8 +188,7 @@ export function readLegacyTrendSnapshot(user: RequestUser, memberId: string) {
   const {db,revision,available} = context(user,memberId);
   if (!available) throw createError({statusCode:503,statusMessage:'趋势数据正在整理，请稍后重试',data:{code:'TREND_SNAPSHOT_BUILDING'}});
   const rows = db.prepare(`SELECT s.summary_json AS summary,s.chart_json AS chart,s.detail_json AS detail,
-    EXISTS(SELECT 1 FROM user_trend_pins p WHERE p.member_id=e.member_id
-      AND p.user_id=? AND p.indicator_key=s.indicator_key AND p.unit_key=s.unit_key) AS pinned
+    ${pinnedSql} AS pinned
     ${source} WHERE e.member_id=? AND e.revision=? ORDER BY pinned DESC,e.sort_order`)
     .all(user.id,memberId,revision!) as Array<{summary:string;chart:string;detail:string;pinned:number}>;
   const series = rows.map(row => {

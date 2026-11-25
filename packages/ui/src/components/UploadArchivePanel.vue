@@ -34,7 +34,7 @@ function syncGroups(){
  cached=null;draftReady=true;persistDraft();
 }
 watch(groups,persistDraft,{deep:true});
-const typeOptions=[{value:'checkup',label:'报告 · 体检'},{value:'laboratory',label:'报告 · 检验'},{value:'pathology',label:'报告 · 病理'},{value:'functional',label:'报告 · 功能检查'},{value:'outpatient',label:'报告 · 门诊病历'},{value:'inpatient',label:'报告 · 住院资料'},{value:'billing',label:'报告 · 费用凭证'},{value:'other',label:'报告 · 其他资料'},{value:'prescription',label:'用药单'},{value:'vaccination',label:'接种'},{value:'imaging',label:'影像报告'}];
+const typeOptions=[{value:'checkup',label:'报告 · 体检'},{value:'laboratory',label:'报告 · 检验'},{value:'pathology',label:'报告 · 病理'},{value:'functional',label:'报告 · 功能检查'},{value:'ultrasound',label:'报告 · 超声检查'},{value:'outpatient',label:'报告 · 门诊病历'},{value:'inpatient',label:'报告 · 住院资料'},{value:'billing',label:'报告 · 费用凭证'},{value:'other',label:'报告 · 其他资料'},{value:'prescription',label:'用药单'},{value:'vaccination',label:'接种'},{value:'imaging',label:'影像报告'}];
 const processing=computed(()=>reports.value.some(item=>['queued','processing','uploading'].includes(item.status)));
 const pendingReports=computed(()=>reports.value.filter(item=>!['archived','skipped'].includes(item.state)));
 const writable=computed(()=>props.memberId===app.selectedMemberId.value&&app.selectedMember.value?.permission==='manager');

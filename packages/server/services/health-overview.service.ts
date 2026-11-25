@@ -27,6 +27,7 @@ export function getOverview(user: RequestUser, memberId: string): HealthOverview
     category:reportCategory(doc.reportType), title:doc.title, date:doc.reportIssuedAt, uploadedAt:doc.uploadedAt,
     subtype:doc.reportType, status:doc.status, institution:doc.hospitalName,
     description:null, documents:[doc], duplicateHint:hints.get(doc.id),
+    ...(doc.reportType==='vaccination'?{confirmedCount:entries.filter(entry=>entry.kind==='vaccination' && entry.documents.some(source=>source.id===doc.id)).length}:{}),
     processIds:[...new Set(entries.filter(entry=>entry.documents.some(source=>source.id===doc.id)).flatMap(entry=>entry.processIds))]
   });
   const symptoms = entries.filter(entry => entry.kind === 'symptom' && entry.status === 'active');

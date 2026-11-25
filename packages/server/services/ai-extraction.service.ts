@@ -1,3 +1,9 @@
+import { parseNarrativeSectionReferences, originalNarrativeFields, type NarrativeSectionReference } from './report-original-narrative';
+import {measurementModalities} from '../../shared/measurement-indicators';
+import {parseCardiacUltrasoundPage} from './cardiac-ultrasound-parser';
+import {cardiacSites} from '../../shared/cardiac-measurements';
+import { parseDxaPage } from './bone-density-parser';
+import { boneSites } from '../../shared/bone-density';
 import { parseMedicationFormula, type MedicationFormula } from '../../shared/medication-formula';
 import { collectUnverifiedPreviousObservations, readUnverifiedPreviousObservations } from './extraction-review.service';
 import type { ExaminationInput } from "../domain/examination";
@@ -54,13 +60,14 @@ import {
 } from "./observation-interpretation.service";
 import { assessObservationReference } from "./observation-reference.service";
 
-export const aiExtractionPromptVersion = "health-record-routed-v13-decoction-formula";
+export const aiExtractionPromptVersion = "health-record-routed-v16-original-narratives";
 const maxInputCharacters = 80_000;
 const reportTypeAliases: Record<string, string> = {
   physical_exam: "checkup",
   checkup: "checkup",
   laboratory: "laboratory",
   imaging: "imaging",
+  ultrasound: "ultrasound",
   functional: "functional",
   pathology: "pathology",
   outpatient: "outpatient",
@@ -77,6 +84,7 @@ const internalReportMetadataTokens = new Set([
   "checkup",
   "laboratory",
   "imaging",
+  "ultrasound",
   "functional",
   "pathology",
   "outpatient",
@@ -176,6 +184,9 @@ export type AiEvidence = {
   coordinateVerified?: true;
 };
 export type AiObservation = {
+  examinationModality?: string | null;
+  measurementSite?: string | null;
+  measurementLaterality?: string | null;
   examination?: ExaminationInput;
   sectionName: string | null;
   itemCode: string | null;
@@ -305,6 +316,7 @@ export type AiReportStructuredSection = {
 };
 
 export type AiExtractionFields = {
+  narrativeSections?: NarrativeSectionReference[];
   reportType: string | null;
   reportSubtype: string | null;
   title: string | null;
@@ -384,6 +396,8 @@ export type AiExtractionInput = {
 };
 
 export type AiExtractionResult = {
+  /** Internal provenance marker, never accepted from model JSON. */
+  originalNarratives?: true;
   visionCoverage?:{reviewedPages:number[];unreviewedPages:number[]};
   /** Set only by the bounded orchestration cycle, never accepted from model JSON. */
   recovery?: {completed:true;technicalFailure?:boolean;visionStatus?:'not_needed'|'completed'|'partial'|'failed'|'not_configured'|'budget'|'unavailable';unreviewedPages?:number[];supplementUnits:number;visionRequested:boolean;unresolvedCandidates:number;measurementCandidates:number};
@@ -1091,6 +1105,9 @@ export function normalizeAiExtraction(value: unknown): {
                 supportingText: evidence.map((entry) => entry.quote),
               }),
             method: textValue(row.method ?? row.m, 200),
+            ...(row.examinationModality !== undefined ? {examinationModality:measurementModalities.includes(row.examinationModality as typeof measurementModalities[number])?String(row.examinationModality):null} : {}),
+            ...(row.measurementSite !== undefined ? {measurementSite: [...boneSites,...cardiacSites].some(site => site[0] === row.measurementSite) ? String(row.measurementSite) : null} : {}),
+            ...(row.measurementLaterality !== undefined ? {measurementLaterality: ["left","right","unspecified"].includes(String(row.measurementLaterality)) ? String(row.measurementLaterality) : null} : {}),
             evidence,
             ...(row.examination && typeof row.examination === 'object' ? {examination: Object.fromEntries(['examinationType','institution','reportNumber','specimen','method','sampledAt','examinedAt','issuedAt','timeText'].map(key=>[key,textValue((row.examination as Record<string,unknown>)[key],1000)])) as ExaminationInput} : {}),
           },
@@ -1246,10 +1263,11 @@ export function normalizeAiExtraction(value: unknown): {
     clinicalDiagnosis: textValue(source.clinicalDiagnosis),
     purpose: textValue(source.purpose),
     chiefComplaint: textValue(source.chiefComplaint),
-    findings: textValue(source.findings, 12_000),
-    impression: textValue(source.impression, 8000),
-    summary: sanitizeSummarySectionSkeleton(textValue(source.summary, 4000)),
-    recommendation: textValue(source.recommendation, 4000),
+    findings: textValue(source.findings, Number.POSITIVE_INFINITY),
+    impression: textValue(source.impression, Number.POSITIVE_INFINITY),
+    summary: sanitizeSummarySectionSkeleton(textValue(source.summary, Number.POSITIVE_INFINITY)),
+    recommendation: textValue(source.recommendation, Number.POSITIVE_INFINITY),
+    narrativeSections: parseNarrativeSectionReferences(source.narrativeSections),
     observations,
     morphologyFindings,
     diagnoses,
@@ -1387,6 +1405,7 @@ export function inferDisplayBodyParts(fields: AiExtractionFields) {
       return bodyPart(subtype || "综合体检");
     case "laboratory":
       return bodyPart(subtype || section || observation || "检验项目");
+    case "ultrasound":
     case "imaging":
       return subtype ? bodyPart(subtype) : [];
     case "functional":
@@ -1423,6 +1442,8 @@ function reportTypeLabel(fields: AiExtractionFields) {
         return `${subject}报告`.replace(/报告报告$/, "报告");
       return compactParts([subject, "检验报告"]).join("");
     }
+    case "ultrasound":
+      return compactParts([bodyPart, subtype || "超声检查", "报告"]).join("");
     case "imaging":
       return compactParts([bodyPart, subtype || "影像", "报告"]).join("");
     case "functional":
@@ -1488,10 +1509,12 @@ function documentContract(input: AiExtractionInput) {
       ? `\n综合体检通常跨多个科室和部位：没有报告原文明示的单一就诊科室时省略科室字段；reportSubtype 默认省略，只有报告标题明确写出职业体检等具体子类时才填原文；bodyParts 默认省略，不能把“体检”或各专项章节汇总成一个人体部位。`
       : "";
   return `当前任务${includeObservations ? "建立整份报告的文档概况，并逐项提取其中的指标与形态发现" : "只建立整份报告的文档概况"}。
-允许字段：reportType、reportSubtype、title、hospitalNameRaw、hospitalBranch、city、visitType、visitDepartment、orderingDepartment、performingDepartment、reportingDepartment、inpatientWard、bodyParts、identifiers、reportIssuedAt、examinedAt、orderedAt、sampledAt、receivedAt、reviewedAt、admittedAt、dischargedAt、clinicians、clinicalDiagnosis、purpose、chiefComplaint、findings、impression、summary、recommendation、evidence、confidence${includeObservations ? "、observations、morphologyFindings" : ""}。
-reportType 只能是 physical_exam、laboratory、imaging、functional、pathology、outpatient、inpatient、prescription、receipt、vaccine、other。
+允许字段：narrativeSections、reportType、reportSubtype、title、hospitalNameRaw、hospitalBranch、city、visitType、visitDepartment、orderingDepartment、performingDepartment、reportingDepartment、inpatientWard、bodyParts、identifiers、reportIssuedAt、examinedAt、orderedAt、sampledAt、receivedAt、reviewedAt、admittedAt、dischargedAt、clinicians、clinicalDiagnosis、purpose、chiefComplaint、findings、impression、summary、recommendation、evidence、confidence${includeObservations ? "、observations、morphologyFindings" : ""}。
+reportType 只能是 physical_exam、laboratory、ultrasound、imaging、functional、pathology、outpatient、inpatient、prescription、receipt、vaccine、other。
 title 必须概括整份报告；泛标题应按主要项目、检查方式、部位或报告范围生成短标题，但不得生成疾病判断标题。综合体检中的专项页不能覆盖整份报告标题。
+超声或彩超检查报告使用 ultrasound，归入报告分类；具体的心脏、腹部等检查名称保留在 title 或 reportSubtype。不得因存在超声图像改成 imaging。
 reportSubtype 只能填写报告上明确出现的具体检查方式或子类，不得重复 reportType 的枚举值。bodyParts 只能填写报告明确涉及的实际检查部位，不得填写 physical_exam、checkup、laboratory、imaging 等内部类型词；每项使用 raw、name、parent、laterality，laterality 只能是 left、right、bilateral、unspecified。identifiers 只允许 reportNo、outpatientNo、inpatientNo、physicalExamNo、examNo、specimenNo、barcodeNo。clinicians 只允许 ordering、examining、reporting、reviewing、chief。
+结论、医生建议、检查所见和原报告概述的正文由程序从 OCR 原文恢复，不得重写或摘要化。使用 narrativeSections 标记章节归属：每项 {field,p,startQuote,endQuote}，field 只能是 summary（原报告概述/小结）、impression（结论）、recommendation（医生建议/医嘱）、findings（检查所见）；p 为页码，startQuote/endQuote 分别逐字引用该页本段第一行和最后一行的原文（各最多 300 字，长行可引用独有片段）。每个科室、每一处总结或建议分别标记，跨页逐页标记，不只选择第一处或总检部分。每个科室或器官的描述分别标记，不要跨过中间的小结或其它科室。表格中的“提示”异常标记列不是结论；医学科普不属于个性化医生建议。结果单元格中的长段描述可归入检查所见，不能把数值明细表归入叙事字段。没有对应章节则省略。不要输出这四个字段的改写正文。
 summary 只能提取原报告明确存在的总结，不得为当前输入另写摘要。findings 只用于原报告明确存在的叙事性检查所见（如影像、功能检查的描述性文字）；检验报告不得把指标值罗列成 findings，没有叙事所见时省略。公共字段证据写入顶层 evidence，置信度写入 confidence。${checkupFields}${includeObservations ? `\n当前输入覆盖整份报告，同时逐项输出 observations，规则如下：\n${observationContract()}\n同时输出 morphologyFindings，规则如下：\n${morphologyContract().replace(/^当前任务只输出 morphologyFindings。/, "")}` : ""}`;
 }
 
@@ -1549,7 +1572,7 @@ function narrativeContract(input: AiExtractionInput) {
   const types = new Set(effectiveContentTypes(input));
   if (input.includesMedicationContent) types.add("prescription");
   const parts = [
-    `当前任务只整理原报告叙事章节，不输出 observations、morphologyFindings 或文档概况字段。所有 content 必须忠实保留原文，不得概括或补写。`,
+    `当前任务只整理原报告叙事章节，不输出 observations、morphologyFindings 或文档概况字段。所有 content 必须忠实保留原文，不得概括或补写。结论、医生建议、检查所见和原报告概述的正文由程序从 OCR 原文恢复，不得重写或摘要化。使用 narrativeSections 标记章节归属：每项 {field,p,startQuote,endQuote}，field 只能是 summary（原报告概述/小结）、impression（结论）、recommendation（医生建议/医嘱）、findings（检查所见）；p 为页码，startQuote/endQuote 分别逐字引用该页本段第一行和最后一行的原文（各最多 300 字，长行可引用独有片段）。每个科室、每一处总结或建议分别标记，跨页逐页标记，不只选择第一处或总检部分。每个科室或器官的描述分别标记，不要跨过中间的小结或其它科室。表格中的“提示”异常标记列不是结论；医学科普不属于个性化医生建议。结果单元格中的长段描述可归入检查所见，不能把数值明细表归入叙事字段。没有对应章节则省略。不要输出这四个字段的改写正文。`,
   ];
   if (types.has("checkup")) {
     parts.push(
@@ -1561,9 +1584,9 @@ function narrativeContract(input: AiExtractionInput) {
       `检验可输出 reportSections，sectionKey 仅限 laboratory_specimen、laboratory_method。`,
     );
   }
-  if (types.has("imaging")) {
+  if (types.has("imaging") || types.has("ultrasound")) {
     parts.push(
-      `影像可输出 findings、impression，以及 sectionKey 为 imaging_modality、imaging_contrast 的 reportSections。`,
+      `影像的 findings、impression 使用 narrativeSections 标记原文范围；可输出 sectionKey 为 imaging_modality、imaging_contrast 的 reportSections。`,
     );
   }
   if (types.has("functional")) {
@@ -1609,6 +1632,7 @@ const contentTypeLabels: Record<ReportContentType, string> = {
   checkup: "体检",
   laboratory: "检验",
   imaging: "影像",
+  ultrasound: "超声检查",
   functional: "功能检查",
   pathology: "病理",
   outpatient: "门诊",
@@ -1623,8 +1647,11 @@ const typePromptPlugins: Partial<Record<ReportContentType, string>> = {
   checkup: `体检内容：重点检查一般检查、基础测量、各科分项、阳性发现、总检结论和原报告建议。综合体检中的检验、影像、功能检查仍按其原始章节提取，不要把专项页标题当作整份报告标题。
 各科查体表（耳鼻喉、眼科、口腔、内外科等）多为“项目 | 本次结果 | 参考值 | 历史结果”结构：项目列（如耳、鼻、口咽）是项目名，本次结果列原样作为结果（“未见异常”或异常发现描述均可），历史结果列中的真实测量独立输出并通过 examination.timeText 指明对应日期或阶段，不得混入本次结果。`,
   laboratory: `检验内容：逐行提取当前结果、单位、参考范围、异常标记、标本和检测方法。严格区分本次结果列与历史结果列；项目名必须来自当前行，不得用表头或参考项目代替。`,
+  ultrasound: `超声报告：保留检查部位、检查所见和超声提示，原文明示的测量值按完整部位和方法提取；具体结节、囊肿、斑块等进入 morphologyFindings，不将正常描述拆成形态发现。`,
   imaging: `影像内容：重点提取检查方式、真实部位、左右侧、增强信息、检查所见和影像结论。结节、囊肿、斑块、息肉、结石、积液、占位及明确异常形态只进入 morphologyFindings。`,
   functional: `功能检查内容：提取心电图、肺功能、骨密度、动脉功能、呼气试验等明确测量和原报告结论。单值测量进入 observations，可追踪形态发现进入 morphologyFindings。
+心脏测量：每项保留明确的解剖部位 measurementSite（aorta, aortic_sinus, ascending_aorta, left_atrium, right_atrium, left_ventricle, right_ventricle, interventricular_septum, left_ventricular_posterior_wall, main_pulmonary_artery, mitral_valve, tricuspid_valve, aortic_valve, pulmonary_valve, mitral_annulus_septal），检查方式 examinationModality 仅使用超声心动图、CT、MRI；method 仅保留原文明示的具体测量方法，不能填 AI/OCR、不能把检查方式当成测量方法。未注明径线、时相、方法时不得猜测。左室舒张末与收缩末、室间隔与后壁、不同瓣膜 E/A 波、组织多普勒 S′/E′/A′分别记录；右室常规与未注明径线的右室不能合并。不得套用常见正常范围或补算未明示的比值。
+骨密度：DXA（双能 X 线）与 QUS（定量超声）不得混用。DXA 每个部位的 BMD、T 值、Z 值分别提取为 observation，不合并部位、左右侧或腰椎组合，缺失值不填零。method 为 DXA，measurementSite 仅使用 ${boneSites.map(([key])=>key).join(', ')}，measurementLaterality 为 left/right/unspecified；不能确定时留空，不猜测。BMD 单位 g/cm²，T/Z 无单位。历史表按真实测量日期保留，不使用年龄或曲线坐标作为结果。髋关节中轴长度是独立长度项目，须按原文左右侧分别提取，不用均值或差值代替实测值，缺少侧别时不得猜测。
 肺功能多列表格只取“实测/本次结果”列；预测值、预计值、预计百分比、参考值和曲线坐标不得作为本次 observation。多列表格的 q 必须同时包含最近表头和当前数据行，以便核验列语义。设备质控或算法派生参数（例如 PEF TIME、FET、V EXTRAP、EXTRAP V、名称以 /HT 结尾的身高校正量、分段流量比、FEV0.5、FEF75-85、FEF200-1200、名称以 /VCpr 结尾的预测派生比例）不要进入 observations。单位只在当前行或可明确继承的表头出现时填写，不得猜测。`,
   pathology: `病理内容：提取标本、肉眼所见、镜下所见、免疫组化、病理诊断及原报告明确分级分期。不得自行推断良恶性、分级或分期。`,
   outpatient: `门诊内容：重点提取主诉、现病史、体格检查、门诊诊断、处置和医嘱。只保留原文事实，不补写疾病解释。`,
@@ -2124,7 +2151,7 @@ function observationContext(item: AiObservation) {
     temporalKind: historical ? "historical" : "current",
     measuredAt: dateTime?.[0] || null,
     specimen,
-    method: compactObservationIdentity(item.method),
+    method: compactObservationIdentity(item.method) + (item.examinationModality ? `:modality:${item.examinationModality}` : "") + (item.measurementSite ? `:${item.measurementSite}:${item.measurementLaterality || "unspecified"}` : ""),
   };
 }
 
@@ -2915,11 +2942,13 @@ function validatePersistedObservationEvidence(
     .all(reportId) as Array<{ pageNumber: number; linesJson: string }>;
   if (!rows.length) return observations;
 
+  const dxaFacts:AiObservation[]=[];
   const pages = new Map<number, string[]>();
   for (const row of rows) {
     if (pages.has(row.pageNumber)) continue;
     try {
       const lines = JSON.parse(row.linesJson) as Array<{ text?: unknown }>;
+      dxaFacts.push(...(parseDxaPage(lines as Parameters<typeof parseDxaPage>[0],row.pageNumber) || []),...parseCardiacUltrasoundPage(lines as Parameters<typeof parseCardiacUltrasoundPage>[0],row.pageNumber));
       pages.set(
         row.pageNumber,
         lines.map((line) => String(line.text || "").trim()).filter(Boolean),
@@ -2940,7 +2969,10 @@ function validatePersistedObservationEvidence(
     )
       throw error;
   }
-  return observations.map((observation) => ({
+  return observations.map((observation) => {
+    const verified = dxaFacts.find(fact=>fact.itemName===observation.itemName && fact.examinationModality===observation.examinationModality && fact.method===observation.method && fact.measurementSite===observation.measurementSite && fact.measurementLaterality===observation.measurementLaterality && fact.numericValue===observation.numericValue && fact.unit===observation.unit && fact.examination?.examinedAt===observation.examination?.examinedAt && fact.evidence[0]?.pageNumber===observation.evidence[0]?.pageNumber);
+    if(verified)return {...observation,evidence:verified.evidence};
+    return ({
     ...observation,
     evidence: uniqueObservationEvidence(
       observation.evidence.flatMap((evidence): AiEvidence[] => {
@@ -2995,7 +3027,7 @@ function validatePersistedObservationEvidence(
           : [];
       }),
     ),
-  }));
+  });});
 }
 
 /**
@@ -3372,6 +3404,7 @@ export function deduplicateReportObservations(
       itemCode: observation.itemCode,
       itemName: observation.itemName,
       normalizedName: observation.normalizedName,
+      method: observation.method, examinationModality:observation.examinationModality, measurementSite: observation.measurementSite, measurementLaterality: observation.measurementLaterality,
       resultText: observation.resultText,
       numericValue: observation.numericValue,
       unit: observation.unit,
@@ -3787,6 +3820,7 @@ export function persistAiExtraction(
   });
   const fields = {
     ...normalized.fields,
+    ...(result.originalNarratives ? Object.fromEntries(originalNarrativeFields.map(field=>[field,result.fields[field]])) : {}),
     observations: sanitizeReportObservations(enrichPersistedObservationEvidence(
       reportId,
       normalized.fields.observations,
@@ -3914,7 +3948,7 @@ export function persistAiExtraction(
   set("clinicalDiagnosis", "clinical_diagnosis", fields.clinicalDiagnosis);
   set("purpose", "purpose", fields.purpose);
   set("chiefComplaint", "chief_complaint", fields.chiefComplaint);
-  const filteredFindings = findingsIsObservationEnumeration(
+  const filteredFindings = result.originalNarratives ? fields.findings : findingsIsObservationEnumeration(
     fields.findings,
     fields.observations,
   )
@@ -3962,8 +3996,8 @@ export function persistAiExtraction(
         INSERT INTO observations (
           id, report_id, section_name, item_code, item_name, normalized_name, result_text,
           numeric_value, unit, reference_low, reference_high, reference_text, abnormal_flag,
-          display_abnormal_flag, abnormal_conflict, method, evidence_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          display_abnormal_flag, abnormal_conflict, method, evidence_json, measurement_site, measurement_laterality, examination_modality
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       ).run(
         observationId,
@@ -3983,6 +4017,9 @@ export function persistAiExtraction(
         displayAbnormal.abnormalConflict ? 1 : 0,
         observation.method,
         JSON.stringify(observation.evidence),
+        observation.measurementSite || null,
+        observation.measurementLaterality || null,
+        observation.examinationModality || null,
       );
       examinationCandidates.push({id:observationId,observation:{...observation,evidence:observation.evidence.flatMap(entry =>
         typeof entry.pageNumber === "number" && typeof entry.quote === "string"

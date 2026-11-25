@@ -10,6 +10,7 @@ export type ReportStatus =
 export type ReportType =
   | "checkup"
   | "laboratory"
+  | "ultrasound"
   | "imaging"
   | "functional"
   | "pathology"
@@ -32,6 +33,10 @@ export type EvidenceRef = {
 };
 
 export type Observation = {
+  method?: string | null;
+  examinationModality?: string | null;
+  measurementSite?: string | null;
+  measurementLaterality?: string | null;
   examinationId?: string | null;
   examinationTime?: string | null;
   examinationTimeKind?: string | null;

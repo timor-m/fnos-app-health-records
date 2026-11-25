@@ -1,10 +1,15 @@
+import {measurementModalities} from '../../shared/measurement-indicators';
+import {cardiacSites} from '../../shared/cardiac-measurements';
+import { boneSites, boneMetrics, boneSiteLabel } from '../../shared/bone-density';
+import { parseExaminationTime } from '../domain/examination';
+import { getReportExaminations, saveReportExamination } from './report-examination.service';
 import {sourceRegion} from "../../shared/source-region";
 import { assertNoPageAppend } from "./page-append-lock.service";
 import { consumeUnverifiedPreviousObservation } from './extraction-review.service';
 import type { ExaminationInput } from "../domain/examination";
 import { createHash } from "node:crypto";
 import { createError } from "h3";
-import { rollbackAfterError, getDatabase } from "../database/client";
+import { rollbackAfterError, runInTransaction, getDatabase } from "../database/client";
 import type { RequestUser } from "../domain/request-user";
 import { createId } from "../utils/identifier";
 import { assertMemberManage } from "./member.service";
@@ -12,6 +17,10 @@ import { ensureBuiltinIndicatorCatalog, normalizeReportObservations } from "./in
 import { deriveObservationDisplayAbnormal } from "./observation-interpretation.service";
 
 export type EditableObservationFields = {
+  method?: string | null;
+  examinationModality?: string | null;
+  measurementSite?: string | null;
+  measurementLaterality?: string | null;
   sectionName: string | null;
   itemCode: string | null;
   itemName: string;
@@ -61,6 +70,8 @@ export function observationSourceKey(input: EditableObservationFields & Partial<
     itemCode: compactIdentity(input.itemCode),
     itemName: compactIdentity(input.itemName),
     ...(reportId ? {unit:compactIdentity(input.unit),method:compactIdentity(input.method)} : {}),
+    ...(input.examinationModality ? {examinationModality:input.examinationModality} : {}),
+    ...(input.measurementSite ? {measurementSite:input.measurementSite,measurementLaterality:input.measurementLaterality || "unspecified"} : {}),
     evidence,
   })).digest("hex");
 }
@@ -126,7 +137,7 @@ export function applyObservationFieldOverrides(
     const fields = parseFields(row.fieldsJson);
     if (!fields) continue;
     result.push({
-      observation: { ...fields, normalizedName: null, method: "manual", evidence: savedSourceEvidence(row, reportId) },
+      observation: { ...fields, normalizedName: null, method: fields.method || "manual", evidence: savedSourceEvidence(row, reportId) },
       overrideId: row.id,
       manualCreated: Boolean(row.isManualCreated),
     });
@@ -164,7 +175,14 @@ function validatedFields(input: Record<string, unknown>): EditableObservationFie
     ? abnormalInput as EditableObservationFields["abnormalFlag"]
     : null;
   if (abnormalInput && !abnormalFlag) throw createError({ statusCode: 400, statusMessage: "异常标记无效" });
+  if(input.examinationModality != null && input.examinationModality!=='' && !measurementModalities.includes(input.examinationModality as typeof measurementModalities[number]))throw createError({statusCode:400,statusMessage:'检查方式无效'});
+  if(input.measurementSite != null && input.measurementSite !== '' && ![...boneSites,...cardiacSites].some(site=>site[0]===input.measurementSite)) throw createError({statusCode:400,statusMessage:'测量部位无效'});
+  if(input.measurementLaterality != null && input.measurementLaterality !== '' && !['left','right','unspecified'].includes(String(input.measurementLaterality))) throw createError({statusCode:400,statusMessage:'骨密度左右侧无效'});
   return {
+    ...(input.examinationModality !== undefined ? {examinationModality:textValue(input.examinationModality,80)} : {}),
+    ...(input.method !== undefined ? {method:textValue(input.method,200)} : {}),
+    ...(input.measurementSite !== undefined ? {measurementSite:textValue(input.measurementSite,80)} : {}),
+    ...(input.measurementLaterality !== undefined ? {measurementLaterality:textValue(input.measurementLaterality,30)} : {}),
     sectionName: textValue(input.sectionName, 160),
     itemCode: textValue(input.itemCode, 100),
     itemName: textValue(input.itemName, 240, true)!,
@@ -221,6 +239,7 @@ function insertObservation(reportId: string, observationId: string, fields: Edit
     fields.referenceHigh, fields.referenceText, fields.abnormalFlag,
     display.displayAbnormalFlag, display.abnormalConflict ? 1 : 0,
   );
+  getDatabase().prepare('UPDATE observations SET method=?,measurement_site=?,measurement_laterality=?,examination_modality=? WHERE id=?').run(fields.method || 'manual',fields.measurementSite || null,fields.measurementLaterality || null,fields.examinationModality || null,observationId);
 }
 
 function selectedSourceEvidence(reportId: string, input: Record<string, unknown>) {
@@ -249,8 +268,7 @@ export function createManualObservation(user: RequestUser, reportId: string, inp
   const observationId = createId("obs");
   const overrideId = createId("observation-override");
   const db = getDatabase();
-  db.exec("BEGIN IMMEDIATE");
-  try {
+  runInTransaction(db, () => {
     if (input.expectedSourceVersion !== undefined && input.previousObservationIndex == null) {
       const version = db.prepare('SELECT source_version AS version FROM reports WHERE id=?').get(reportId) as {version:number};
       if (!Number.isInteger(input.expectedSourceVersion) || input.expectedSourceVersion !== version.version) {
@@ -278,12 +296,9 @@ export function createManualObservation(user: RequestUser, reportId: string, inp
       reportId,
       fields: [...Object.keys(fields), ...(canonicalKey ? ["canonicalKey"] : []), ...(selectedEvidence !== undefined ? ["source"] : [])],
     }));
-    db.exec("COMMIT");
-  } catch (error) {
-    rollbackAfterError(db);
-    throw error;
-  }
+  });
   normalizeReportObservations(reportId);
+  return observationId;
 }
 
 export function updateManualObservation(
@@ -299,7 +314,7 @@ export function updateManualObservation(
       o.result_text AS resultText, o.numeric_value AS numericValue, o.unit,
       o.reference_low AS referenceLow, o.reference_high AS referenceHigh,
       o.reference_text AS referenceText, o.abnormal_flag AS abnormalFlag,
-      o.evidence_json AS evidenceJson, o.method, override.id AS overrideId,
+      o.evidence_json AS evidenceJson, o.method, o.examination_modality AS examinationModality, o.measurement_site AS measurementSite, o.measurement_laterality AS measurementLaterality, override.id AS overrideId,
       override.source_key AS sourceKey, override.canonical_key AS currentCanonicalKey,
       override.is_manual_created AS isManualCreated, override.fields_json AS fieldsJson
     FROM observations o
@@ -312,7 +327,7 @@ export function updateManualObservation(
   if (!current) throw createError({ statusCode: 404, statusMessage: "指标不存在" });
   const excluded = db.prepare("SELECT 1 FROM observation_normalizations WHERE observation_id = ? AND matched_by = 'manual_exclusion'").get(observationId);
   if (excluded) throw createError({ statusCode: 409, statusMessage: "该指标已被人工排除，请先在指标治理中心撤销排除，再进行校对" });
-  const fields = validatedFields(input);
+  const fields = validatedFields({...current,...input});
   const canonicalKey = validatedCanonicalKey(input);
   let evidence: PersistableObservation["evidence"] = [];
   try {
@@ -349,6 +364,7 @@ export function updateManualObservation(
       fields.unit, fields.referenceLow, fields.referenceHigh, fields.referenceText, fields.abnormalFlag,
       display.displayAbnormalFlag, display.abnormalConflict ? 1 : 0, observationId, reportId,
     );
+    db.prepare('UPDATE observations SET method=?,measurement_site=?,measurement_laterality=?,examination_modality=? WHERE id=?').run(fields.method ?? null,fields.measurementSite || null,fields.measurementLaterality || null,fields.examinationModality || null,observationId);
     db.prepare(`
       INSERT INTO observation_field_overrides (
         id, report_id, source_key, observation_id, fields_json, canonical_key, is_manual_created, updated_by
@@ -384,7 +400,7 @@ export function deleteManualObservation(user: RequestUser, reportId: string, obs
     if (!db.prepare('SELECT 1 FROM observations WHERE id = ? AND report_id = ?').get(observationId, reportId)) {
       throw createError({ statusCode: 404, statusMessage: '指标不存在' });
     }
-    const deleted = db.prepare(`SELECT section_name AS sectionName,item_code AS itemCode,item_name AS itemName,result_text AS resultText,unit,method,evidence_json AS evidenceJson FROM observations WHERE id=? AND report_id=?`).get(observationId,reportId) as EditableObservationFields & {evidenceJson:string;method:string|null};
+    const deleted = db.prepare(`SELECT section_name AS sectionName,item_code AS itemCode,item_name AS itemName,result_text AS resultText,unit,method,examination_modality AS examinationModality,measurement_site AS measurementSite,measurement_laterality AS measurementLaterality,evidence_json AS evidenceJson FROM observations WHERE id=? AND report_id=?`).get(observationId,reportId) as EditableObservationFields & {evidenceJson:string;method:string|null};
     const original = db.prepare('SELECT source_key FROM observation_field_overrides WHERE observation_id=? AND report_id=?').get(observationId,reportId) as {source_key:string}|undefined;
     const parsed = JSON.parse(deleted.evidenceJson);
     const sourceKey = observationSourceKey({...deleted,evidence:Array.isArray(parsed)?parsed:[]},reportId);
@@ -402,4 +418,38 @@ export function deleteManualObservation(user: RequestUser, reportId: string, obs
     throw error;
   }
   normalizeReportObservations(reportId);
+}
+
+/** Add optional values for several DXA sites as one version-checked operation. */
+export function createBoneDensityObservations(user:RequestUser,reportId:string,input:Record<string,unknown>) {
+ managedReport(user,reportId);
+ if(!Array.isArray(input.sites) || !input.sites.length || input.sites.length>boneSites.length*2) throw createError({statusCode:400,statusMessage:'请添加检查部位'});
+ const time=parseExaminationTime(input.examinedAt);
+ if(!time)throw createError({statusCode:400,statusMessage:'请填写有效的检查时间'});
+ const keys=new Set<string>();
+ const rows=input.sites.flatMap((raw:unknown)=>{
+  if(!raw || typeof raw!=='object')throw createError({statusCode:400,statusMessage:'检查部位无效'});
+  const row=raw as Record<string,unknown>;
+  if(!boneSites.some(site=>site[0]===row.site))throw createError({statusCode:400,statusMessage:'请选择检查部位'});
+  const site=String(row.site),side=site.startsWith('lumbar_')?'unspecified':String(row.side || 'unspecified');
+  if(!['left','right','unspecified'].includes(side) || (site.startsWith('femur_') && side==='unspecified'))throw createError({statusCode:400,statusMessage:'请选择左右侧'});
+  const key=site+':'+side;
+  if(keys.has(key))throw createError({statusCode:400,statusMessage:'同一部位请勿重复添加'});keys.add(key);
+  const values=boneMetrics.flatMap(metric=>{
+   const value=numberValue(row[metric.key],metric.label);
+   if(value===null)return [];
+   if(metric.key==='dxa_bmd' && value<=0)throw createError({statusCode:400,statusMessage:'BMD 必须大于零'});
+   return [{sectionName:'DXA 骨密度',itemName:`DXA ${boneSiteLabel(site,side)} ${metric.label}`,itemCode:metric.key,canonicalKey:metric.key,resultText:String(value),numericValue:value,unit:metric.unit,method:'DXA',measurementSite:site,measurementLaterality:side,sourcePageId:input.sourcePageId}];
+  });
+  if(!values.length)throw createError({statusCode:400,statusMessage:'每个部位至少填写一项数值'});
+  return values;
+ });
+ const db=getDatabase();
+ runInTransaction(db,()=>{
+  const version=db.prepare('SELECT source_version AS version FROM reports WHERE id=?').get(reportId) as {version:number};
+  if(!Number.isSafeInteger(input.expectedSourceVersion) || version.version!==input.expectedSourceVersion)throw createError({statusCode:409,statusMessage:'报告已更新，请刷新后重新补充'});
+  const ids=rows.map(row=>createManualObservation(user,reportId,row));
+  const state=getReportExaminations(user,reportId);
+  saveReportExamination(user,reportId,{version:state.version,reportVersion:state.reportVersion,requestKey:createId('bone'),observationIds:ids,examination:{examinationType:'骨密度',method:'DXA',examinedAt:time.value}});
+ });
 }

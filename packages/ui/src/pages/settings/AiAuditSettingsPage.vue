@@ -66,7 +66,7 @@ function sourceText(value: string) {
 function routeText(value: string | null) {
   if (!value) return "";
   const labels: Record<string, string> = {
-    checkup: "体检", laboratory: "检验", imaging: "影像", functional: "功能检查",
+    checkup: "体检", laboratory: "检验", imaging: "影像", ultrasound: "超声检查", functional: "功能检查",
     pathology: "病理", outpatient: "门诊", inpatient: "住院", prescription: "处方",
     billing: "票据", vaccination: "疫苗", other: "其他"
   };

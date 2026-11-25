@@ -1,3 +1,6 @@
+import { collectOriginalNarrativeSections, originalNarrativeFields, originalNarrativeFieldsFromSections, type NarrativeOcrPage } from './report-original-narrative';
+import {parseCardiacUltrasoundPage} from './cardiac-ultrasound-parser';
+import { parseDxaPage } from './bone-density-parser';
 import { createHash } from "node:crypto";
 import { isCurrentResultColumn, mappedOcrMeasurement, mappedOcrUnit, mappedOcrResultCells, splitOcrTableCells } from "./ocr-table-columns";
 import { canonicalMeasurementUnit, unitFromResultCell } from "./measurement-units.service";
@@ -34,7 +37,7 @@ import {
   type AiObservation,
   aiExtractionPromptVersion,
 } from "./ai-extraction.service";
-import { indicatorNameCandidates } from "./indicator-normalization.service";
+import { indicatorNameCandidates,normalizeObservation } from "./indicator-normalization.service";
 import {
   mergeContentClassifications,
   reportContentClassifierVersion,
@@ -1603,7 +1606,12 @@ function validateResultEvidence(
     billingItems,
     reportSections,
   };
+  const narrativeSections=(result.fields.narrativeSections || []).filter(reference=>
+    unit.pageNumbers.includes(reference.pageNumber) &&
+    compactEvidence(unit.text).includes(compactEvidence(reference.startQuote)) &&
+    compactEvidence(unit.text).includes(compactEvidence(reference.endQuote)));
   const narrativeFields = {
+    narrativeSections,
     clinicalDiagnosis: result.fields.clinicalDiagnosis,
     purpose: result.fields.purpose,
     chiefComplaint: result.fields.chiefComplaint,
@@ -1620,6 +1628,7 @@ function validateResultEvidence(
           : unit.route === "document"
             ? {
                 ...result.fields,
+                narrativeSections,
                 observations,
                 morphologyFindings,
                 ...clinicalFacts,
@@ -3060,6 +3069,9 @@ function withDeterministicFallback(
   plan: AiExtractionPlan,
   result: AiExtractionResult,
 ) {
+  const cardiac = getDatabase().prepare(`SELECT p.page_number AS pageNumber,o.lines_json AS linesJson FROM report_pages p JOIN ocr_results o ON o.page_id=p.id JOIN processing_jobs j ON j.id=o.job_id AND j.status='completed' WHERE p.report_id=? AND o.id=(SELECT o2.id FROM ocr_results o2 JOIN processing_jobs j2 ON j2.id=o2.job_id AND j2.status='completed' WHERE o2.page_id=p.id ORDER BY o2.created_at DESC,o2.id DESC LIMIT 1)`).all(plan.reportId) as {pageNumber:number;linesJson:string}[];
+  const cardiacFacts=cardiac.flatMap(page=>{try{return parseCardiacUltrasoundPage(JSON.parse(page.linesJson),page.pageNumber);}catch{return [];}});
+  const cardiacPages=new Set(cardiacFacts.flatMap(item=>item.evidence.map(e=>e.pageNumber)));
   const tableAdditions = deterministicTableObservations(plan).filter(
     (local) =>
       !result.fields.observations.some(
@@ -3104,14 +3116,18 @@ function withDeterministicFallback(
     );
   });
   const additions = [...basicAdditions, ...vascular.additions];
-  if (
-    !additions.length &&
-    observations.length === result.fields.observations.length
-  )
-    return result;
+  if (!additions.length && !cardiacFacts.length && observations.length === result.fields.observations.length)return result;
+  // Run after generic fallbacks so a source-checked cardiac fact also supersedes their partial names.
+  const combined=[...observations,...additions];
+  const retained=cardiacFacts.length?combined.filter(item=>{
+    if(item.examination?.examinedAt || item.examination?.sampledAt || item.examination?.issuedAt || item.examination?.timeText || /历史|既往|上次/.test(item.sectionName || '') || !item.evidence.some(e=>cardiacPages.has(e.pageNumber)))return true;
+    const annular=item.itemName.normalize('NFKC').replace(/\s/g,'').match(/^二尖瓣环室间隔(?:侧)?(?:组织速度)?([SEA])['′’]?(?:组织速度)?$/i);
+    const key=annular?`cardiac_mitral_annulus_septal_${annular[1].toLowerCase()}_velocity`:normalizeObservation({...item,id:'cardiac-supplement',reportId:plan.reportId,reportType:result.fields.reportType || 'other',hospitalName:null,performingDepartment:null,reportingDepartment:null}).canonicalKey;
+    return !cardiacFacts.some(fact=>fact.itemCode && fact.itemCode===key && fact.numericValue===item.numericValue && fact.unit===item.unit && (!item.method || item.method===fact.method) && (!item.examinationModality || item.examinationModality===fact.examinationModality) && fact.evidence.some(source=>item.evidence.some(e=>e.pageNumber===source.pageNumber)));
+  }):combined;
   const normalized = normalizeAiExtraction({
     ...result.fields,
-    observations: [...observations, ...additions],
+    observations: [...retained,...cardiacFacts],
     evidence: result.evidence,
     confidence: result.confidence,
   });
@@ -3135,7 +3151,8 @@ function withLocalDocumentClassification(
   const anchoredCheckup =
     local.primaryType === "checkup" &&
     local.reasons.includes("整份文档包含体检封面或总检章节");
-  if (result.fields.reportType && !anchoredCheckup) return result;
+  const anchoredUltrasound=local.primaryType==='ultrasound' && local.reasons.includes('超声检查方式') && result.fields.reportType==='imaging';
+  if (result.fields.reportType && !anchoredCheckup && !anchoredUltrasound) return result;
   const normalized = normalizeAiExtraction({
     ...result.fields,
     reportType: local.primaryType,
@@ -3443,6 +3460,7 @@ export function mergeAiExtractionResults(
     keyof AiExtractionFields
   >) {
     if (
+      key === "narrativeSections" ||
       key === "observations" ||
       key === "morphologyFindings" ||
       key === "bodyParts" ||
@@ -3463,6 +3481,7 @@ export function mergeAiExtractionResults(
         ).join("\n") || null
       : pickField(results, key);
   }
+  mergedSource.narrativeSections = results.flatMap(result=>result.fields.narrativeSections || []);
   mergedSource.bodyParts = uniqueBy(
     results.flatMap((result) => result.fields.bodyParts),
     (item) =>
@@ -3905,6 +3924,26 @@ async function executeUnit(
   return result;
 }
 
+function withOriginalReportNarratives(pages: NarrativeOcrPage[], result: AiExtractionResult): AiExtractionResult {
+  const references=[...(result.fields.narrativeSections || [])];
+  // Compatible replay: old model text may classify a span only when its boundary
+  // quotes occur uniquely in OCR. The generated text itself is never published.
+  for(const field of originalNarrativeFields) {
+    if(references.some(ref=>ref.field===field)) continue;
+    const lines=(result.fields[field] || '').split('\n').map(line=>line.trim()).filter(Boolean);
+    if(!lines.length) continue;
+    const startQuote=lines[0].slice(0,300),endQuote=lines[lines.length-1].slice(0,300);
+    const matches=pages.filter(page=>page.lines.some(line=>line.text.includes(startQuote)) && page.lines.some(line=>line.text.includes(endQuote)));
+    if(matches.length===1) references.push({field,pageNumber:matches[0].pageNumber,startQuote,endQuote});
+  }
+  const sections=collectOriginalNarrativeSections(pages,references);
+  const fields={...result.fields,...originalNarrativeFieldsFromSections(sections)};
+  const evidence={...result.evidence};
+  for(const field of originalNarrativeFields) evidence[field]=sections.filter(section=>section.field===field)
+    .flatMap(section=>section.lines.map(line=>({pageNumber:section.pageNumber,quote:line.text})));
+  return {...result,originalNarratives:true,fields,evidence,rawResponseJson:JSON.stringify({ ...fields,evidence,confidence:result.confidence })};
+}
+
 export async function executeAiExtractionPlan(
   jobId: string,
   reportId: string,
@@ -3912,6 +3951,24 @@ export async function executeAiExtractionPlan(
   options: ExecuteOptions = {},
 ) {
   const plan = buildAiExtractionPlan(reportId);
+  // Only a wholly recognized DXA report can use the deterministic path; mixed or
+  // uncertain documents retain the existing extraction flow without losing pages.
+  const sourcePages = getDatabase().prepare(`SELECT p.page_number AS pageNumber,
+    (SELECT o.lines_json FROM ocr_results o JOIN processing_jobs j ON j.id=o.job_id AND j.status='completed'
+     WHERE o.page_id=p.id ORDER BY o.created_at DESC,o.id DESC LIMIT 1) AS linesJson
+    FROM report_pages p WHERE p.report_id=? ORDER BY p.page_number`).all(reportId) as {pageNumber:number;linesJson:string|null}[];
+  const originalPages: NarrativeOcrPage[] = sourcePages.map(page=>{
+    let lines: NarrativeOcrPage['lines']=[];
+    try {const raw:unknown=JSON.parse(page.linesJson || '[]');if(Array.isArray(raw))lines=raw.filter(line=>line && typeof line.text==='string');}catch{/* Missing OCR is handled by planning. */}
+    return {pageNumber:page.pageNumber,lines};
+  });
+  const dxaPages = sourcePages.map(page=>{try{return parseDxaPage(JSON.parse(page.linesJson || '[]'),page.pageNumber);}catch{return null;}});
+  if(dxaPages.length && dxaPages.every(page=>page !== null)) {
+    if(options.shouldContinue && !options.shouldContinue()) throw Object.assign(new Error('报告任务已取消'),{code:'AI_TASK_CANCELLED'});
+    const normalized = normalizeAiExtraction({title:'骨密度检查报告',reportType:'functional',observations:dxaPages.flat()});
+    const result:AiExtractionResult={...normalized,provider:'local',model:'dxa-table',promptVersion:'dxa-table-1',rawResponseJson:JSON.stringify(normalized.fields),promptTokens:0,completionTokens:0,elapsedMs:0};
+    return {plan,result:withOriginalReportNarratives(originalPages,result),inputCharacters:0,unmatchedCandidates:0,tableSerialGapPages:0,layoutWarnings:[],warningUnits:0};
+  }
   const rows = syncPlanUnits(jobId, reportId, plan);
   const results = await mapConcurrent(
     plan.units,
@@ -4078,6 +4135,7 @@ export async function executeAiExtractionPlan(
       );
     }
   }
+  merged = withOriginalReportNarratives(originalPages,merged);
   const unmatchedCandidates = updateCandidateQuality(jobId, plan, merged);
   merged.recovery = { completed: true, technicalFailure, visionStatus, unreviewedPages, supplementUnits: supplements.length,
     visionRequested: Boolean(visionCandidates.length || pageReviews.length),

@@ -11,10 +11,11 @@ const showAll = ref(false);
 const expanded = ref(new Set<string>(['my_groups']));
 const keyword = computed(() => search.value.trim().toLocaleLowerCase());
 const matches = (node: TrendGroupNode) => !keyword.value || node.searchText.includes(keyword.value);
-const roots = computed(() => props.groups.filter(node => (showAll.value || node.indicatorCount > 0 || node.key === 'my_groups') && (matches(node) || node.children.some(matches))));
+const availableCount=(node:TrendGroupNode)=>node.matchCount ?? node.indicatorCount;
+const roots = computed(() => props.groups.filter(node => (showAll.value || availableCount(node) > 0 || node.key === 'my_groups') && (matches(node) || node.children.some(matches))));
 const options = computed(() => [{ value: '', label: '全部指标' }, ...flattenTrendGroups(props.groups).map(option)]);
 function option(node: TrendGroupNode) {
-  return { value: node.key, label: node.name, disabled: !node.indicatorCount };
+  return { value: node.key, label: node.name, disabled: !availableCount(node) };
 }
 function expand(key: string) {
   const next = new Set(expanded.value);
@@ -33,12 +34,12 @@ function expand(key: string) {
         <p v-if="!roots.length" class="form-select-empty">没有匹配的项目</p>
         <div v-for="node in roots" :key="node.key" :class="{ 'trend-group-personal': node.key === 'my_groups' }">
           <button v-if="node.children.length" type="button" class="form-select-option trend-group-domain" :aria-expanded="expanded.has(node.key) || !!keyword" @click="expand(node.key)">
-            <component :is="expanded.has(node.key) || keyword ? ChevronDown : ChevronRight" :size="16" /><span>{{ node.name }}</span><small>{{ node.indicatorCount }} / {{ node.configuredIndicatorCount }}</small>
+            <component :is="expanded.has(node.key) || keyword ? ChevronDown : ChevronRight" :size="16" /><span>{{ node.name }}</span><small>{{ availableCount(node) }} / {{ node.configuredIndicatorCount }}</small>
           </button>
-          <button v-else type="button" class="form-select-option" :class="{ selected: modelValue === node.key }" role="option" :aria-selected="modelValue === node.key" :disabled="!node.indicatorCount" @click="pick(option(node))"><span>{{ node.name }}</span><small>{{ node.indicatorCount }} / {{ node.configuredIndicatorCount }}</small><Check v-if="modelValue === node.key" :size="16" /></button>
+          <button v-else type="button" class="form-select-option" :class="{ selected: modelValue === node.key }" role="option" :aria-selected="modelValue === node.key" :disabled="!availableCount(node)" @click="pick(option(node))"><span>{{ node.name }}</span><small>{{ availableCount(node) }} / {{ node.configuredIndicatorCount }}</small><Check v-if="modelValue === node.key" :size="16" /></button>
           <div v-if="node.children.length && (expanded.has(node.key) || keyword)" class="trend-group-children">
-            <button type="button" class="form-select-option" :class="{ selected: modelValue === node.key }" role="option" :aria-selected="modelValue === node.key" :disabled="!node.indicatorCount" @click="pick(option(node))"><span>全部</span><Check v-if="modelValue === node.key" :size="16" /></button>
-            <button v-for="child in node.children.filter(c => (node.key === 'my_groups' || showAll || c.indicatorCount > 0) && (matches(c) || node.name.toLocaleLowerCase().includes(keyword)))" :key="child.key" type="button" class="form-select-option" :class="{ selected: modelValue === child.key }" role="option" :aria-selected="modelValue === child.key" :disabled="!child.indicatorCount" @click="pick(option(child))"><span>{{ child.name }}</span><small>{{ child.indicatorCount }} / {{ child.configuredIndicatorCount }}</small><Check v-if="modelValue === child.key" :size="16" /></button>
+            <button type="button" class="form-select-option" :class="{ selected: modelValue === node.key }" role="option" :aria-selected="modelValue === node.key" :disabled="!availableCount(node)" @click="pick(option(node))"><span>全部</span><Check v-if="modelValue === node.key" :size="16" /></button>
+            <button v-for="child in node.children.filter(c => (node.key === 'my_groups' || showAll || availableCount(c) > 0) && (matches(c) || node.name.toLocaleLowerCase().includes(keyword)))" :key="child.key" type="button" class="form-select-option" :class="{ selected: modelValue === child.key }" role="option" :aria-selected="modelValue === child.key" :disabled="!availableCount(child)" @click="pick(option(child))"><span>{{ child.name }}</span><small>{{ availableCount(child) }} / {{ child.configuredIndicatorCount }}</small><Check v-if="modelValue === child.key" :size="16" /></button>
           </div>
         </div>
         <div class="trend-group-actions">

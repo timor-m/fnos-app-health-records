@@ -1,6 +1,7 @@
 export const reportContentTypes = [
   "checkup",
   "laboratory",
+  "ultrasound",
   "imaging",
   "functional",
   "pathology",
@@ -12,7 +13,7 @@ export const reportContentTypes = [
   "other"
 ] as const;
 
-export const reportContentClassifierVersion = "local-content-router-v3-dispensing";
+export const reportContentClassifierVersion = "local-content-router-v4-ultrasound";
 
 const medicationHeading = /处方笺|处方信息|(?:普通|电子|门诊|住院)处方|用药清单|药物清单|用药记录|出院用药|出院带药|用药医嘱|长期医嘱|临时医嘱|当前用药/;
 const medicationUsage = /用法(?:用量)?|每次剂量|给药途径|(?:口服|静滴|静注|外用|皮下注射|肌内注射|局部封闭).{0,30}(?:每日|每次|即刻|\b(?:qd|bid|tid|qid|prn|stat)\b)/i;
@@ -84,11 +85,19 @@ const rules: ClassificationRule[] = [
     ]
   },
   {
+    type: "ultrasound",
+    signals: [
+      { pattern: /超声|彩超/, weight: 9, reason: "超声检查方式" },
+      { pattern: /超声所见|超声描述|超声提示|超声诊断/, weight: 6, reason: "超声报告章节" },
+      { pattern: /回声|血流信号/, weight: 4, reason: "超声描述" }
+    ]
+  },
+  {
     type: "imaging",
     signals: [
-      { pattern: /超声|彩超|CT|MRI|磁共振|DR\b|X线|放射|影像检查/, weight: 9, reason: "影像检查方式" },
-      { pattern: /影像所见|超声所见|检查所见|影像学诊断/, weight: 6, reason: "影像报告章节" },
-      { pattern: /回声|密度影|血流信号|强化扫描|扫描序列/, weight: 4, reason: "影像描述" }
+      { pattern: /CT|MRI|磁共振|DR\b|X线|放射|影像检查/, weight: 9, reason: "影像检查方式" },
+      { pattern: /影像所见|检查所见|影像学诊断/, weight: 6, reason: "影像报告章节" },
+      { pattern: /密度影|强化扫描|扫描序列/, weight: 4, reason: "影像描述" }
     ]
   },
   {

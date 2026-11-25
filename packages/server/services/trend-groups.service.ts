@@ -1,3 +1,4 @@
+import {measurementBaseKey} from '../../shared/measurement-trend-identity';
 import type { DatabaseSync } from 'node:sqlite';
 import config from '../../../dictionary/groups/builtin.json' with { type: 'json' };
 import { getDatabase, runInTransaction } from '../database/client';
@@ -74,7 +75,10 @@ export function buildTrendGroupTree(available: AvailableIndicator[], userId: str
     FROM indicator_group_members m JOIN indicator_catalog c ON c.id = m.indicator_id
     WHERE (c.trend_enabled = 1 OR m.source = 'user') ORDER BY m.sort_order, c.item_order, c.display_name, c.canonical_key`).all() as {groupId: string; key: string}[];
   const byGroup = new Map<string, string[]>();
-  for (const m of memberships) byGroup.set(m.groupId, [...(byGroup.get(m.groupId) || []), m.key]);
+  for (const m of memberships) {
+    const keys = available.filter(item => measurementBaseKey(item.indicatorKey) === m.key).map(item=>item.indicatorKey);
+    byGroup.set(m.groupId, [...(byGroup.get(m.groupId) || []), ...(keys.length ? keys : [m.key])]);
+  }
   const availableByKey = new Map(available.map(item => [item.indicatorKey, item]));
   const build = (g: GroupRow, parents = new Set<string>()): TrendGroupNode => {
     const path = new Set([...parents, g.id]);

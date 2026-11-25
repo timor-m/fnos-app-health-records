@@ -6,8 +6,9 @@ import { join } from 'node:path';
 import { getDatabase,closeDatabaseForTests } from '../database/client';
 import type { RequestUser } from '../domain/request-user';
 import { saveVaccinationWithOriginal } from '../services/vaccination-original.service';
-import { createVaccination,getVaccination,updateVaccination } from '../services/vaccination.service';
+import { createVaccination,getVaccination,updateVaccination,deleteVaccination } from '../services/vaccination.service';
 import { getReportDetail } from '../services/records.service';
+import {getOverview} from '../services/health-overview.service';
 import { listHealthRecordFeed } from '../services/health-record-feed.service';
 const manager:RequestUser={id:'manager',displayName:'合成账号',authenticated:true,provider:'development',isGatewayAdmin:true};
 const viewer:RequestUser={...manager,id:'viewer',isGatewayAdmin:false};
@@ -76,4 +77,21 @@ test('detail attachment upload needs only identity and revision, preserving dose
  assert.equal(saved.id,manual.id);assert.equal(saved.vaccineName,manual.vaccineName);assert.equal(saved.administeredAt,manual.administeredAt);assert.equal(saved.doseNumber,manual.doseNumber);
  assert.equal(saved.nextDueAt,manual.nextDueAt);assert.equal(saved.reminderId,manual.reminderId);assert.equal(saved.reminderStatus,'dismissed');assert.ok(saved.sourceReportId);
  assert.equal(saveVaccinationWithOriginal(manager,body,files).sourceReportId,saved.sourceReportId);assert.equal(count('reports'),1);
+}));
+
+
+test('historical vaccination originals expose confirmed registration in overview without changing processing status',()=>fixture((_dir,files)=>{
+ const saved=saveVaccinationWithOriginal(manager,input,files);const db=getDatabase();
+ for(const state of ['ready','needs_review','queued','processing','failed']){
+  db.prepare('UPDATE reports SET status=? WHERE id=?').run(state,saved.sourceReportId!);
+  const overview=getOverview(manager,'member');const original=overview.recentRecords.find(item=>item.resourceId===saved.sourceReportId)!;
+  assert.equal(original.kind,'report');assert.equal(original.status,state,'source processing state is retained');
+  assert.equal(original.confirmedCount,1,'the source preview knows its registered vaccination');
+  if(state!=='ready')assert.equal(overview.pending.documents.find(item=>item.resourceId===saved.sourceReportId)?.confirmedCount,1);
+  const feed=listHealthRecordFeed(manager,{memberId:'member'}).items;assert.equal(feed.length,1);assert.equal(feed[0].kind,'vaccination');assert.equal(feed[0].resourceId,saved.id);
+ }
+ deleteVaccination(manager,saved.id,{revision:saved.revision});
+ const preview=getOverview(manager,'member').recentRecords.find(item=>item.resourceId===saved.sourceReportId)!;
+ assert.equal(preview.confirmedCount,0,'a deleted registration must not keep an already-vaccinated badge');
+ assert.equal(listHealthRecordFeed(manager,{memberId:'member'}).items.length,0,'trashing a vaccination does not recreate a pending source card');
 }));

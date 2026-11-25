@@ -10,7 +10,8 @@ import type {ExaminationRecord} from '../../../server/domain/examination';
 const props=defineProps<{reportId:string;observation:Observation;canManage:boolean;busy?:boolean}>();
 const emit=defineEmits<{updated:[]}>();
 const editing=ref(false),saving=ref(false),loading=ref(false),error=ref('');
-const time=ref<string | null>(null),includeTime=ref(false);
+const time=ref<string | null>(null),includeTime=ref(false),applyToPage=ref(false);
+const pageTimeGroup=ref<{pageNumber:number;observationIds:string[]}|null>(null);
 const disabled=computed(()=>Boolean(props.busy || saving.value));
 const validTime=computed(()=>Boolean(time.value && (!includeTime.value || /T\d{2}:\d{2}/.test(time.value))));
 const timeKinds=[{value:'sampledAt',label:'采样时间'},{value:'examinedAt',label:'检查时间'},{value:'issuedAt',label:'报告签发时间'}];
@@ -19,12 +20,12 @@ function toggleTime(event: Event){
  if(!includeTime.value && time.value)time.value=time.value.slice(0,10);
 }
 const kind=ref('examinedAt');
-const leave=useUnsavedRecord(()=>editing.value?JSON.stringify([time.value,includeTime.value,kind.value]):'',saving);
+const leave=useUnsavedRecord(()=>editing.value?JSON.stringify([time.value,includeTime.value,kind.value,applyToPage.value]):'',saving);
 const submissionKey=createSubmissionKey();
 async function cancel(){if(await leave.confirmLeave()){editing.value=false;error.value='';leave.reset();}}
 let generation=0;let alive=true;onBeforeUnmount(()=>{alive=false;generation++;});
-let state:{version:number;reportVersion:number;examinations:ExaminationRecord[]}|undefined;
-watch(()=>[props.reportId,props.observation.id,props.canManage],()=>{generation++;editing.value=false;state=undefined;loading.value=false;saving.value=false;error.value='';leave.reset();});
+let state:{version:number;reportVersion:number;examinations:ExaminationRecord[];pageTimeGroups?:Array<{pageNumber:number;observationIds:string[]}>}|undefined;
+watch(()=>[props.reportId,props.observation.id,props.canManage],()=>{generation++;editing.value=false;state=undefined;pageTimeGroup.value=null;applyToPage.value=false;loading.value=false;saving.value=false;error.value='';leave.reset();});
 async function edit(){
  if(!props.canManage || props.busy || loading.value)return;
  const token=generation;loading.value=true;error.value='';
@@ -34,6 +35,8 @@ async function edit(){
   time.value=exam?.occurredAt?.replace(' ','T') || null;
   includeTime.value=Boolean(time.value?.includes('T'));
   kind.value=exam?.timeKind==='sampled'?'sampledAt':exam?.timeKind==='issued'?'issuedAt':'examinedAt';
+  pageTimeGroup.value=state?.pageTimeGroups?.find(group=>group.observationIds.includes(props.observation.id) && group.observationIds.length>1) || null;
+  applyToPage.value=Boolean(pageTimeGroup.value);
   editing.value=true;leave.reset();submissionKey.reset();
  }catch(e){if(alive&&token===generation)error.value=e instanceof Error?e.message:'无法读取时间';}
  finally{if(token===generation)loading.value=false;}
@@ -47,6 +50,7 @@ async function save(){
   const body={
    version:state.version,reportVersion:state.reportVersion,
    observationIds:[props.observation.id],
+   ...(applyToPage.value && pageTimeGroup.value ? {applyToPage:true} : {}),
    examination:{...exam,sampledAt:null,examinedAt:null,issuedAt:null,[kind.value]:time.value!.replace('T',' ')}
   };
   await request(`reports/${encodeURIComponent(props.reportId)}/examinations`,{method:'PUT',body:JSON.stringify({...body,requestKey:`time-${submissionKey.forRequest(props.reportId,body)}`})});
@@ -74,9 +78,10 @@ async function save(){
     <DateTimePicker v-model="time" :show-time="includeTime" :disabled="disabled" aria-label="原件上的日期或时间" />
    </div>
    <label class="observation-time-precision"><input type="checkbox" :checked="includeTime" :disabled="disabled" @change="toggleTime" />原件注明具体时刻</label>
-   <p class="observation-time-hint">只调整当前指标。原件只有日期时，无需填写时刻。</p>
+   <label v-if="pageTimeGroup" class="observation-time-precision"><input v-model="applyToPage" type="checkbox" :disabled="disabled" />同时确认第 {{pageTimeGroup.pageNumber}} 页其余 {{pageTimeGroup.observationIds.length-1}} 项待核对时间</label>
+   <p class="observation-time-hint">{{applyToPage && pageTimeGroup ? '仅应用于本页时间待核对的指标，不改其他页、已有明确时间或人工确认的项目。请确认这些项目使用同一日期和时间来源。' : '只调整当前指标。'}}原件只有日期时，无需填写时刻。</p>
    <div class="observation-time-actions">
-    <button class="soft-action-button" type="submit" :disabled="disabled || !validTime">{{saving?'保存中…':'保存时间'}}</button>
+    <button class="soft-action-button" type="submit" :disabled="disabled || !validTime">{{saving?'保存中…':applyToPage && pageTimeGroup ? `保存本页 ${pageTimeGroup.observationIds.length} 项时间` : '保存时间'}}</button>
     <button class="soft-action-button" type="button" :disabled="saving" @click="cancel">取消</button>
    </div>
   </form>

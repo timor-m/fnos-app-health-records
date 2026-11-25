@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import ReportOriginalText from './ReportOriginalText.vue';
+import {cardiacSites,cardiacModalities,isCardiacMeasurement,cardiacContextLabel,cardiacMethod} from "../../../shared/cardiac-measurements";
+import BoneDensityEditor from "./BoneDensityEditor.vue";
+import {boneSites} from "../../../shared/bone-density";
 import MedicationFormulaPanel from './MedicationFormulaPanel.vue';
 import SourceRegionPicker from "./SourceRegionPicker.vue";
 import type {SourceRegion} from "../../../shared/source-region";
@@ -212,6 +216,8 @@ watch(() => [props.reportId, detail.value?.sourceVersion, observationViewMode.va
 const loadedObservationOriginalPageId = ref("");
 const savingObservation = ref(false);
 const observationEditorError = ref("");
+const boneDensityOpen = ref(false);
+async function boneDensitySaved(){boneDensityOpen.value=false;await loadDetail(props.reportId,true);emit("updated");}
 const observationCatalogQuery = ref("");
 const observationCatalogOptions = ref<IndicatorCatalogOption[]>([]);
 const observationCatalogLoading = ref(false);
@@ -219,8 +225,11 @@ const observationForm = ref({
   sectionName: "", itemCode: "", itemName: "", resultText: "", numericValue: null as number | null,
   unit: "", referenceLow: null as number | null, referenceHigh: null as number | null,
   referenceText: "", abnormalFlag: "" as "" | "high" | "low" | "abnormal" | "normal",
+  examinationModality:"",method:"", measurementSite:"", measurementLaterality:"unspecified",
   canonicalKey: "", sourcePageId: "", sourceRegion: null as SourceRegion | null
 });
+const showCardiacFields=computed(()=>isCardiacMeasurement(observationForm.value.canonicalKey) || cardiacModalities.includes(observationForm.value.examinationModality as typeof cardiacModalities[number]) || cardiacSites.some(site=>site[0]===observationForm.value.measurementSite));
+const showBoneSiteFields=computed(()=>!['hip_axis_length_left','hip_axis_length_right'].includes(observationForm.value.canonicalKey) && (observationForm.value.method==='DXA' || observationForm.value.canonicalKey.startsWith('dxa_')));
 const observationSourceTouched = ref(false);
 watch(() => observationForm.value.sourcePageId, pageId => {
   if (!observationEditorOpen.value) return;
@@ -503,7 +512,7 @@ const aiEmptyHint = computed(() => {
 });
 
 const typeLabels: Record<string, string> = {
-  checkup: "体检", laboratory: "检验", imaging: "影像", functional: "功能检查", pathology: "病理",
+  checkup: "体检", laboratory: "检验", imaging: "影像", ultrasound: "超声检查", functional: "功能检查", pathology: "病理",
   outpatient: "门诊", inpatient: "住院", prescription: "处方", billing: "票据", vaccination: "疫苗", other: "其他"
 };
 
@@ -890,6 +899,7 @@ async function openObservationEditor(item?: ReportDetail["observations"][number]
     aliases: []
   }] : [];
   observationForm.value = {
+    examinationModality:item?.examinationModality || "",method:(isCardiacMeasurement(item?.canonicalKey || "") || item?.examinationModality?cardiacMethod(item?.method):item?.method) || "",measurementSite:item?.measurementSite || "",measurementLaterality:item?.measurementLaterality || "unspecified",
     sectionName: item?.sectionName || "",
     itemCode: item?.itemCode || "",
     itemName: item?.itemName || "",
@@ -942,7 +952,7 @@ async function saveObservation() {
       : `reports/${encodeURIComponent(props.reportId)}/observations`;
     if (!await updateDetail(path, {
       method: editingObservationId.value ? "PUT" : "POST",
-      body: JSON.stringify({ ...observationForm.value, sourcePageId: editingObservationId.value && !observationSourceTouched.value ? undefined : observationForm.value.sourcePageId, sourceRegion: editingObservationId.value && !observationSourceTouched.value ? undefined : observationForm.value.sourceRegion, expectedSourceVersion: observationEditVersion.value })
+      body: JSON.stringify({ ...observationForm.value, ...(!showBoneSiteFields.value && !showCardiacFields.value ? {measurementSite:undefined,measurementLaterality:undefined} : {}), method:observationForm.value.canonicalKey.startsWith('dxa_')?observationForm.value.method || 'DXA':showCardiacFields.value?observationForm.value.method || null:observationForm.value.method || undefined, sourcePageId: editingObservationId.value && !observationSourceTouched.value ? undefined : observationForm.value.sourcePageId, sourceRegion: editingObservationId.value && !observationSourceTouched.value ? undefined : observationForm.value.sourceRegion, expectedSourceVersion: observationEditVersion.value })
     })) return;
     observationEditorOpen.value = false;observationLeave.reset();
     emit("updated");
@@ -991,7 +1001,8 @@ function observationFlagClass(item: ReportDetail["observations"][number]) {
 }
 
 function observationSectionLabel(item: ReportDetail["observations"][number]) {
-  return (item.sectionName || item.normalizedName || "").trim();
+  const section=(item.sectionName || item.normalizedName || '').trim();
+  return isCardiacMeasurement(item.canonicalKey || '') || item.examinationModality ? [section,cardiacSites.find(site=>site[0]===item.measurementSite)?.[1],cardiacContextLabel(item.examinationModality,item.method)].filter(Boolean).join(' · ') : section;
 }
 
 function observationValueLine(item: ReportDetail["observations"][number]) {
@@ -2278,6 +2289,7 @@ onActivated(() => {
 </script>
 
 <template>
+  <BoneDensityEditor v-if="boneDensityOpen && detail" :report-id="reportId" :source-version="detail.sourceVersion" :pages="detail.pages" @close="boneDensityOpen=false" @saved="boneDensitySaved"/>
   <ReportCombineDialog v-if="combineOpen && detail" :report="detail" @close="combineOpen=false" @combined="onReportsCombined" />
   <template v-if="!reviewObservationId">
   <header v-if="variant === 'floating'" class="sheet-header report-detail-floating-header">
@@ -2464,15 +2476,15 @@ onActivated(() => {
       </div>
       <div v-if="hasAiContent" class="ai-content">
         <section v-if="detail?.summary || detail?.impression || detail?.recommendation" class="ai-section-grid">
-          <article v-if="detail?.summary"><span>摘要<em v-if="isManualField('summary')" class="manual-field-chip">人工校对</em></span><p>{{ detail.summary }}</p></article>
-          <article v-if="detail?.impression"><span>结论<em v-if="isManualField('impression')" class="manual-field-chip">人工校对</em></span><p>{{ detail.impression }}</p></article>
-          <article v-if="detail?.recommendation"><span>建议/复查<em v-if="isManualField('recommendation')" class="manual-field-chip">人工校对</em></span><p>{{ detail.recommendation }}</p></article>
+          <ReportOriginalText v-if="detail?.summary" label="原报告概述" :text="detail.summary" :manual="isManualField('summary')" />
+          <ReportOriginalText v-if="detail?.impression" label="结论" :text="detail.impression" :manual="isManualField('impression')" />
+          <ReportOriginalText v-if="detail?.recommendation" label="医生建议" :text="detail.recommendation" :manual="isManualField('recommendation')" />
         </section>
         <section v-if="detail?.clinicalDiagnosis || detail?.purpose || detail?.chiefComplaint || detail?.findings" class="ai-long-text">
           <article v-if="detail?.clinicalDiagnosis"><span>临床诊断<em v-if="isManualField('clinicalDiagnosis')" class="manual-field-chip">人工校对</em></span><p>{{ detail.clinicalDiagnosis }}</p></article>
           <article v-if="detail?.purpose"><span>检查目的<em v-if="isManualField('purpose')" class="manual-field-chip">人工校对</em></span><p>{{ detail.purpose }}</p></article>
           <article v-if="detail?.chiefComplaint"><span>主诉<em v-if="isManualField('chiefComplaint')" class="manual-field-chip">人工校对</em></span><p>{{ detail.chiefComplaint }}</p></article>
-          <article v-if="detail?.findings"><span>检查所见<em v-if="isManualField('findings')" class="manual-field-chip">人工校对</em></span><p>{{ detail.findings }}</p></article>
+          <ReportOriginalText v-if="detail?.findings" label="检查所见" :text="detail.findings" :manual="isManualField('findings')" />
         </section>
         <section v-if="clinicalFactAddTypes.length" class="clinical-fact-add-strip">
           <span>补充分类信息</span>
@@ -2925,7 +2937,7 @@ onActivated(() => {
   </template>
   <Teleport to="body">
     <div v-if="(allObservationsOpen && detail) || reviewObservationId" class="modal-backdrop observation-all-backdrop" @click.self="closeAllObservations()">
-      <section class="modal-panel observation-all-modal" :class="{ 'observation-direct-review': reviewObservationId }" role="dialog" aria-modal="true" :aria-label="reviewObservationId ? '核对指标' : '全部结构化指标'" :inert="isAddingObservation || undefined">
+      <section class="modal-panel observation-all-modal" :class="{ 'observation-direct-review': reviewObservationId }" role="dialog" aria-modal="true" :aria-label="reviewObservationId ? '核对指标' : '全部结构化指标'" :inert="isAddingObservation || boneDensityOpen || undefined">
         <div v-if="reviewObservationId && (!detail || detailError)" class="observation-review-loading">
           <p>{{ detailError || '正在加载目标指标…' }}</p>
           <button class="soft-action-button" type="button" @click="emit('close')">关闭</button>
@@ -2940,6 +2952,7 @@ onActivated(() => {
             </div>
           </div>
           <div class="observation-all-actions">
+            <button v-if="canManageReport" class="soft-action-button bone-density-add-button" type="button" :disabled="hasRunningJobs" @click="boneDensityOpen=true"><Plus :size="15" />骨密度</button>
             <button v-if="canManageReport" ref="observationAddTrigger" class="soft-action-button observation-add-button" type="button" @click="openObservationEditor()"><Plus :size="15" />补充指标</button>
             <button class="plain-icon-button" type="button" title="关闭" @click="closeAllObservations"><X :size="18" /></button>
           </div>
@@ -3043,6 +3056,8 @@ onActivated(() => {
                 <div class="form-grid observation-core-fields">
                   <label v-if="isAddingObservation" class="observation-field-wide"><span>来源报告页（可选）</span><FormSelect v-model="observationForm.sourcePageId" :options="[{value:'',label:'来源页待确认'},...detail.pages.map(page=>({value:page.id,label:`第 ${page.pageNumber} 页`}))]" aria-label="补充指标来源页" /></label>
 
+                  <template v-if="showCardiacFields"><label><span>检查部位</span><FormSelect v-model="observationForm.measurementSite" :options="[{value:'',label:'未注明'},...cardiacSites.map(([value,label])=>({value,label}))]" aria-label="心脏测量部位" /></label><label><span>检查方式</span><FormSelect v-model="observationForm.examinationModality" :options="[{value:'',label:'未注明'},...cardiacModalities.map(value=>({value,label:value}))]" aria-label="检查方式" /></label><label class="observation-field-wide"><span>测量方法（按原文填写）</span><input v-model="observationForm.method" aria-label="测量方法" placeholder="未注明时留空" /></label></template>
+                  <template v-if="showBoneSiteFields"><label><span>检查部位</span><FormSelect v-model="observationForm.measurementSite" :options="boneSites.map(([value,label])=>({value,label}))" aria-label="检查部位" /></label><label><span>左右侧</span><FormSelect v-model="observationForm.measurementLaterality" :options="[{value:'unspecified',label:'未注明'},{value:'left',label:'左侧'},{value:'right',label:'右侧'}]" aria-label="左右侧" /></label></template>
                   <label class="observation-field-wide"><span>指标名称</span><input v-model="observationForm.itemName" required /></label>
                   <label class="observation-field-wide"><span>结果原文</span><input v-model="observationForm.resultText" /></label>
                   <label><span>数值结果</span><input v-model.number="observationForm.numericValue" type="number" step="any" /></label>
@@ -3230,8 +3245,8 @@ onActivated(() => {
               <label><span>检查目的<em v-if="isManualField('purpose')" class="manual-field-chip">人工校对</em></span><textarea v-model="editForm.purpose" rows="2"></textarea></label>
               <label><span>检查所见<em v-if="isManualField('findings')" class="manual-field-chip">人工校对</em></span><textarea v-model="editForm.findings" rows="4"></textarea></label>
               <label><span>结论<em v-if="isManualField('impression')" class="manual-field-chip">人工校对</em></span><textarea v-model="editForm.impression" rows="3"></textarea></label>
-              <label><span>摘要<em v-if="isManualField('summary')" class="manual-field-chip">人工校对</em></span><textarea v-model="editForm.summary" rows="3"></textarea></label>
-              <label><span>建议/复查<em v-if="isManualField('recommendation')" class="manual-field-chip">人工校对</em></span><textarea v-model="editForm.recommendation" rows="3"></textarea></label>
+              <label><span>原报告概述<em v-if="isManualField('summary')" class="manual-field-chip">人工校对</em></span><textarea v-model="editForm.summary" rows="3"></textarea></label>
+              <label><span>医生建议<em v-if="isManualField('recommendation')" class="manual-field-chip">人工校对</em></span><textarea v-model="editForm.recommendation" rows="3"></textarea></label>
               <p v-if="detailError" class="inline-panel-error">{{ detailError }}</p>
               <div class="form-actions record-form-actions">
                 <button type="button" @click="closeEditReport">取消</button>

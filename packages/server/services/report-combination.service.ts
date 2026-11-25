@@ -114,7 +114,7 @@ function readable(value: unknown): string {
         return Object.entries(value).map(([key, item]) => { const labels: Record<string, string> = { reportNo: '报告号', outpatientNo: '门诊号', inpatientNo: '住院号', physicalExamNo: '体检号', examNo: '检查号', specimenNo: '标本号', barcodeNo: '条码号', ordering: '开单医生', examining: '检查医生', reporting: '报告医生', reviewing: '审核医生', chief: '主任医生', raw: '原文', name: '名称', parent: '上级部位', laterality: '侧别' }; const text = key==='laterality' ? ({left:'左侧',right:'右侧',bilateral:'双侧',midline:'正中',unspecified:'未注明'} as Record<string,string>)[String(item)]||readable(item) : readable(item); return text ? `${labels[key] || key}：${text}` : ''; }).filter(Boolean).join('；');
     return value === null || value === undefined ? '' : String(value);
 }
-const reportTypeNames:Record<string,string>={checkup:'体检',laboratory:'检验',imaging:'影像',functional:'功能检查',pathology:'病理',outpatient:'门诊',inpatient:'住院',prescription:'用药单',billing:'费用',vaccination:'接种',other:'其他'};
+const reportTypeNames:Record<string,string>={checkup:'体检',laboratory:'检验',imaging:'影像',ultrasound:'超声检查',functional:'功能检查',pathology:'病理',outpatient:'门诊',inpatient:'住院',prescription:'用药单',billing:'费用',vaccination:'接种',other:'其他'};
 function sourceNote(source: Row, targetId: string, actorId: string) {
     const lines = ['合并来源报告信息。当前报告基本字段按保留目标展示，以下保留并入报告原有信息：'];
     for (const [key, label] of Object.entries(metadataLabels)) {

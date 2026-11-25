@@ -528,6 +528,10 @@ export type ObservationEvidence = {
 };
 
 export type Observation = {
+  method?: string | null;
+  examinationModality?: string | null;
+  measurementSite?: string | null;
+  measurementLaterality?: string | null;
   examinationId?: string | null;
   examinationTime?: string | null;
   examinationTimeKind?: string | null;
@@ -829,6 +833,7 @@ export type TrendSeries = {
   attentionPriority: "normal" | "notice" | "attention";
   comparable: boolean;
   comparabilityStatus: "comparable" | "range_drift" | "condition_mismatch" | "insufficient_evidence";
+  measurementContextPending?: boolean;
   comparabilityReason: string | null;
   referenceProfileKey: string | null;
   referenceProfileCount: number;

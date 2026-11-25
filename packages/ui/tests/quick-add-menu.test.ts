@@ -1,6 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { Camera, Plus } from '@lucide/vue';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { nextTick } from 'vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import QuickAddMenu from '../src/components/QuickAddMenu.vue';
@@ -120,6 +120,23 @@ it('record-based association uses the health process label and explains its resu
  await wrapper.get('.quick-add-trigger').trigger('click');const action=wrapper.get('.quick-add-associate');
  expect(action.get('strong').text()).toBe('关联历程');expect(action.get('small').text()).toBe('选择相关记录，形成或加入健康历程');
  await action.trigger('click');expect(wrapper.emitted('associate')).toHaveLength(1);expect(wrapper.find('.quick-add-panel').exists()).toBe(false);wrapper.unmount();
+});
+
+it.each(['mobile','desktop','inline'] as const)('点击 %s 菜单外侧不强制聚焦新增入口，Escape 仍返回入口', async placement => {
+ const wrapper=mount(QuickAddMenu,{attachTo:document.body,props:{placement,canManage:true,routeKey:'/events'},global:{plugins:[menuRouter()],stubs:{RouterLink:routerLinkStub}}});
+ try {
+  const trigger=wrapper.get<HTMLButtonElement>('.quick-add-trigger');
+  await trigger.trigger('click');await nextTick();
+  const focus=vi.spyOn(trigger.element,'focus');
+  document.body.querySelector<HTMLElement>('.quick-add-backdrop')!.click();await nextTick();
+  expect(wrapper.find('.quick-add-panel').exists()).toBe(false);
+  expect(focus).not.toHaveBeenCalled();
+  expect(document.activeElement).not.toBe(trigger.element);
+  await trigger.trigger('click');await nextTick();
+  window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}));await nextTick();
+  expect(document.activeElement).toBe(trigger.element);
+  focus.mockRestore();
+ } finally {wrapper.unmount();}
 });
 
 it('方向键与首尾键移动菜单焦点，Escape 返回触发按钮', async () => {

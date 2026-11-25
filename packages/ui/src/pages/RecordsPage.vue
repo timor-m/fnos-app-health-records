@@ -65,7 +65,7 @@ const recordCountSubtitle = computed(() => {
 const selected = computed(() => reports.value.find((report) => report.id === selectedId.value) || null);
 
 const typeLabels: Record<string, string> = {
-  checkup: "体检", laboratory: "检验", imaging: "影像", functional: "功能检查", pathology: "病理",
+  checkup: "体检", laboratory: "检验", imaging: "影像", ultrasound: "超声检查", functional: "功能检查", pathology: "病理",
   outpatient: "门诊", inpatient: "住院", prescription: "处方", billing: "票据", vaccination: "疫苗", other: "其他"
 };
 const statusMeta: Record<string, { label: string; chip: string }> = {

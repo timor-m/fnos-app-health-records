@@ -121,3 +121,10 @@ it('unifies legacy vaccination filters under one vaccination category',async()=>
  expect(mocks.request.mock.calls.at(-1)![0]).toContain('category=vaccination');
  expect(mocks.request.mock.calls.at(-1)![0]).not.toContain('subtype=');
 });
+it('offers ultrasound beneath report and sends its subtype without enabling imaging',async()=>{
+ const wrapper=render();await flushPromises();
+ await wrapper.findAll('[aria-label="记录分类"] button').find(button=>button.text()==='报告')!.trigger('click');await flushPromises();
+ const subtype=wrapper.get('[aria-label="细分类型"]').findAll('button').find(button=>button.text()==='超声检查');expect(subtype).toBeTruthy();
+ await subtype!.trigger('click');await flushPromises();const path=mocks.request.mock.calls.at(-1)![0];expect(path).toContain('category=report');expect(path).toContain('subtype=ultrasound');
+ expect(wrapper.findAll('[aria-label="记录分类"] button').find(button=>button.text().includes('影像'))?.attributes('disabled')).toBeDefined();
+});

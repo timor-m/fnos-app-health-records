@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "core",
-  "revision": 20,
+  "revision": 24,
   "indicators": [
     {
       "canonicalKey": "cbc_wbc",
@@ -4287,6 +4287,517 @@
         "血黏度"
       ],
       "explanation": "红细胞沉降率（ESR）是有时间量纲的独立检验项目；不得与无量纲的血沉方程 K 值合并。"
+    },
+    {
+      "canonicalKey": "dxa_bmd",
+      "displayName": "DXA 骨密度",
+      "categoryKey": "functional_measurement",
+      "order": 80,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "g/cm²",
+      "unitDimension": "other",
+      "aliases": [
+        "DXA 骨密度",
+        "DXA骨密度",
+        "DXA BMD"
+      ],
+      "allowedUnits": [
+        "g/cm²",
+        "g/cm2"
+      ],
+      "sectionHints": [
+        "DXA",
+        "双能X线",
+        "骨密度"
+      ],
+      "explanation": "DXA 分部位测量值；仅在部位和左右侧明确时进入对应趋势，不与定量超声混合。不同设备未确认可比时不自动解释变化。"
+    },
+    {
+      "canonicalKey": "dxa_t_score",
+      "displayName": "DXA T 值",
+      "categoryKey": "functional_measurement",
+      "order": 81,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "DXA T 值",
+        "DXAT值"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "DXA",
+        "双能X线",
+        "骨密度"
+      ],
+      "explanation": "DXA 分部位测量值；仅在部位和左右侧明确时进入对应趋势，不与定量超声混合。不同设备未确认可比时不自动解释变化。"
+    },
+    {
+      "canonicalKey": "dxa_z_score",
+      "displayName": "DXA Z 值",
+      "categoryKey": "functional_measurement",
+      "order": 82,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": null,
+      "unitDimension": "index",
+      "aliases": [
+        "DXA Z 值",
+        "DXAZ值"
+      ],
+      "allowedUnits": [],
+      "sectionHints": [
+        "DXA",
+        "双能X线",
+        "骨密度"
+      ],
+      "explanation": "DXA 分部位测量值；仅在部位和左右侧明确时进入对应趋势，不与定量超声混合。不同设备未确认可比时不自动解释变化。"
+    },
+    {
+      "canonicalKey": "hip_axis_length_left",
+      "displayName": "左侧髋关节中轴长度",
+      "categoryKey": "functional_measurement",
+      "order": 83,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mm",
+      "unitDimension": "length",
+      "aliases": [
+        "左侧髋关节中轴长度",
+        "左髋关节中轴长度",
+        "左侧髋轴长度",
+        "Left Hip Axis Length"
+      ],
+      "allowedUnits": [
+        "mm"
+      ],
+      "sectionHints": [
+        "DXA",
+        "双能X线",
+        "髋关节中轴长度",
+        "髋轴长度"
+      ],
+      "explanation": "左侧髋关节中轴长度（HAL），以毫米记录实测长度；与 BMD、T/Z 值及参考均值、比较差值分别处理，不从未注明左右侧的名称推断归属。"
+    },
+    {
+      "canonicalKey": "hip_axis_length_right",
+      "displayName": "右侧髋关节中轴长度",
+      "categoryKey": "functional_measurement",
+      "order": 84,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mm",
+      "unitDimension": "length",
+      "aliases": [
+        "右侧髋关节中轴长度",
+        "右髋关节中轴长度",
+        "右侧髋轴长度",
+        "Right Hip Axis Length"
+      ],
+      "allowedUnits": [
+        "mm"
+      ],
+      "sectionHints": [
+        "DXA",
+        "双能X线",
+        "髋关节中轴长度",
+        "髋轴长度"
+      ],
+      "explanation": "右侧髋关节中轴长度（HAL），以毫米记录实测长度；与 BMD、T/Z 值及参考均值、比较差值分别处理，不从未注明左右侧的名称推断归属。"
+    },
+    {
+      "canonicalKey": "cardiac_aortic_diameter_unspecified",
+      "displayName": "主动脉内径（部位未注明）",
+      "categoryKey": "functional_measurement",
+      "order": 85,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mm",
+      "unitDimension": "length",
+      "aliases": [
+        "主动脉内径（部位未注明）"
+      ],
+      "allowedUnits": [
+        "mm",
+        "cm"
+      ],
+      "sectionHints": [
+        "心脏超声",
+        "超声心动图"
+      ],
+      "explanation": "独立心脏测量项目，保留原文部位、时相、检查方式及测量方法；未明确的口径不能推断，不跨不同口径比较，参考范围以报告为准。"
+    },
+    {
+      "canonicalKey": "cardiac_la_diameter_unspecified",
+      "displayName": "左房内径（径线未注明）",
+      "categoryKey": "functional_measurement",
+      "order": 86,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mm",
+      "unitDimension": "length",
+      "aliases": [
+        "左房内径（径线未注明）"
+      ],
+      "allowedUnits": [
+        "mm",
+        "cm"
+      ],
+      "sectionHints": [
+        "心脏超声",
+        "超声心动图"
+      ],
+      "explanation": "独立心脏测量项目，保留原文部位、时相、检查方式及测量方法；未明确的口径不能推断，不跨不同口径比较，参考范围以报告为准。"
+    },
+    {
+      "canonicalKey": "cardiac_ra_diameter_unspecified",
+      "displayName": "右房内径（径线未注明）",
+      "categoryKey": "functional_measurement",
+      "order": 87,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mm",
+      "unitDimension": "length",
+      "aliases": [
+        "右房内径（径线未注明）"
+      ],
+      "allowedUnits": [
+        "mm",
+        "cm"
+      ],
+      "sectionHints": [
+        "心脏超声",
+        "超声心动图"
+      ],
+      "explanation": "独立心脏测量项目，保留原文部位、时相、检查方式及测量方法；未明确的口径不能推断，不跨不同口径比较，参考范围以报告为准。"
+    },
+    {
+      "canonicalKey": "cardiac_rv_diameter_unspecified",
+      "displayName": "右室内径（径线未注明）",
+      "categoryKey": "functional_measurement",
+      "order": 88,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mm",
+      "unitDimension": "length",
+      "aliases": [
+        "右室内径（径线未注明）"
+      ],
+      "allowedUnits": [
+        "mm",
+        "cm"
+      ],
+      "sectionHints": [
+        "心脏超声",
+        "超声心动图"
+      ],
+      "explanation": "独立心脏测量项目，保留原文部位、时相、检查方式及测量方法；未明确的口径不能推断，不跨不同口径比较，参考范围以报告为准。"
+    },
+    {
+      "canonicalKey": "cardiac_lvids",
+      "displayName": "左室收缩末期内径",
+      "categoryKey": "functional_measurement",
+      "order": 89,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mm",
+      "unitDimension": "length",
+      "aliases": [
+        "左室收缩末期内径",
+        "左心室收缩末期内径",
+        "LVIDs",
+        "LVESD"
+      ],
+      "allowedUnits": [
+        "mm",
+        "cm"
+      ],
+      "sectionHints": [
+        "心脏超声",
+        "超声心动图"
+      ],
+      "explanation": "独立心脏测量项目，保留原文部位、时相、检查方式及测量方法；未明确的口径不能推断，不跨不同口径比较，参考范围以报告为准。"
+    },
+    {
+      "canonicalKey": "cardiac_ivst",
+      "displayName": "室间隔厚度",
+      "categoryKey": "functional_measurement",
+      "order": 90,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mm",
+      "unitDimension": "length",
+      "aliases": [
+        "室间隔厚度",
+        "IVST"
+      ],
+      "allowedUnits": [
+        "mm",
+        "cm"
+      ],
+      "sectionHints": [
+        "心脏超声",
+        "超声心动图"
+      ],
+      "explanation": "独立心脏测量项目，保留原文部位、时相、检查方式及测量方法；未明确的口径不能推断，不跨不同口径比较，参考范围以报告为准。"
+    },
+    {
+      "canonicalKey": "cardiac_lvpw",
+      "displayName": "左室后壁厚度",
+      "categoryKey": "functional_measurement",
+      "order": 91,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mm",
+      "unitDimension": "length",
+      "aliases": [
+        "左室后壁厚度",
+        "LVPW"
+      ],
+      "allowedUnits": [
+        "mm",
+        "cm"
+      ],
+      "sectionHints": [
+        "心脏超声",
+        "超声心动图"
+      ],
+      "explanation": "独立心脏测量项目，保留原文部位、时相、检查方式及测量方法；未明确的口径不能推断，不跨不同口径比较，参考范围以报告为准。"
+    },
+    {
+      "canonicalKey": "cardiac_mpa_diameter",
+      "displayName": "主肺动脉内径",
+      "categoryKey": "functional_measurement",
+      "order": 92,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "mm",
+      "unitDimension": "length",
+      "aliases": [
+        "主肺动脉内径"
+      ],
+      "allowedUnits": [
+        "mm",
+        "cm"
+      ],
+      "sectionHints": [
+        "心脏超声",
+        "超声心动图"
+      ],
+      "explanation": "独立心脏测量项目，保留原文部位、时相、检查方式及测量方法；未明确的口径不能推断，不跨不同口径比较，参考范围以报告为准。"
+    },
+    {
+      "canonicalKey": "cardiac_mitral_e_velocity",
+      "displayName": "二尖瓣 E 波血流速度",
+      "categoryKey": "functional_measurement",
+      "order": 93,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "m/s",
+      "unitDimension": "other",
+      "aliases": [
+        "二尖瓣 E 波血流速度"
+      ],
+      "allowedUnits": [
+        "m/s"
+      ],
+      "sectionHints": [
+        "心脏超声",
+        "超声心动图"
+      ],
+      "explanation": "独立心脏测量项目，保留原文部位、时相、检查方式及测量方法；未明确的口径不能推断，不跨不同口径比较，参考范围以报告为准。"
+    },
+    {
+      "canonicalKey": "cardiac_mitral_a_velocity",
+      "displayName": "二尖瓣 A 波血流速度",
+      "categoryKey": "functional_measurement",
+      "order": 94,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "m/s",
+      "unitDimension": "other",
+      "aliases": [
+        "二尖瓣 A 波血流速度"
+      ],
+      "allowedUnits": [
+        "m/s"
+      ],
+      "sectionHints": [
+        "心脏超声",
+        "超声心动图"
+      ],
+      "explanation": "独立心脏测量项目，保留原文部位、时相、检查方式及测量方法；未明确的口径不能推断，不跨不同口径比较，参考范围以报告为准。"
+    },
+    {
+      "canonicalKey": "cardiac_tricuspid_e_velocity",
+      "displayName": "三尖瓣 E 波血流速度",
+      "categoryKey": "functional_measurement",
+      "order": 95,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "m/s",
+      "unitDimension": "other",
+      "aliases": [
+        "三尖瓣 E 波血流速度"
+      ],
+      "allowedUnits": [
+        "m/s"
+      ],
+      "sectionHints": [
+        "心脏超声",
+        "超声心动图"
+      ],
+      "explanation": "独立心脏测量项目，保留原文部位、时相、检查方式及测量方法；未明确的口径不能推断，不跨不同口径比较，参考范围以报告为准。"
+    },
+    {
+      "canonicalKey": "cardiac_tricuspid_a_velocity",
+      "displayName": "三尖瓣 A 波血流速度",
+      "categoryKey": "functional_measurement",
+      "order": 96,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "m/s",
+      "unitDimension": "other",
+      "aliases": [
+        "三尖瓣 A 波血流速度"
+      ],
+      "allowedUnits": [
+        "m/s"
+      ],
+      "sectionHints": [
+        "心脏超声",
+        "超声心动图"
+      ],
+      "explanation": "独立心脏测量项目，保留原文部位、时相、检查方式及测量方法；未明确的口径不能推断，不跨不同口径比较，参考范围以报告为准。"
+    },
+    {
+      "canonicalKey": "cardiac_aortic_valve_velocity",
+      "displayName": "主动脉瓣血流速度",
+      "categoryKey": "functional_measurement",
+      "order": 97,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "m/s",
+      "unitDimension": "other",
+      "aliases": [
+        "主动脉瓣血流速度"
+      ],
+      "allowedUnits": [
+        "m/s"
+      ],
+      "sectionHints": [
+        "心脏超声",
+        "超声心动图"
+      ],
+      "explanation": "独立心脏测量项目，保留原文部位、时相、检查方式及测量方法；未明确的口径不能推断，不跨不同口径比较，参考范围以报告为准。"
+    },
+    {
+      "canonicalKey": "cardiac_pulmonary_valve_velocity",
+      "displayName": "肺动脉瓣血流速度",
+      "categoryKey": "functional_measurement",
+      "order": 98,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "m/s",
+      "unitDimension": "other",
+      "aliases": [
+        "肺动脉瓣血流速度"
+      ],
+      "allowedUnits": [
+        "m/s"
+      ],
+      "sectionHints": [
+        "心脏超声",
+        "超声心动图"
+      ],
+      "explanation": "独立心脏测量项目，保留原文部位、时相、检查方式及测量方法；未明确的口径不能推断，不跨不同口径比较，参考范围以报告为准。"
+    },
+    {
+      "canonicalKey": "cardiac_mitral_annulus_septal_s_velocity",
+      "displayName": "二尖瓣环室间隔侧 S′ 组织速度",
+      "categoryKey": "functional_measurement",
+      "order": 99,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "cm/s",
+      "unitDimension": "other",
+      "aliases": [
+        "二尖瓣环室间隔侧 S′ 组织速度"
+      ],
+      "allowedUnits": [
+        "cm/s"
+      ],
+      "sectionHints": [
+        "心脏超声",
+        "超声心动图"
+      ],
+      "explanation": "独立心脏测量项目，保留原文部位、时相、检查方式及测量方法；未明确的口径不能推断，不跨不同口径比较，参考范围以报告为准。"
+    },
+    {
+      "canonicalKey": "cardiac_mitral_annulus_septal_e_velocity",
+      "displayName": "二尖瓣环室间隔侧 E′ 组织速度",
+      "categoryKey": "functional_measurement",
+      "order": 100,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "cm/s",
+      "unitDimension": "other",
+      "aliases": [
+        "二尖瓣环室间隔侧 E′ 组织速度"
+      ],
+      "allowedUnits": [
+        "cm/s"
+      ],
+      "sectionHints": [
+        "心脏超声",
+        "超声心动图"
+      ],
+      "explanation": "独立心脏测量项目，保留原文部位、时相、检查方式及测量方法；未明确的口径不能推断，不跨不同口径比较，参考范围以报告为准。"
+    },
+    {
+      "canonicalKey": "cardiac_mitral_annulus_septal_a_velocity",
+      "displayName": "二尖瓣环室间隔侧 A′ 组织速度",
+      "categoryKey": "functional_measurement",
+      "order": 101,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "other",
+      "defaultUnit": "cm/s",
+      "unitDimension": "other",
+      "aliases": [
+        "二尖瓣环室间隔侧 A′ 组织速度"
+      ],
+      "allowedUnits": [
+        "cm/s"
+      ],
+      "sectionHints": [
+        "心脏超声",
+        "超声心动图"
+      ],
+      "explanation": "独立心脏测量项目，保留原文部位、时相、检查方式及测量方法；未明确的口径不能推断，不跨不同口径比较，参考范围以报告为准。"
     }
   ],
   "extensions": [],

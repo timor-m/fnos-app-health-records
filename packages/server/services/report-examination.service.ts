@@ -34,7 +34,21 @@ export function getReportExaminations(user: RequestUser, reportId: string) {
     const {evidenceJson,...rest} = row;
     return {...rest,evidence:JSON.parse(String(evidenceJson))};
   });
-  return {version:state?.version || 0,reportVersion:report.sourceVersion,examinations,observations,...listExaminationRelationships(user,reportId)};
+  const pages = db.prepare('SELECT id,page_number AS pageNumber FROM report_pages WHERE report_id=?').all(reportId) as Array<{id:string;pageNumber:number}>;
+  const pageTimeGroups: Array<{pageNumber:number;observationIds:string[]}> = [];
+  for (const observation of observations) {
+    const exam = examinations.find(item=>item.id===observation.examinationId);
+    if (observation.assignmentSource==='manual' || exam?.confirmationStatus!=='pending' || exam.occurredAt) continue;
+    // Only unambiguous observation evidence defines a page; examination evidence may span pages.
+    if (!Array.isArray(observation.evidence) || !observation.evidence.length) continue;
+    const evidence = observation.evidence as Array<{pageNumber?:number;pageId?:string}>;
+    const page = pages.find(item=>item.pageNumber===evidence[0]?.pageNumber);
+    if (!page || evidence.some(item=>!item || item.pageNumber!==page.pageNumber || (item.pageId!==undefined && item.pageId!==page.id))) continue;
+    let group = pageTimeGroups.find(item=>item.pageNumber===page.pageNumber);
+    if (!group) { group={pageNumber:page.pageNumber,observationIds:[]};pageTimeGroups.push(group); }
+    group.observationIds.push(observation.observationId);
+  }
+  return {version:state?.version || 0,reportVersion:report.sourceVersion,examinations,observations,pageTimeGroups,...listExaminationRelationships(user,reportId)};
 }
 function invalid(message: string): never { throw createError({statusCode:400,statusMessage:message}); }
 
@@ -104,6 +118,8 @@ function saveReportExaminationRecord(user: RequestUser, reportId: string, body: 
   const input = validateExamination(body.examination);
   const time = resolveExaminationTime(input);
   if (time.risks.length) invalid('检查时间格式错误或检查发生时间晚于签发时间，请核对原文');
+  if (body.applyToPage !== undefined && typeof body.applyToPage !== 'boolean') invalid('时间应用范围无效');
+  if (body.applyToPage === true) return savePendingPageTimes(user,reportId,body,input);
   const db = getDatabase();
   runInTransaction(db,()=>{
     const report = reportAccess(user,reportId,true);
@@ -135,6 +151,32 @@ function saveReportExaminationRecord(user: RequestUser, reportId: string, body: 
     db.prepare("INSERT INTO audit_logs(id,actor_user_id,action,target_type,target_id,detail_json) VALUES(?,?,'report.examination.confirm','report',?,'{}')").run(createId('audit'),user.id,reportId);
   });
   return getReportExaminations(user,reportId);
+}
+
+/** Explicit page-time confirmation keeps each examination's identity and is all-or-nothing. */
+function savePendingPageTimes(user:RequestUser,reportId:string,body:Record<string,unknown>,input:ExaminationInput):ReturnType<typeof getReportExaminations> {
+  if (body.id!==undefined || !Array.isArray(body.observationIds) || body.observationIds.length!==1 || typeof body.observationIds[0]!=='string') invalid('请选择一个待核对时间的指标');
+  const selectedTimes=[input.sampledAt,input.examinedAt,input.issuedAt].filter(Boolean);
+  if (selectedTimes.length!==1) invalid('请选择原件上的一个日期或时间');
+  return runInTransaction(getDatabase(),()=>{
+    let state=getReportExaminations(user,reportId);
+    if (body.version!==state.version || body.reportVersion!==state.reportVersion) throw createError({statusCode:409,statusMessage:'报告或检查归属已修改，请刷新后核对'});
+    const page=state.pageTimeGroups.find(group=>group.observationIds.includes(String((body.observationIds as string[])[0])));
+    if (!page) invalid('当前指标没有可确认的单页来源，请只调整当前指标');
+    const groups=new Map<string,string[]>();
+    for (const observationId of page.observationIds) {
+      const examId=state.observations.find(item=>item.observationId===observationId)!.examinationId!;
+      const ids=groups.get(examId) || [];ids.push(observationId);groups.set(examId,ids);
+    }
+    for (const [examId,observationIds] of groups) {
+      const exam=state.examinations.find(item=>item.id===examId)!;
+      state=saveReportExaminationRecord(user,reportId,{
+        version:state.version,reportVersion:state.reportVersion,requestKey:createId('page_time'),observationIds,
+        examination:{...exam,sampledAt:input.sampledAt,examinedAt:input.examinedAt,issuedAt:input.issuedAt}
+      });
+    }
+    return state;
+  });
 }
 
 /** Capture before extraction replaces observation IDs; runs inside the publication transaction. */
@@ -169,12 +211,13 @@ export function restoreExaminationAssignments(reportId: string, snapshot: Return
       resultText:String(row.result_text || ''),numericValue:typeof row.numeric_value==='number'?row.numeric_value:null,
       unit:row.unit as string|null,referenceLow:row.reference_low as number|null,referenceHigh:row.reference_high as number|null,
       referenceText:row.reference_text as string|null,abnormalFlag:row.abnormal_flag as AiObservation['abnormalFlag'],
-      method:row.method as string|null,evidence,
+      method:row.method as string|null,measurementSite:row.measurement_site as string|null,measurementLaterality:row.measurement_laterality as string|null,evidence,
     },pages,reportDate);
     inferredCache.set(id,value);
     return value;
   };
   const sameMeasurement=(left:Record<string,unknown>,right:Record<string,unknown>)=>{
+    if((left.measurement_site || right.measurement_site) && (compact(left.measurement_site)!==compact(right.measurement_site) || compact(left.measurement_laterality)!==compact(right.measurement_laterality)))return false;
     const leftNames=[left.item_name,left.normalized_name].map(compact).filter(Boolean);
     const rightNames=[right.item_name,right.normalized_name].map(compact).filter(Boolean);
     if(!leftNames.some(name=>rightNames.includes(name)))return false;

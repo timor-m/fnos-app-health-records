@@ -1,3 +1,4 @@
+import {trendSnapshotAlgorithmVersion} from '../services/trend-snapshot-types';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtempSync, rmSync, readdirSync, mkdirSync, copyFileSync } from 'node:fs';
@@ -375,7 +376,7 @@ test('dictionary changes and algorithm revisions rebuild snapshots without a rea
   await runTrendSnapshotTasksOnce();
   assert.ok(Number(state(reopened).active_revision)>catalogVersion);
   assert.equal(Number(state(reopened).active_revision),Number(state(reopened).desired_revision));
-  assert.equal(state(reopened).algorithm_version,'trend-analysis-1');
+  assert.equal(state(reopened).algorithm_version,trendSnapshotAlgorithmVersion);
 }));
 
 test('personal group edits filter published data immediately without rebuilding snapshots or touching sources',()=>fixture(async db=>{

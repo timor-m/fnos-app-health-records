@@ -4,7 +4,7 @@
 
 ## 当前版本关系
 
-当前已发布版本为 **0.3.2**。当前开发迭代为 **0.3.3（Unreleased）**。此前未发布包使用 0.3.1，临时安装包曾使用 0.3.0。0.3.2 已合入原 feat-event 的健康记录、症状、用药、接种与健康历程，并保留三角脚注名称兼容及定性指标身份保护。0.3.3 尚未冻结、打 tag 或正式发布。O0007、O0008 的配套应用修复已纳入 0.3.2；远程字典使用独立 r28 草案，尚未发布，剩余待确认项不视为已全部修复。
+当前已发布版本为 **0.3.3**。当前开发版本为 **0.3.4（Unreleased）**，已按用户要求更新项目版本号，包含 B0018 优化；尚未正式发布。此前未发布包使用 0.3.1，临时安装包曾使用 0.3.0。0.3.2 已合入原 feat-event 的健康记录、症状、用药、接种与健康历程，并保留三角脚注名称兼容及定性指标身份保护。0.3.3 已于 2026-11-22 正式发布，对应 GitHub Release 与 tag 为 `v0.3.3`。O0007、O0008 的配套应用修复已纳入 0.3.2；远程字典使用独立 r28 草案，尚未发布，剩余待确认项不视为已全部修复。
 
 **0.2.19 已封版**，包含报告补合并与撤销、识别失败后的手工补录与归档、校对保存可达性及抗体亚型匹配修复。发布产物以 `v0.2.19` tag、Docker 镜像及 GitHub Release 的实际结果为准；后续开发记入无编号 `Unreleased`，不自动递增下一版本。
 
@@ -25,17 +25,17 @@
 | 项 | 当前值 | 来源 |
 | --- | --- | --- |
 | 应用 ID | `fnos-app-health-records` | `template.config.json` |
-| 应用版本 | `0.3.3`（Unreleased）；已发布 `0.3.2` | `package.json` |
-| fnOS manifest 版本 | `0.3.3` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
-| fnOS sub_version | `0.3.3.0` | `scripts/prepare-package.mjs` 生成 |
-| Docker 镜像版本 | 已发布 `0.3.2`；未发布开发为 `0.3.3` | GitHub Tag 工作流从 `package.json` 生成 |
+| 应用版本 | `0.3.4`（Unreleased）；已发布 `0.3.3` | `package.json` |
+| fnOS manifest 版本 | `0.3.4` | `scripts/prepare-package.mjs` 从 `package.json` 写入 |
+| fnOS sub_version | `0.3.4.0` | `scripts/prepare-package.mjs` 生成 |
+| Docker 镜像版本 | 已发布 `0.3.2`；未发布开发为 `0.3.4` | GitHub Tag 工作流从 `package.json` 生成 |
 | Docker 镜像仓库 | `docker.io/timorm/fnos-app-health-records` | Docker Hub，可通过 `DOCKERHUB_IMAGE` 覆盖 |
 | 数据库 schema | `v19` | `packages/server/database/migrations.ts` 最后一个迁移版本 |
 | 数据库记录表 | `schema_migrations`、`app_upgrade_history` | 服务端首次启动时初始化或迁移 |
 
 发布前必须确认：当前应用版本支持的目标 schema 版本明确、可初始化新库、可从上一发布版本迁移。
 
-0.2.12、0.2.13 和 0.2.14 已发布。0.2.15 的变更记录已封板，目标数据库 schema 保持 v19，无新增结构或迁移；0.2.15 版本提交及 `v0.2.15` tag 已存在，实际发布状态以 GitHub Release 为准。健康事件与持续健康历程已随 0.3.2 发布。临时安装包曾使用 0.3.0，此前未发布包使用 0.3.1。当前未发布迭代为 0.3.3，schema 编号仍为 v19。其结构草案须在发版前对照上一正式发布基线核对兼容性，不因新增表自动升号；0.3.2 发布后的调整记入 `0.3.3 - Unreleased`。
+0.2.12、0.2.13 和 0.2.14 已发布。0.2.15 的变更记录已封板，目标数据库 schema 保持 v19，无新增结构或迁移；0.2.15 版本提交及 `v0.2.15` tag 已存在，实际发布状态以 GitHub Release 为准。健康事件与持续健康历程已随 0.3.2 发布。临时安装包曾使用 0.3.0，此前未发布包使用 0.3.1。当前已发布版本为 0.3.3，当前开发版本为 0.3.4，改动记入 `0.3.4 - Unreleased`，包含 B0018 优化。schema 编号仍为 v19；后续结构草案须在发版前对照上一正式发布基线核对兼容性，不因新增表自动升号。
 
 `0.2.16` 变更记录已封板，包含 AI 连接自定义 Headers、OpenCode Go 预设、报告详情加载优化及趋势后台快照与按需读取。目标 schema 保持 v19，趋势派生表通过启动前备份与幂等补齐建立，不新增编号迁移；实际发布状态以 `v0.2.16` tag、Docker 镜像及 GitHub Release 为准。
 
@@ -254,7 +254,7 @@ npm run release:notes
 自动化校验与发布：
 
 - GitHub CI 在 push 和 pull request 时执行 `npm run release:ci`；`feat-event` 分支的 push 改由独立 Docker Image 工作流完成校验、服务端/UI 测试、类型检查、性能检查和 Docker 启动检查，不打包 FPK。
-- `Docker Image (feat-event)` 仅在当前仓库的 `feat-event` 分支发布双架构镜像，唯一镜像标签取自 `package.json`（已发布 `0.3.2`，当前开发 `0.3.3`）；发布前后核对 `latest` digest，不增加分支标签，不创建 Git tag 或 GitHub Release。此流程不冻结版本、不递增应用或 schema 版本，部署方式见 [Docker 部署](DOCKER_DEPLOYMENT.md#从-feat-event-分支发布版本镜像)。
+- `Docker Image (feat-event)` 仅在当前仓库的 `feat-event` 分支发布双架构镜像，唯一镜像标签取自 `package.json`（已发布 `0.3.2`，当前开发 `0.3.4`）；发布前后核对 `latest` digest，不增加分支标签，不创建 Git tag 或 GitHub Release。此流程不冻结版本、不递增应用或 schema 版本，部署方式见 [Docker 部署](DOCKER_DEPLOYMENT.md#从-feat-event-分支发布版本镜像)。
 - GitHub Release 在 tag 或手动触发时执行严格发布校验、测试和打包；tag 版本必须与 `package.json` 版本一致。
 - Release notes 会自动读取 `CHANGELOG.md` 当前版本段落、`package.json`、`template.config.json` 和迁移注册表，输出本版本变更、发布摘要（含应用 ID 与目标 schema）、发布产物和 Docker 镜像信息；`releaseNotes.highlights` 仅保留给 `release:info` 检查和发布校验，不再写入 GitHub Release 正文。
 - 包结构校验会确认 manifest 版本、sub_version、应用介绍、changelog 和图标尺寸。

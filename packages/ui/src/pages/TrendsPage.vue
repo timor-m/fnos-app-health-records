@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import {trendCardKey} from "../../../shared/trend-card";
+import {parseMeasurementSeriesKey} from "../../../shared/measurement-trend-identity";
+import {cardiacContextLabel,cardiacSites,cardiacMethod} from "../../../shared/cardiac-measurements";
+import {boneMetrics,parseBoneSeriesKey} from "../../../shared/bone-density";
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch, type Directive } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -206,7 +210,7 @@ async function load(memberId: string, silent = false) {
 }
 
 function trendPinRequestKey(memberId: string, item: TrendSeries) {
-  return `${memberId}\u0000${item.indicatorKey}\u0000${item.unit || ""}`;
+  return `${memberId}\u0000${trendCardKey(item.indicatorKey,item.unit)}`;
 }
 
 function pinPending(item: TrendSeries) {
@@ -238,7 +242,7 @@ async function toggleTrendPin(item: TrendSeries) {
     });
     if (app.selectedMemberId.value !== memberId) return;
     await load(memberId, true);
-    toast.show(result.pinned ? `已置顶“${item.name}”` : `已取消置顶“${item.name}”`);
+    toast.show(result.pinned ? `已置顶“${parseBoneSeriesKey(item.indicatorKey)?.name || item.name}”` : `已取消置顶“${parseBoneSeriesKey(item.indicatorKey)?.name || item.name}”`);
   } catch (cause) {
     toast.show(cause instanceof Error ? cause.message : "指标置顶操作失败");
   } finally {
@@ -452,10 +456,70 @@ function cardDomId(item: TrendSeries) {
   return `trend-card-${(hash >>> 0).toString(36)}`;
 }
 
+const boneSelection=ref<Record<string,string>>({});
+const measurementSelection=ref<Record<string,string>>({});
+function measurementOptions(item:TrendSeries,section:TrendSection){
+ if(parseBoneSeriesKey(item.indicatorKey))return [];
+ const key=trendCardKey(item.indicatorKey,item.unit);
+ return section.items.filter(candidate=>trendCardKey(candidate.indicatorKey,candidate.unit)===key);
+}
+function measurementLabel(item:TrendSeries){
+ const context=parseMeasurementSeriesKey(item.indicatorKey)?.context;
+ return cardiacContextLabel(context?.examinationModality,item.points[0]?.comparisonMethod || context?.method);
+}
+type MeasurementSwitchDimension='examinationModality'|'method';
+function measurementValue(item:TrendSeries,dimension:MeasurementSwitchDimension){
+ return parseMeasurementSeriesKey(item.indicatorKey)?.context[dimension] || '';
+}
+function measurementChoices(item:TrendSeries,section:TrendSection,dimension:MeasurementSwitchDimension){
+ const peers=measurementOptions(item,section).filter(candidate=>dimension==='examinationModality'
+   || measurementValue(candidate,'examinationModality')===measurementValue(item,'examinationModality'));
+ const choices=new Map<string,{value:string;label:string}>();
+ for(const candidate of peers){
+  const value=measurementValue(candidate,dimension);
+  if(!choices.has(value))choices.set(value,{value,label:dimension==='examinationModality'
+    ? value || '方式未注明'
+    : cardiacMethod(candidate.points[0]?.comparisonMethod) || value || '方法未注明'});
+ }
+ return [...choices.values()];
+}
+function selectMeasurement(item:TrendSeries,section:TrendSection,dimension:MeasurementSwitchDimension,value:string){
+ const peers=measurementOptions(item,section).filter(candidate=>measurementValue(candidate,dimension)===value
+   && (dimension==='examinationModality' || measurementValue(candidate,'examinationModality')===measurementValue(item,'examinationModality')));
+ const selected=dimension==='examinationModality'
+   ? peers.find(candidate=>measurementValue(candidate,'method')===measurementValue(item,'method')) || peers[0]
+   : peers[0];
+ if(selected)measurementSelection.value[trendCardKey(item.indicatorKey,item.unit)]=selected.indicatorKey;
+}
+function cardTitle(item:TrendSeries){
+ const bone=parseBoneSeriesKey(item.indicatorKey);if(bone)return bone.name;
+ const parsed=parseMeasurementSeriesKey(item.indicatorKey);if(!parsed)return item.name;
+ const site=parsed.context.measurementSite;
+ const label=cardiacSites.find(([key])=>key===site)?.[1] || site;
+ return item.name.split(' · ')[0]+(label?' · '+label:'');
+}
+function boneOptions(item:TrendSeries,section:TrendSection){
+ const bone=parseBoneSeriesKey(item.indicatorKey);
+ return bone ? boneMetrics.map(metric=>({metric,item:section.items.find(candidate=>{const other=parseBoneSeriesKey(candidate.indicatorKey);return other?.group===bone.group && other.metric===metric.key;})})).filter(option=>option.item) : [];
+}
+function visibleCardItems(items:TrendSeries[]){
+ const seen=new Set<string>();
+ return items.flatMap(item=>{
+  const key=trendCardKey(item.indicatorKey,item.unit);
+  if(seen.has(key))return [];seen.add(key);
+  const peers=items.filter(candidate=>trendCardKey(candidate.indicatorKey,candidate.unit)===key);
+  const bone=parseBoneSeriesKey(item.indicatorKey);
+  const selected=bone
+    ? peers.find(candidate=>parseBoneSeriesKey(candidate.indicatorKey)?.metric===boneSelection.value[bone.group])
+      || peers.find(candidate=>parseBoneSeriesKey(candidate.indicatorKey)?.metric==='dxa_bmd') || peers[0]
+    : peers.find(candidate=>candidate.indicatorKey===measurementSelection.value[key]) || peers[0];
+  return [selected];
+ });
+}
 function sectionClusters(section: TrendSection) {
   return section.subgroups.length
-    ? section.subgroups.filter(group=>group.items.length)
-    : section.items.length ? [{ key: `${section.key}-all`, name: "", order: 0, items: section.items, count: section.count }] : [];
+    ? section.subgroups.filter(group=>group.items.length).map(group=>({...group,items:visibleCardItems(group.items)}))
+    : section.items.length ? [{ key: `${section.key}-all`, name: "", order: 0, items: visibleCardItems(section.items), count: section.count }] : [];
 }
 
 function groupExpanded(section: TrendSection) { return snapshots.opened.value.has(section.key); }
@@ -968,7 +1032,7 @@ onDeactivated(() => {
             <span class="item-icon"><Activity :size="19" /></span>
             <div>
               <div class="trend-title-row">
-                <strong>{{ item.name }}</strong>
+                <strong>{{ cardTitle(item) }}</strong>
                 <em class="trend-delta" :class="deltaClass(item)">{{ deltaText(item) }}</em>
               </div>
               <span>{{ item.pointCount }} 个数据点 · {{ item.unit || (scaleOf(item) ? scaleNotationTitle(item) : "无单位") }} · {{ qualityLabel(item.quality) }}</span>
@@ -983,6 +1047,20 @@ onDeactivated(() => {
                   @click="setScaleNotation(scaleOf(item)!, notation.key)"
                 >{{ notation.label }}</button>
               </span>
+              <span v-if="boneOptions(item,section).length > 1" class="scale-notation-switch" role="group" aria-label="骨密度测量值切换"><button v-for="option in boneOptions(item,section)" :key="option.metric.key" type="button" :title="option.metric.label" :aria-pressed="parseBoneSeriesKey(item.indicatorKey)?.metric===option.metric.key" :class="{active:parseBoneSeriesKey(item.indicatorKey)?.metric===option.metric.key}" @click="boneSelection[parseBoneSeriesKey(item.indicatorKey)!.group]=option.metric.key">{{option.metric.label}}</button></span>
+              <div v-if="measurementOptions(item,section).length > 1" class="trend-measurement-switches">
+                <div v-for="dimension in (['examinationModality','method'] as const).filter(dimension=>measurementChoices(item,section,dimension).length > 1)" :key="dimension" class="trend-measurement-row">
+                  <span>{{ dimension==='examinationModality' ? '方式' : '方法' }}</span>
+                  <div class="scale-notation-switch trend-measurement-switch" role="group" :aria-label="dimension==='examinationModality' ? '检查方式切换' : '测量方法切换'">
+                    <button v-for="option in measurementChoices(item,section,dimension)" :key="option.value" type="button"
+                      :class="{active:measurementValue(item,dimension)===option.value}" :aria-pressed="measurementValue(item,dimension)===option.value"
+                      @click="selectMeasurement(item,section,dimension,option.value)"
+                    >{{ option.label }}</button>
+                  </div>
+                </div>
+              </div>
+              <small v-if="parseMeasurementSeriesKey(item.indicatorKey) && !parseBoneSeriesKey(item.indicatorKey) && measurementOptions(item,section).length === 1" class="trend-match-alias">{{ measurementLabel(item) }}</small>
+              <small v-if="item.measurementContextPending" class="trend-match-alias"><span class="chip chip--amber">口径待核对</span> · 原始项目独立展示，不自动判断涨跌</small>
               <small v-if="item.kind === 'institution'" class="trend-match-alias">{{ item.points[0]?.hospitalName }} · {{ item.points[0]?.comparisonMethod || '方法未注明' }} · {{ item.points[0]?.comparisonSpecimen || '标本未注明' }}</small>
               <small v-if="matchingAlias(item)" class="trend-match-alias">匹配名称：{{ matchingAlias(item) }}</small>
             </div>

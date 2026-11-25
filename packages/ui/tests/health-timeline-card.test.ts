@@ -173,3 +173,24 @@ it.each([
  expect(badge.text()).toBe(label);expect(badge.classes()).toContain(tone);
  expect(wrapper.get('.health-timeline-type').text()).toBe(healthCategoryLabels[category]);wrapper.unmount();
 });
+
+
+it.each(['ready','needs_review'])('shows a confirmed historical vaccination original as vaccinated when its document is %s',status=>{
+ const wrapper=render({...feedEntry('vaccination','report'),subtype:'vaccination',status,confirmedCount:1});
+ expect(wrapper.get('.health-timeline-status').text()).toBe('已接种');expect(wrapper.get('.health-timeline-status').classes()).toContain('chip--green');
+ expect(wrapper.get('a').attributes('href')).toContain('/events/detail/report/');wrapper.unmount();
+});
+it.each([['queued','排队中'],['processing','处理中'],['failed','识别失败']])('keeps the original %s state visible despite an existing registration',(status,label)=>{
+ const wrapper=render({...feedEntry('vaccination','report'),status,confirmedCount:1});
+ expect(wrapper.get('.health-timeline-status').text()).toBe(label);wrapper.unmount();
+});
+it('an original without an active registration remains incomplete',()=>{
+ const wrapper=render({...feedEntry('vaccination','report'),status:'ready',confirmedCount:0});
+ expect(wrapper.get('.health-timeline-status').text()).toBe('待完善');wrapper.unmount();
+});
+
+
+it('shows an ultrasound document under reports with its ultrasound subtype',()=>{
+ const wrapper=render({...feedEntry('report','report'),subtype:'ultrasound',status:'ready',documents:[{id:'u',reportType:'ultrasound'}]});
+ expect(wrapper.get('.health-timeline-type').text()).toBe('报告');expect(wrapper.get('.health-timeline-meta').text()).toBe('超声检查');expect(wrapper.get('a').attributes('href')).toContain('/events/detail/report/');wrapper.unmount();
+});

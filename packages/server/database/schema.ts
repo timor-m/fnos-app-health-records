@@ -206,6 +206,9 @@ CREATE TABLE IF NOT EXISTS observations (
   ),
   abnormal_conflict INTEGER NOT NULL DEFAULT 0,
   method TEXT,
+  examination_modality TEXT,
+  measurement_site TEXT,
+  measurement_laterality TEXT,
   evidence_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

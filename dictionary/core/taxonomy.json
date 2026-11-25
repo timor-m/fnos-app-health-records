@@ -2,7 +2,7 @@
   "$schema": "../schemas/taxonomy.schema.json",
   "formatVersion": 1,
   "layer": "core",
-  "revision": 20,
+  "revision": 24,
   "groups": [
     {
       "key": "general",

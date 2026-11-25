@@ -86,7 +86,7 @@ test("keeps a composite checkup as the document type while classifying component
     }
   ].map((page) => ({ ...page, classification: classifyReportContent(page.text) }));
   assert.equal(pages[1].classification.primaryType, "laboratory");
-  assert.equal(pages[2].classification.primaryType, "imaging");
+  assert.equal(pages[2].classification.primaryType, "ultrasound");
   assert.equal(classifyReportDocument(pages).primaryType, "checkup");
 });
 
@@ -246,4 +246,14 @@ test('clinical narrative tasks retain explicitly documented vaccinations and dis
   const prompt=promptForInput({reportId:'synthetic',text:'合成接种记录',inputCharacters:6,pageCount:3,route:'narrative',primaryContentType:type,contentTypes:[type,'prescription'],documentContentType:type});
   for(const key of ['vaccinations','administeredAt','nextDueAt','lotNumber','不能用就诊','同编号明确续表'])assert.ok(prompt.includes(key),key);
  }
+});
+
+
+test('ultrasound is a report subtype without reclassifying CT/MRI or functional reports',()=>{
+ assert.equal(classifyReportContent('心血管彩色超声检查报告单 超声描述 超声提示 血流信号').primaryType,'ultrasound');
+ assert.equal(classifyReportContent('CT检查报告 影像所见 密度影 强化扫描').primaryType,'imaging');
+ assert.equal(classifyReportContent('MRI检查报告 扫描序列 影像学诊断').primaryType,'imaging');
+ assert.equal(classifyReportContent('骨密度检查 T值 Z值').primaryType,'functional');
+ const normalized=normalizeAiExtraction({reportType:'ultrasound',reportSubtype:'心脏超声',observations:[]});
+ assert.equal(normalized.fields.reportType,'ultrasound');assert.equal(normalized.fields.reportSubtype,'心脏超声');
 });

@@ -1,3 +1,7 @@
+import {trendCardKey} from '../../shared/trend-card';
+import {measurementTrendIdentity,measurementBaseKey} from '../../shared/measurement-trend-identity';
+import {isCardiacMeasurement,parseCardiacSeriesKey,cardiacContextLabel,unresolvedCardiacMeasurementName} from '../../shared/cardiac-measurements';
+import {parseBoneSeriesKey} from '../../shared/bone-density';
 import { parseMedicationFormula } from '../../shared/medication-formula';
 import {trendSeriesKey} from './trend-snapshot-types';
 import {sourceRegion,rotateRegionBox} from "../../shared/source-region";
@@ -646,6 +650,7 @@ const allowedReportTypes = new Set([
   "checkup",
   "laboratory",
   "imaging",
+  "ultrasound",
   "functional",
   "pathology",
   "outpatient",
@@ -1292,7 +1297,7 @@ export function getReportDetail(
       o.numeric_value AS numericValue, o.unit,
       o.reference_low AS referenceLow, o.reference_high AS referenceHigh,
       o.reference_text AS referenceText,
-      o.abnormal_flag AS abnormalFlag, o.evidence_json AS evidenceJson,
+      o.abnormal_flag AS abnormalFlag, o.method, o.examination_modality AS examinationModality, o.evidence_json AS evidenceJson, o.measurement_site AS measurementSite, o.measurement_laterality AS measurementLaterality,
       n.canonical_key AS canonicalKey, n.canonical_name AS canonicalName, n.canonical_value AS canonicalValue,
       n.canonical_unit AS canonicalUnit, n.quality AS normalizationQuality,
       n.confidence AS normalizationConfidence, n.match_reason AS normalizationReason,
@@ -5110,7 +5115,7 @@ export function computeTrendSeries(options: TrendComputationOptions) {
             indicatorKey: string;
             unitKey: string;
           }>
-        ).map((row) => `${row.indicatorKey}\u0000${row.unitKey}`),
+        ).map(row=>trendCardKey(row.indicatorKey,row.unitKey)),
       )
     : new Set<string>();
   const rows = getDatabase()
@@ -5129,8 +5134,8 @@ export function computeTrendSeries(options: TrendComputationOptions) {
       o.reference_high AS referenceHigh,
       o.reference_text AS referenceText,
       o.abnormal_flag AS abnormalFlag,
-      o.method,
-      o.evidence_json AS evidenceJson,
+      o.method, o.examination_modality AS examinationModality,
+      o.evidence_json AS evidenceJson, o.measurement_site AS measurementSite, o.measurement_laterality AS measurementLaterality,
       n.canonical_key AS canonicalKey,
       n.canonical_name AS canonicalName,
       n.canonical_value AS canonicalValue,
@@ -5193,6 +5198,7 @@ export function computeTrendSeries(options: TrendComputationOptions) {
     abnormalFlag: "high" | "low" | "abnormal" | "normal" | null;
     method: string | null;
     evidenceJson: string;
+    examinationModality?:string|null; measurementSite?:string|null; measurementLaterality?:string|null;
     canonicalKey: string | null;
     canonicalName: string | null;
     canonicalValue: number | null;
@@ -5316,11 +5322,11 @@ export function computeTrendSeries(options: TrendComputationOptions) {
       parsedNumericValue: numericValue,
       trendNumericValue,
       trendName: usesCanonical
-        ? row.canonicalName!
-        : row.itemName.normalize('NFKC').trim(),
+        ? row.canonicalName! + (isCardiacMeasurement(row.canonicalKey!)?` · ${cardiacContextLabel(row.examinationModality,row.method)}`:"")
+        : unresolvedCardiacMeasurementName(row.itemName) || row.itemName.normalize('NFKC').trim(),
       trendUnit: usesCanonical ? row.canonicalUnit : row.unit?.trim() || null,
       trendKey: usesCanonical
-        ? row.canonicalKey!
+        ? measurementTrendIdentity(row.canonicalKey!,row)
         : `institution:${createHash('sha256').update(JSON.stringify([row.memberId, row.hospitalName?.trim() || '', row.itemName.normalize('NFKC').trim(), row.sectionName?.trim() || '', row.unit?.trim(), rawMethod, rawSpecimen])).digest('hex')}`,
       trendQuality: usesCanonical ? row.normalizationQuality! : "raw",
       trendConfidence: usesCanonical ? row.normalizationConfidence : null,
@@ -5357,7 +5363,7 @@ export function computeTrendSeries(options: TrendComputationOptions) {
   const affected = options.changedReports ? new Set(options.previousKeys) : null;
   for (const row of mappedRows) {
     const key = trendSeriesKey(row.trendKey, row.trendUnit);
-    const excludedKey = row.canonicalKey ? trendSeriesKey(row.canonicalKey, row.canonicalUnit || normalizeTrendUnit(row.catalogDefaultUnit)) : null;
+    const excludedKey = row.canonicalKey ? trendSeriesKey(measurementTrendIdentity(row.canonicalKey,row), row.canonicalUnit || normalizeTrendUnit(row.catalogDefaultUnit)) : null;
     options.contribution?.(row.reportId, key);
     if (excludedKey) options.contribution?.(row.reportId, excludedKey);
     if (options.changedReports?.has(row.reportId)) {
@@ -5366,7 +5372,7 @@ export function computeTrendSeries(options: TrendComputationOptions) {
     }
   }
   const enrichedRows = affected ? mappedRows.filter(row => affected.has(trendSeriesKey(row.trendKey, row.trendUnit))
-    || Boolean(row.canonicalKey && affected.has(trendSeriesKey(row.canonicalKey, row.canonicalUnit || normalizeTrendUnit(row.catalogDefaultUnit))))) : mappedRows;
+    || Boolean(row.canonicalKey && affected.has(trendSeriesKey(measurementTrendIdentity(row.canonicalKey,row), row.canonicalUnit || normalizeTrendUnit(row.catalogDefaultUnit))))) : mappedRows;
   const evidenceEntries = (value: string): unknown[] => { const parsed = parseJson<unknown>(value, []); return Array.isArray(parsed) ? parsed : []; };
   const standardAnchors = new Set(mappedRows.filter(row => row.admission.kind === 'standard').flatMap(row =>
     evidenceEntries(row.evidenceJson).map(entry => `${row.reportId}:${duplicateMeasurementAnchorKey(row.numericValue!, entry)}`)));
@@ -5456,7 +5462,7 @@ export function computeTrendSeries(options: TrendComputationOptions) {
     }>
   >();
   for (const row of excludedRows) {
-    const key = trendSeriesKey(row.canonicalKey!, row.canonicalUnit || normalizeTrendUnit(row.catalogDefaultUnit));
+    const key = trendSeriesKey(measurementTrendIdentity(row.canonicalKey!,row), row.canonicalUnit || normalizeTrendUnit(row.catalogDefaultUnit));
     const sourcePageNumber =
       row.evidenceTable?.pageNumber || row.evidencePageNumber;
     const sourcePage = sourcePageNumber
@@ -5582,7 +5588,7 @@ export function computeTrendSeries(options: TrendComputationOptions) {
   >();
   for (const row of pointsWithEvidence) {
     const key = trendSeriesKey(row.trendKey, row.trendUnit);
-    const builtin = trendCatalog.get(row.trendKey) || null;
+    const builtin = trendCatalog.get(row.canonicalKey || row.trendKey) || null;
     const rowPlacement = trendPlacementFor({
       category: builtin?.category || row.trendCategory,
       sectionName: row.sectionName,
@@ -5935,11 +5941,18 @@ export function computeTrendSeries(options: TrendComputationOptions) {
           memberBirthDate: point.memberBirthDate,
         })),
       );
-      const unverifiedRawContext = group.quality === 'raw' && points.some(point => !point.comparisonMethod || !point.comparisonSpecimen);
-      if (unverifiedRawContext) {
+      if(parseBoneSeriesKey(group.indicatorKey)) {
+        comparability.changeAssessmentAllowed=false;
+        comparability.reason='DXA 设备与校准条件未核对，仅展示历次数值，不自动判断变化';
+        comparability.latestPairReason=comparability.reason;
+      }
+      const unresolvedCardiacRaw=group.quality==='raw' && Boolean(unresolvedCardiacMeasurementName(group.name));
+      const unverifiedRawContext = unresolvedCardiacRaw || group.quality === 'raw' && points.some(point => !point.comparisonMethod || !point.comparisonSpecimen);
+      const unverifiedCardiacContext=isCardiacMeasurement(measurementBaseKey(group.indicatorKey)) && (!parseCardiacSeriesKey(group.indicatorKey)?.site || !parseCardiacSeriesKey(group.indicatorKey)?.modality || !parseCardiacSeriesKey(group.indicatorKey)?.method || measurementBaseKey(group.indicatorKey).endsWith('_unspecified'));
+      if (unverifiedRawContext || unverifiedCardiacContext) {
         comparability.comparable = false;
         comparability.status = 'insufficient_evidence';
-        comparability.reason = '机构内原始记录：方法或标本未注明，仅展示历次数值，不默认连线或判断涨跌';
+        comparability.reason = unresolvedCardiacRaw?'口径待核对：按原始项目独立展示，不默认连线或判断涨跌':unverifiedCardiacContext?'心脏测量的部位、检查方式或测量方法未明确，仅展示原始记录，不默认连线或判断涨跌':'机构内原始记录：方法或标本未注明，仅展示历次数值，不默认连线或判断涨跌';
         comparability.changeAssessmentAllowed = false;
         comparability.latestPairStatus = 'insufficient_evidence';
         comparability.latestPairReason = comparability.reason;
@@ -5955,7 +5968,7 @@ export function computeTrendSeries(options: TrendComputationOptions) {
         })),
         {
           latestComparisonAllowed: chronologyReliable && comparability.changeAssessmentAllowed,
-          seriesComparisonAllowed: chronologyReliable && !unverifiedRawContext && ![
+          seriesComparisonAllowed: chronologyReliable && !unverifiedRawContext && !unverifiedCardiacContext && ![
             "range_drift",
             "condition_mismatch",
           ].includes(comparability.status),
@@ -5997,7 +6010,7 @@ export function computeTrendSeries(options: TrendComputationOptions) {
         unit: group.unit,
         valueScale: describeValueScale(group.indicatorKey),
         pinned: pinnedKeys.has(
-          `${group.indicatorKey}\u0000${group.unit || ""}`,
+          trendCardKey(group.indicatorKey,group.unit),
         ),
         groupKey: placement.groupKey,
         groupName: placement.groupName,
@@ -6013,7 +6026,7 @@ export function computeTrendSeries(options: TrendComputationOptions) {
         confidence:
           metadataRepresentative?.normalizationConfidence ?? group.confidence,
         explanation: group.explanation,
-        searchAliases: [...(trustedAliases.get(group.indicatorKey) || [])]
+        searchAliases: [...(trustedAliases.get(measurementBaseKey(group.indicatorKey)) || [])]
           .filter((alias) => alias !== group.name)
           .sort((left, right) => left.localeCompare(right, "zh-CN"))
           .slice(0, 20),
@@ -6034,19 +6047,20 @@ export function computeTrendSeries(options: TrendComputationOptions) {
         comparable: comparability.comparable,
         comparabilityStatus: comparability.status,
         comparabilityReason: comparability.reason,
+        measurementContextPending:unresolvedCardiacRaw,
         referenceProfileKey: comparability.referenceProfileKey,
         referenceProfileCount: comparability.referenceProfileCount,
         latestPairComparabilityStatus: comparability.latestPairStatus,
         changeAssessmentAllowed: chronologyReliable && comparability.changeAssessmentAllowed && !latest?.resultComparator && !previous?.resultComparator,
         latestChangeStatus: changeAssessment.latestChangeStatus,
         latestChangeMagnitude: changeAssessment.latestChangeMagnitude,
-        latestChangeReason: chronologyReason || changeAssessment.latestChangeReason,
+        latestChangeReason: chronologyReason || (unresolvedCardiacRaw?comparability.reason:changeAssessment.latestChangeReason),
         latestChangeConclusionAllowed:
           chronologyReliable && changeAssessment.latestChangeConclusionAllowed,
         latestIntervalDays: changeAssessment.latestIntervalDays,
         latestIntervalBucket: changeAssessment.latestIntervalBucket,
         trendStatus: changeAssessment.trendStatus,
-        trendReason: chronologyReason || changeAssessment.trendReason,
+        trendReason: chronologyReason || (unresolvedCardiacRaw?comparability.reason:changeAssessment.trendReason),
         trendConclusionAllowed: chronologyReliable && changeAssessment.trendConclusionAllowed,
         trendDurationDays: changeAssessment.trendDurationDays,
         trendIntervalRegularity: changeAssessment.trendIntervalRegularity,
@@ -6083,7 +6097,7 @@ export function computeTrendSeries(options: TrendComputationOptions) {
         lastDate: latest?.reportIssuedAt || null,
         latestValue: latest?.examinationConflict || latest?.timeOrderAmbiguous || latest?.resultComparator ? null : latest?.numericValue ?? null,
         previousValue: previous?.examinationConflict || previous?.timeOrderAmbiguous || previous?.resultComparator ? null : previous?.numericValue ?? null,
-        delta: !chronologyReliable ? null : changeAssessment.latestDelta,
+        delta: !chronologyReliable || unresolvedCardiacRaw ? null : changeAssessment.latestDelta,
         minValue: values.length ? Math.min(...values) : null,
         maxValue: values.length ? Math.max(...values) : null,
         points: points.map(
@@ -6123,7 +6137,7 @@ export function updateTrendPin(
   pinned: boolean,
 ) {
   const memberId = textInput(input.memberId, 80);
-  const indicatorKey = textInput(input.indicatorKey, 180);
+  const indicatorKey = textInput(input.indicatorKey, 512);
   const unitKey = textInput(input.unit, 60) || "";
   if (!memberId || !indicatorKey) {
     throw createError({ statusCode: 400, statusMessage: "指标置顶参数不完整" });
@@ -6155,14 +6169,13 @@ export function updateTrendPin(
       )
       .run(user.id, memberId, indicatorKey, unitKey);
   } else {
-    getDatabase()
-      .prepare(
-        `
-      DELETE FROM user_trend_pins
-      WHERE user_id = ? AND member_id = ? AND indicator_key = ? AND unit_key = ?
-    `,
-      )
-      .run(user.id, memberId, indicatorKey, unitKey);
+    const db=getDatabase();
+    const card=trendCardKey(indicatorKey,unitKey);
+    const pins=db.prepare('SELECT indicator_key AS indicatorKey,unit_key AS unit FROM user_trend_pins WHERE user_id=? AND member_id=?')
+      .all(user.id,memberId) as Array<{indicatorKey:string;unit:string}>;
+    const peers=pins.filter(pin=>trendCardKey(pin.indicatorKey,pin.unit)===card).map(pin=>JSON.stringify([pin.indicatorKey,pin.unit]));
+    db.prepare(`DELETE FROM user_trend_pins WHERE user_id=? AND member_id=?
+      AND json_array(indicator_key,unit_key) IN (SELECT value FROM json_each(?))`).run(user.id,memberId,JSON.stringify(peers));
   }
   return { memberId, indicatorKey, unit: unitKey || null, pinned };
 }

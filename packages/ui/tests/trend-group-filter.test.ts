@@ -18,3 +18,14 @@ it('expands all created personal groups by default even without member data, kee
  await wrapper.setProps({groups:[{...personal,indicatorCount:0,children:[node('empty-mine','尚无数据组合',0)]}]});
  expect(wrapper.text()).toContain('我的分组');expect(wrapper.text()).toContain('尚无数据组合');
 });
+
+it('uses current matching counts while preserving older response counts and empty-group discovery',async()=>{
+ const matching={...node('bone','骨密度',17),configuredIndicatorCount:19,matchCount:14};
+ const other={...node('lab','普通检验',2),configuredIndicatorCount:2,matchCount:0};
+ wrapper=mount(Filter,{props:{modelValue:'',groups:[matching,other]},global:{stubs:{Teleport:true}}});
+ await wrapper.get('button').trigger('click');await flushPromises();
+ expect(wrapper.text()).toContain('14 / 19');expect(wrapper.text()).not.toContain('普通检验');
+ await wrapper.get('input[type="checkbox"]').setValue(true);expect(wrapper.text()).toContain('普通检验');
+ expect(wrapper.findAll('button').find(button=>button.text().includes('普通检验'))!.attributes('disabled')).toBeDefined();
+ await wrapper.setProps({groups:[{...other,matchCount:undefined}]});expect(wrapper.text()).toContain('2 / 2');
+});

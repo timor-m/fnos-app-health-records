@@ -8,11 +8,13 @@ import { timelineDateParts } from '../utils/health-timeline';
 import { formatMedicationDate } from '../utils/medication-date';
 const props=defineProps<{entry:HealthFeedEntry;selected?:boolean;origin?:'overview';returnTo?:string;dateLabel?:string}>();
 const emit=defineEmits<{activate:[entry:HealthFeedEntry,event:MouseEvent]}>();
-const labels:Record<string,string>={checkup:'体检',laboratory:'检验',imaging:'影像检查',functional:'功能检查',pathology:'病理',outpatient:'门诊病历',inpatient:'住院资料',billing:'费用凭证',prescription:'用药单',vaccination:'接种',course:'用药记录',intake:'用药记录',symptom:'症状跟踪',manual:'手动',device:'设备',import:'导入',other:'其他资料'};
+const labels:Record<string,string>={checkup:'体检',laboratory:'检验',imaging:'影像检查',ultrasound:'超声检查',functional:'功能检查',pathology:'病理',outpatient:'门诊病历',inpatient:'住院资料',billing:'费用凭证',prescription:'用药单',vaccination:'接种',course:'用药记录',intake:'用药记录',symptom:'症状跟踪',manual:'手动',device:'设备',import:'导入',other:'其他资料'};
 const states:Record<string,string>={active:'进行中',resolved:'已缓解',unknown:'状态未知',paused:'已暂停',stopped:'已停用',queued:'排队中',uploading:'上传中',processing:'处理中',needs_review:'待确认',failed:'识别失败',ready:'已归档'};
 const measurementChannels=new Set(['自测','设备','导入']);
 const card=computed(()=>{
  const entry=props.entry;const details:string[]=[];const isVaccination=entry.kind==='vaccination';
+ // A registered vaccination and its source document have separate processing states.
+ const vaccinationRegistered=isVaccination || entry.category==='vaccination' && (entry.confirmedCount || 0)>0 && ['ready','needs_review'].includes(entry.status || '');
  const dose=entry.doseNumber?.trim();const doseLabel=dose && /^\d+$/.test(dose)?`第 ${dose} 剂`:dose;
  const readings=entry.kind==='measurement'&&entry.metrics?.length?entry.metrics:[];
  const metrics=readings.slice(0,6);
@@ -28,10 +30,10 @@ const card=computed(()=>{
  // Measurement channels are shown via institution/meta labels; keep status chips for clinical/document states only.
  const symptomState=entry.kind==='symptom'?{active:'持续跟踪',resolved:'已消失',unknown:'状态未知'}[entry.status||'']:undefined;
  const medicationState=entry.kind==='medication'?{active:'正在使用',paused:'已暂停',stopped:'已停止'}[entry.status||'']:undefined;
- const state=symptomState!==undefined?symptomState:medicationState!==undefined?medicationState:isVaccination?'已接种':entry.kind==='measurement'?null:entry.category==='vaccination'&&['ready','needs_review'].includes(entry.status||'')?'待完善':states[entry.status||''];
+ const state=symptomState!==undefined?symptomState:medicationState!==undefined?medicationState:vaccinationRegistered?'已接种':entry.kind==='measurement'?null:entry.category==='vaccination'&&['ready','needs_review'].includes(entry.status||'')?'待完善':states[entry.status||''];
  const subtypeLabels=[...new Set((entry.category==='report' && entry.documents.length ? entry.documents.map(doc=>doc.reportType) : [entry.subtype]).map(type=>labels[type]||type))];
  const meta=metrics.length?entry.title:(isVaccination || ['symptom','imaging','vaccination','monitoring'].includes(entry.category))?'':subtypeLabels.join(' · ');
- const tone=isVaccination?'chip--green':entry.status==='failed'?'chip--red':entry.status==='needs_review'||entry.category==='vaccination'&&entry.status==='ready'?'chip--amber':['processing','uploading','queued'].includes(entry.status||'')?'chip--info':['active','resolved','ready'].includes(entry.status||'')?'chip--green':'chip--plain';
+ const tone=vaccinationRegistered?'chip--green':entry.status==='failed'?'chip--red':entry.status==='needs_review'||entry.category==='vaccination'&&entry.status==='ready'?'chip--amber':['processing','uploading','queued'].includes(entry.status||'')?'chip--info':['active','resolved','ready'].includes(entry.status||'')?'chip--green':'chip--plain';
  return {to:props.returnTo?{path:healthRecordPath(entry.kind,entry.resourceId),query:{...(props.origin?{from:props.origin}:{}),returnTo:props.returnTo}}:props.origin?{path:healthRecordPath(entry.kind,entry.resourceId),query:{from:props.origin}}:healthRecordPath(entry.kind,entry.resourceId),type:healthCategoryLabels[entry.category],title:entry.title,
  institution:channel?null:entry.institution,meta,channel,metrics,metricMore,dose:isVaccination?doseLabel:null,summaryNote:isVaccination?entry.note:null,description:isVaccination||metrics.length?null:entry.description,details,
  status:state?{label:state,chip:tone}:null};

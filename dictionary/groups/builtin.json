@@ -21,6 +21,7 @@
     {"key":"infection_immunity","parent":"laboratory","name":"感染及免疫","categories":["infection_immunity"]},
     {"key":"ecg_metrics","parent":"functional","name":"心电图参数","keys":["ecg_heart_rate","ecg_pr_interval","ecg_qrs_duration","ecg_qtc_interval","ecg_qt_interval","ecg_p_axis","ecg_qrs_axis","ecg_t_axis","ecg_rv5_amplitude","ecg_sv1_amplitude","ecg_rv5_sv1_sum"]},
     {"key":"pulmonary_function","parent":"functional","name":"肺功能","keys":["pulmonary_vc","pulmonary_ic","pulmonary_tv","pulmonary_irv","pulmonary_erv","pulmonary_fvc","pulmonary_fev1","pulmonary_fev1_fvc_ratio","pulmonary_fev1_vc_ratio","pulmonary_pef","pulmonary_fef25","pulmonary_fef50","pulmonary_fef75","pulmonary_mmef"]},
-    {"key":"bone_density","parent":"functional","name":"骨密度","keys":["qus_bone_t_score","qus_bone_z_score"]}
+    {"key":"cardiac_ultrasound","parent":"functional","name":"心脏测量","keys":["cardiac_aortic_diameter_unspecified","cardiac_la_diameter_unspecified","cardiac_ra_diameter_unspecified","cardiac_rv_diameter_unspecified","cardiac_lvids","cardiac_ivst","cardiac_lvpw","cardiac_mpa_diameter","cardiac_mitral_e_velocity","cardiac_mitral_a_velocity","cardiac_tricuspid_e_velocity","cardiac_tricuspid_a_velocity","cardiac_aortic_valve_velocity","cardiac_pulmonary_valve_velocity","cardiac_mitral_annulus_septal_s_velocity","cardiac_mitral_annulus_septal_e_velocity","cardiac_mitral_annulus_septal_a_velocity","cardiac_lvidd","cardiac_lvef","cardiac_lvedv","cardiac_lvesv","cardiac_aortic_sinus_diameter","cardiac_ascending_aorta_diameter","cardiac_left_atrial_diameter"]},
+    {"key":"bone_density","parent":"functional","name":"骨密度","keys":["qus_bone_t_score","qus_bone_z_score","dxa_bmd","dxa_t_score","dxa_z_score","hip_axis_length_left","hip_axis_length_right"]}
   ]
 }

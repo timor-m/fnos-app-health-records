@@ -38,7 +38,7 @@ import {
 } from "./report-content-classifier.service";
 
 export const aiInputPlanningPolicy = {
-  version: "ocr-unit-plan-v26-oriented-tables",
+  version: "ocr-unit-plan-v27-original-narratives",
   targetCharacters: 8_000,
   maxPagesPerUnit: 12,
   maxSparsePagesPerUnit: 24,
@@ -5540,8 +5540,13 @@ function unitFromRanges(
                   (narrativeWholePage &&
                     !["noise", "morphology"].includes(line.role)) ||
                   line.role === "narrative" ||
-                  (line.role === "section_heading" &&
-                    narrativeSectionHeadingPattern.test(line.text)),
+                  // Descriptive paragraphs outside the sampled document profile
+                  // need classification too; short labels/footers and measurement
+                  // rows must not create extra narrative requests.
+                  ((page.pageNumber>2 || page.lines.length>(page.pageNumber===1?32:16) || page.characterCount>aiInputPlanningPolicy.targetCharacters) &&
+                    (line.role === "uncertain" || line.role === "morphology") &&
+                    line.text.length>20 && /[，。；]/.test(line.text)) ||
+                  (line.role === "section_heading" && narrativeSectionHeadingPattern.test(line.text)),
               )
             : rangeLines;
         texts.push(...lines.map((line) => line.text));
@@ -6786,6 +6791,10 @@ function packNarrativeUnits(
     pending = [];
   };
   for (const range of ranges) {
+    // Routing all narrative chapters must not turn an adjacent billing/other page
+    // into part of a medication request merely because it shares one packed unit.
+    if (pending.length && Boolean(pages.find(page=>page.pageId===pending[0].pageId)?.medicationContent)
+      !== Boolean(pages.find(page=>page.pageId===range.pageId)?.medicationContent)) flush();
     const combined = unitFromRanges(
       "complete_pages",
       [...pending, range],
@@ -7069,10 +7078,10 @@ export function planRebuiltOcrPages(
         );
   /*
    * 概览模式：指标仍逐行提取（与详细模式同一解析契约），并保留形态发现单元；
-   * 概览保留明确用药页及相邻续页、接种条目页的叙事单元，避免临床记录的用药被跳过。
+   * 文档概况采用抽选输入时，概览也保留叙事单元以标记完整原文章节；整份输入已合并时仅保留用药、接种的补充叙事单元。
    * 合并单元已在同一契约内输出形态发现，不再单独生成形态单元。
    */
-  const narrativeBaseUnits = extractionDepth === "overview"
+  const narrativeBaseUnits = extractionDepth === "overview" && mergedOverviewUnit
     ? baseUnits.map(unit => ({ ...unit, pageRanges: unit.pageRanges.filter(range =>
         pages.some(page => page.pageId === range.pageId&&(page.medicationContent||hasVaccinationContent(page.text)))) }))
     : baseUnits;

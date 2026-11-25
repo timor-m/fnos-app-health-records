@@ -1,3 +1,4 @@
+import {parseDxaPage} from './bone-density-parser';
 import {createHash} from 'node:crypto';
 import {getDatabase} from '../database/client';
 import {parseExaminationTime,resolveExaminationTime,type ExaminationInput} from '../domain/examination';
@@ -7,7 +8,7 @@ import {rebuildOcrPages} from './ai-input-planner.service';
 
 const compact=(value:unknown)=>String(value || '').normalize('NFKC').replace(/\s+/g,'').toLowerCase();
 const datePattern='(?:19|20|21)\\d{2}[-/.年]\\d{1,2}[-/.月]\\d{1,2}日?(?:[ T]\\d{1,2}[:：]\\d{2}(?:[:：]\\d{2})?)?';
-export type ExaminationSourcePage={id:string;pageNumber:number;lines:Array<{id?:string;text:string}>};
+export type ExaminationSourcePage={id:string;pageNumber:number;lines:Array<{id?:string;text:string}>;dxaMeasurements?:AiObservation[]};
 export type InferredExamination=ExaminationInput & {sourceKey:string;certain:boolean;risks:string[];wholeReportDate:boolean};
 const digest=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const cells=(text:string)=>text.split(/[|｜\t]/).map(part=>part.trim());
@@ -35,7 +36,7 @@ export function examinationSourcePages(reportId:string): ExaminationSourcePage[]
  // Use the same reconstructed rows as extraction; raw OCR may store one cell per line.
  // Reconstruct independently so input-budget cleanup cannot remove a repeated date header
  // from later pages. Examination evidence must retain each page's own temporal context.
- return latest.flatMap(row=>rebuildOcrPages([row])).map(page=>({id:page.pageId,pageNumber:page.pageNumber,lines:page.lines.map(line=>({id:line.id,text:line.text}))}));
+ return latest.flatMap(row=>rebuildOcrPages([row])).map(page=>({id:page.pageId,pageNumber:page.pageNumber,lines:page.lines.map(line=>({id:line.id,text:line.text})),dxaMeasurements:parseDxaPage(JSON.parse(latest.find(row=>row.pageId===page.pageId)!.linesJson),page.pageNumber) || undefined}));
 }
 function typedDates(text:string) {
  const values:ExaminationInput={};const risks:string[]=[];
@@ -81,6 +82,9 @@ function metadata(text:string) {
 
 /** Prefer row/column dates, then a unique document date, then the confirmed report date. */
 export function inferObservationExamination(observation:AiObservation,pages:ExaminationSourcePage[],reportDate?:string|null):InferredExamination {
+ const evidencePage=pages.find(page=>page.pageNumber===observation.evidence[0]?.pageNumber);
+ const dxa=evidencePage?.dxaMeasurements?.find(fact=>fact.itemName===observation.itemName && fact.numericValue===observation.numericValue && fact.method===observation.method && fact.measurementSite===observation.measurementSite && fact.measurementLaterality===observation.measurementLaterality && fact.evidence[0]?.quote===observation.evidence[0]?.quote);
+ if(dxa?.examination?.examinedAt)return {...dxa.examination,sourceKey:digest(['DXA',evidencePage!.id,dxa.examination.examinedAt]),certain:true,risks:[],wholeReportDate:false};
  const risks:string[]=[];
  const evidence=observation.evidence[0];
  const page=pages.find(p=>p.pageNumber===evidence?.pageNumber);

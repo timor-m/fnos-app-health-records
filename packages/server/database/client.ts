@@ -1,3 +1,4 @@
+import {ensureBoneDensityDraft,needsBoneDensityDraft} from './bone-density-draft';
 import {ensureReportCombinationDraft,needsReportCombinationDraft} from './report-combination-draft';
 import {ensureTrendSnapshotDraft, needsTrendSnapshotDraft} from './trend-snapshot-draft';
 import { isMainThread } from 'node:worker_threads';
@@ -301,6 +302,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
       ensureHealthProcessDraft(db);
       ensureHealthWorkflowDraft(db);
       ensureDoctorContextDraft(db);
+      ensureBoneDensityDraft(db);
       ensureTrendSnapshotDraft(db);
       ensureHealthUploadSchema(db);
       ensureMedicationDraftSchema(db);
@@ -350,7 +352,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
   const needsStructureRepair = !tableExists(db, "member_merges") || !tableExists(db, "feedback_sync_state") || !tableExists(db, "feedback_notifications") || !tableExists(db, "feedback_notification_reads") || !tableExists(db, "examination_duplicate_decisions") || !tableExists(db, "report_examinations") || !tableExists(db, "observation_examinations") || !tableExists(db, "morphology_finding_examinations") || !tableExists(db, "report_examination_state") || !tableExists(db, "report_duplicate_runtime") || !tableColumnNames(db,"report_duplicate_runtime").has("continue_job_id") || !tableExists(db, "report_page_appends") || !tableColumnNames(db,"report_page_appends").has("confirmation_hash") || !tableColumnNames(db,"report_page_appends").has("input_hash") || !tableColumnNames(db,"report_page_append_files").has("error_message") || !tableExists(db, "file_gc_members") || !tableColumnNames(db, "member_permissions").has("can_manage_sharing") || !tableColumnNames(db, "report_pages").has("ocr_rotation") || pendingMigrations.length > 0 || !tableExists(db, "indicator_groups") || !tableExists(db, "indicator_group_members") || !tableExists(db, "report_notes") || !tableExists(db, "report_note_assets") || !tableExists(db, "upload_receipts")
     || !tableExists(db, "institution_trend_auto_rules") || !tableExists(db, "institution_trend_auto_decisions")
     || !tableExists(db, "health_events") || !tableExists(db, "health_event_resources")
-    || !tableExists(db, "health_episodes") || needsHealthProcessRepair(db) || needsHealthWorkflowDraft(db) || needsHealthUploadRepair(db) || medicationDraftNeedsRepair(db) || measurementDraftNeedsRepair(db) || healthCategoryNeedsRepair(db) || needsHealthRecordProcessDraft(db) || needsDoctorContextDraft(db) || needsTrendSnapshotDraft(db) || needsReportCombinationDraft(db);
+    || !tableExists(db, "health_episodes") || needsHealthProcessRepair(db) || needsHealthWorkflowDraft(db) || needsHealthUploadRepair(db) || medicationDraftNeedsRepair(db) || measurementDraftNeedsRepair(db) || healthCategoryNeedsRepair(db) || needsHealthRecordProcessDraft(db) || needsBoneDensityDraft(db) || needsDoctorContextDraft(db) || needsTrendSnapshotDraft(db) || needsReportCombinationDraft(db);
   if (needsStructureRepair) {
     backupDatabaseBeforeMigration(db, storageDir, databasePath, currentVersion, schemaVersion);
   }
@@ -394,6 +396,7 @@ function migrate(db: DatabaseSync, storageDir: string, databasePath: string) {
       ensureHealthProcessDraft(db);
       ensureHealthWorkflowDraft(db);
       ensureDoctorContextDraft(db);
+      ensureBoneDensityDraft(db);
       ensureTrendSnapshotDraft(db);
       ensureHealthUploadSchema(db);
       ensureMedicationDraftSchema(db);

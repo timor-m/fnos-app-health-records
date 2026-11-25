@@ -496,6 +496,8 @@ it('shows all tiers by original page and submits a page-bound supplement through
     await wrapper.get('.observation-editor-form').trigger('submit');await flushPromises();
     const saved=callsTo('/observations').find(([,init])=>init?.method==='POST');
     expect(JSON.parse(saved![1].body)).toMatchObject({itemName:'合成补充项目',sourcePageId:'p2',expectedSourceVersion:7});
+    expect(JSON.parse(saved![1].body)).not.toHaveProperty('measurementSite');
+    expect(JSON.parse(saved![1].body)).not.toHaveProperty('measurementLaterality');
   } finally {wrapper.unmount();}
 });
 
@@ -550,4 +552,63 @@ it('offers confirmation on outpatient and inpatient clinical facts and links an 
  const wrapper=mount(ReportDetail,{attachTo:document.body,props:{reportId:'r1',variant:'panel'},global:{stubs:{RouterLink:{props:['to'],template:'<a><slot/></a>'},ReportNotesPanel:true,ReportPageAppend:true}}});
  try{await flushPromises();await flushPromises();expect(wrapper.text()).toContain('报告所列用药');expect(wrapper.text()).toContain('确认实际使用');expect(wrapper.text()).toContain('查看已记录接种');expect(wrapper.text()).not.toContain('核对并记录');}finally{wrapper.unmount();}
  }
+});
+
+it.each([
+ {key:'hip_axis_length_left',name:'左侧髋关节中轴长度',site:null,showSite:false},
+ {key:'hip_axis_length_right',name:'右侧髋关节中轴长度',site:null,showSite:false},
+ {key:'dxa_bmd',name:'DXA 左侧股骨全部 BMD',site:'femur_total',showSite:true},
+ {key:'qus_bone_t_score',name:'合成历史待核对项',site:null,showSite:true}
+])('keeps $key editing scoped to its own measurement fields',async ({key,name,site,showSite})=>{
+ const original=fetchMock.getMockImplementation()!;
+ fetchMock.mockImplementation(async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const url=String(input).replace('?includeDuplicateCandidates=false','');
+  if(url.endsWith('/api/reports/r1'))return jsonResponse({...detailPayload,observations:[{...observation,itemName:name,canonicalName:name,canonicalKey:key,canonicalUnit:key==='dxa_bmd'?'g/cm2':'mm',unit:key==='dxa_bmd'?'g/cm2':'mm',method:'DXA',measurementSite:site,measurementLaterality:'left',displayTier:'primary'}]});
+  return original(input,init);
+ });
+ const wrapper=await mountReview('obs-1');
+ try{
+  expect(wrapper.findAllComponents({name:'FormSelect'}).some(component=>component.props('ariaLabel')==='检查部位')).toBe(showSite);
+  expect(wrapper.get('.observation-editor-form').text()).toContain('数值结果');
+  expect(wrapper.get('.observation-editor-form').text()).toContain('单位');
+ }finally{wrapper.unmount();}
+});
+
+
+it.each(['容积法',''])('edits cardiac site, examination modality and measurement method (%s) without exposing bone controls',async methodValue=>{
+ const original=fetchMock.getMockImplementation()!;
+ fetchMock.mockImplementation(async(input:RequestInfo|URL,init?:RequestInit)=>{
+  const url=String(input).replace('?includeDuplicateCandidates=false','');
+  if(url.endsWith('/api/reports/r1') && !init?.method)return jsonResponse({...detailPayload,observations:[{...observation,itemName:'左室射血分数',canonicalKey:'cardiac_lvef',canonicalName:'左室射血分数',method:'二维Simpson双平面法',measurementSite:'left_ventricle',examinationModality:'超声心动图',displayTier:'primary'}]});
+  return original(input,init);
+ });
+ const wrapper=await mountReview('obs-1');
+ try{
+  const picks=wrapper.findAllComponents(FormSelect);
+  expect(picks.find(c=>c.props('ariaLabel')==='心脏测量部位')?.props('modelValue')).toBe('left_ventricle');
+  expect(picks.find(c=>c.props('ariaLabel')==='检查方式')?.props('modelValue')).toBe('超声心动图');
+  expect(picks.some(c=>c.props('ariaLabel')==='左右侧')).toBe(false);
+  expect((wrapper.get('input[aria-label="测量方法"]').element as HTMLInputElement).value).toBe('二维Simpson双平面法');
+  picks.find(c=>c.props('ariaLabel')==='检查方式')!.vm.$emit('update:modelValue','MRI');
+  await wrapper.get('input[aria-label="测量方法"]').setValue(methodValue);
+  await wrapper.get('.observation-editor-form').trigger('submit');await flushPromises();
+  const put=fetchMock.mock.calls.find(([url,init])=>String(url).includes('/observations/obs-1') && init?.method==='PUT');
+  expect(put).toBeTruthy();const body=JSON.parse(String(put![1]?.body));expect(body.examinationModality).toBe('MRI');expect(body.method).toBe(methodValue || null);expect(body.measurementSite).toBe('left_ventricle');
+ }finally{wrapper.unmount();}
+});
+
+it('preserves an explicit bone measurement method during an ordinary value edit',async()=>{
+ const original=fetchMock.getMockImplementation()!;
+ fetchMock.mockImplementation(async(input:RequestInfo|URL,init?:RequestInit)=>{
+  if(String(input).replace('?includeDuplicateCandidates=false','').endsWith('/api/reports/r1') && !init?.method)return jsonResponse({...detailPayload,observations:[{...observation,itemName:'DXA 骨密度',canonicalName:'DXA 骨密度',canonicalKey:'dxa_bmd',unit:'g/cm2',canonicalUnit:'g/cm2',method:'合成方法A',examinationModality:'DXA',measurementSite:'femur_total',measurementLaterality:'left',displayTier:'primary'}]});
+  return original(input,init);
+ });
+ const wrapper=await mountReview('obs-1');
+ try{
+  expect(wrapper.findAllComponents(FormSelect).some(c=>c.props('ariaLabel')==='检查部位')).toBe(true);
+  expect(wrapper.findAllComponents(FormSelect).some(c=>c.props('ariaLabel')==='心脏测量部位')).toBe(false);
+  await wrapper.get('.observation-editor-form').trigger('submit');await flushPromises();
+  const put=fetchMock.mock.calls.find(([url,init])=>String(url).includes('/observations/obs-1') && init?.method==='PUT')!;const body=JSON.parse(String(put[1]?.body));
+  expect(body.method).toBe('合成方法A');expect(body.examinationModality).toBe('DXA');expect(body.measurementSite).toBe('femur_total');
+ }finally{wrapper.unmount();}
 });
