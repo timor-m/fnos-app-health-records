@@ -752,6 +752,48 @@ function toggleDetails(item: TrendSeries, event: MouseEvent) {
 }
 
 
+function includePending(observationId: string) {
+  return includePendingIds.value.has(observationId);
+}
+
+async function includeExcludedPoint(item: TrendSeries, point: TrendExcludedPoint) {
+  if (!canManageTrends.value || item.kind === "institution" || includePending(point.observationId)) return;
+  includePendingIds.value = new Set([...includePendingIds.value, point.observationId]);
+  try {
+    const result = await request<{ included: boolean; pendingTime: boolean; canonicalName: string; reason: string | null }>("trends/include", {
+      method: "POST",
+      body: JSON.stringify({
+        reportId: point.reportId,
+        observationId: point.observationId,
+        canonicalKey: item.indicatorKey
+      })
+    });
+    const key = snapshots.keyOf(item);
+    series.value = series.value.map((current) => {
+      if (snapshots.keyOf(current) !== key) return current;
+      const excludedPoints = result.included || result.pendingTime
+        ? current.excludedPoints.filter((entry) => entry.observationId !== point.observationId)
+        : current.excludedPoints.map((entry) => entry.observationId === point.observationId
+          ? { ...entry, reason: result.reason || entry.reason }
+          : entry);
+      return { ...current, excludedPoints, excludedPointCount: excludedPoints.length, detailLoaded: true };
+    });
+    const name = result.canonicalName || item.name;
+    toast.show(result.included
+      ? `已纳入「${name}」趋势，图表即将更新`
+      : result.pendingTime
+        ? `已确认属于「${name}」，但检查时间待确认，确认后才会出现在趋势图上`
+        : result.reason || "这条记录仍未进入趋势");
+    snapshots.checkSoon();
+  } catch (cause) {
+    toast.show(cause instanceof Error ? cause.message : "纳入趋势失败");
+  } finally {
+    const next = new Set(includePendingIds.value);
+    next.delete(point.observationId);
+    includePendingIds.value = next;
+  }
+}
+
 function openReport(reportId: string) {
   closeDetails();
   const sessionId = reportId.startsWith('measurement:') ? reportId.slice('measurement:'.length) : null;
@@ -798,6 +840,8 @@ function openSourceReport() {
 
 const root = ref<HTMLElement | null>(null);
 const toast = useToast();
+const canManageTrends = computed(() => app.selectedMember.value?.permission === "manager");
+const includePendingIds = ref(new Set<string>());
 const { pullDistance, refreshing } = usePullRefresh(root, async () => {
   const memberId = app.selectedMemberId.value;
   if (!memberId) return;
@@ -1159,6 +1203,13 @@ onDeactivated(() => {
                           <strong>{{ point.itemName }} · {{ excludedPointText(point) }}</strong>
                           <small>{{ formatDate(point.reportIssuedAt) }} · {{ point.hospitalName || "医院待整理" }} · {{ point.reason }}</small>
                         </div>
+                        <button
+                          v-if="canManageTrends && item.kind !== 'institution'"
+                          type="button"
+                          :disabled="includePending(point.observationId)"
+                          title="确认这条记录属于当前标准指标，并纳入趋势"
+                          @click="includeExcludedPoint(item, point)"
+                        >{{ includePending(point.observationId) ? "纳入中" : "纳入" }}</button>
                         <button v-if="point.sourcePage" type="button" @click="openSourcePage(point, item)">原图</button>
                         <button type="button" @click="openReport(point.reportId)">报告</button>
                       </article>

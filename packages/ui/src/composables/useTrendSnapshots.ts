@@ -330,6 +330,12 @@ export function useTrendSnapshots(member: () => string|null, filters: () => Filt
       }
     })();detailRequests.set(key,promise);return promise;
   }
+  function checkSoon() {
+    if (!active || disposed || !member()) return;
+    if (poll) clearTimeout(poll);
+    poll = null;
+    void checkStatus();
+  }
   function pause() {active=false;resumeWanted=true;cancel();}
   function resume() {
     active=true;
@@ -344,7 +350,7 @@ export function useTrendSnapshots(member: () => string|null, filters: () => Filt
   ]);
   return {series,groups,sections:orderedSections,pages,opened,version,status,total,pointCount,pinnedCount,loading,filtering,error,
     visibleCharts,chartErrors,detailErrors,chartPending,detailPending,keyOf,itemFor,reset,cancel,load,loadSection,toggleSection,prefetchNext,
-    setChartVisible,ensureChart,ensureDetails,
+    setChartVisible,ensureChart,ensureDetails,checkSoon,
     sectionItems:(key:string)=>(pages.value[key]?.keys || []).map(itemFor).filter((item):item is TrendSnapshotItem=>Boolean(item)),
     retryChart:(item:TrendSeries)=>{delete chartErrors.value[keyOf(item)];setChartVisible(item,true);},
     invalidate:()=>{cancel();filtering.value=true;}

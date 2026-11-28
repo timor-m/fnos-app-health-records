@@ -826,7 +826,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
   color: var(--muted); font-size: 12px; font-weight: 800;
 }
 .trend-excluded-point {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 6px;
   padding: 7px 8px; border-radius: 10px; background: var(--surface);
 }
 .trend-excluded-point div { min-width: 0; display: grid; gap: 2px; }
@@ -839,6 +839,7 @@ h1, h2, h3, p, dl, dt, dd { margin: 0; }
   min-width: 40px; height: 26px; border: 0; border-radius: 999px; padding: 0 8px;
   background: var(--fill-2); color: var(--ink); font-size: 12px; font-weight: 800;
 }
+.trend-excluded-point button:disabled { opacity: .55; }
 .trend-points { display: grid; gap: 5px; }
 .trend-points article {
   min-height: 48px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-m);
