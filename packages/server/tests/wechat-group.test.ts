@@ -113,7 +113,7 @@ test('network errors, HTTP failures and invalid remote envelopes never escape or
       const result = await getWechatGroup({
         cachePath: null,
         now: () => localNow,
-        request: (path, options) => sendFeedbackRequest(path, options, { identity: () => 'synthetic', fetch: async () => response() }),
+        request: (path, options) => sendFeedbackRequest(path, options, { resolveIdentity: () => ({ headers: { 'x-app-id': 'fnos-app-health-records', 'x-client-id': 'synthetic' }, localKey: 'synthetic', clientId: 'synthetic', deviceId: null }), fetch: async () => response() }),
       });
       assert.deepEqual(result, unavailable);
     }
@@ -151,6 +151,7 @@ test('local route retains login guard and browser no-store, reuses installation 
   const env = { ...process.env }, originalFetch = globalThis.fetch;
   process.env.STORAGE_DIR = dir;
   process.env.DISABLE_JOB_RUNNER = 'true';
+  delete process.env.TRIM_SYS_MACHINE_ID;
   let authenticated = false, fail = false;
   const calls: { url: string; headers: Headers }[] = [];
   globalThis.fetch = async (url, options) => {
@@ -176,7 +177,8 @@ test('local route retains login guard and browser no-store, reuses installation 
     assert.deepEqual(first.data.group, group);
     assert.ok(Date.parse(first.data.serverTime) >= Date.parse(serverTime));
     const config = getAppConfig();
-    assert.equal(calls[0].url, 'https://gateway.lby.link/health/v1/wechat-group');
+    assert.equal(calls[0].url, 'https://gateway.lby.link/apps/v1/wechat-group');
+    assert.equal(calls[0].headers.get('x-app-id'), 'fnos-app-health-records');
     assert.equal(calls[0].headers.get('x-client-id'), identity);
     assert.equal(calls[0].headers.get('x-version'), config.appVersion);
     assert.equal(calls[0].headers.get('user-agent'), feedbackUserAgent(config.appVersion, deploymentType(config.authMode)));

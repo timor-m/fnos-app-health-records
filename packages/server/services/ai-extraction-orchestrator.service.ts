@@ -1,4 +1,4 @@
-import { collectOriginalNarrativeSections, originalNarrativeFields, originalNarrativeFieldsFromSections, type NarrativeOcrPage } from './report-original-narrative';
+import { restoreOriginalNarrativeSections, originalNarrativeFields, originalNarrativeFieldsFromSections, type NarrativeOcrPage } from './report-original-narrative';
 import {parseCardiacUltrasoundPage} from './cardiac-ultrasound-parser';
 import { parseDxaPage } from './bone-density-parser';
 import { createHash } from "node:crypto";
@@ -3925,18 +3925,7 @@ async function executeUnit(
 }
 
 function withOriginalReportNarratives(pages: NarrativeOcrPage[], result: AiExtractionResult): AiExtractionResult {
-  const references=[...(result.fields.narrativeSections || [])];
-  // Compatible replay: old model text may classify a span only when its boundary
-  // quotes occur uniquely in OCR. The generated text itself is never published.
-  for(const field of originalNarrativeFields) {
-    if(references.some(ref=>ref.field===field)) continue;
-    const lines=(result.fields[field] || '').split('\n').map(line=>line.trim()).filter(Boolean);
-    if(!lines.length) continue;
-    const startQuote=lines[0].slice(0,300),endQuote=lines[lines.length-1].slice(0,300);
-    const matches=pages.filter(page=>page.lines.some(line=>line.text.includes(startQuote)) && page.lines.some(line=>line.text.includes(endQuote)));
-    if(matches.length===1) references.push({field,pageNumber:matches[0].pageNumber,startQuote,endQuote});
-  }
-  const sections=collectOriginalNarrativeSections(pages,references);
+  const sections=restoreOriginalNarrativeSections(pages,result.fields);
   const fields={...result.fields,...originalNarrativeFieldsFromSections(sections)};
   const evidence={...result.evidence};
   for(const field of originalNarrativeFields) evidence[field]=sections.filter(section=>section.field===field)

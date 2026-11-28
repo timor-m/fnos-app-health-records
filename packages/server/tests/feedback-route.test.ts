@@ -14,7 +14,7 @@ import { recordFeedbackStates } from '../services/feedback-sync.service';
 
 test('local authenticated route forwards only feedback operations and edited image bytes',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'feedback-route-')),env={...process.env},originalFetch=globalThis.fetch;
- process.env.STORAGE_DIR=dir;process.env.DISABLE_JOB_RUNNER='true';
+ process.env.STORAGE_DIR=dir;process.env.DISABLE_JOB_RUNNER='true';delete process.env.TRIM_SYS_MACHINE_ID;
  const calls:{url:string;headers:Headers;body?:BodyInit|null}[]=[];
  globalThis.fetch=async(url,init)=>{calls.push({url:String(url),headers:new Headers(init?.headers),body:init?.body});return Response.json({success:true,data:String(url).endsWith('/feedback-attachments')?{id:1,url:'/uploads/example.png',relativePath:'private'}:init?.method==='POST'?{number:'B0001',status:'received',version:1}:{items:[],total:0}});};
  let authenticated=false;
@@ -25,12 +25,12 @@ test('local authenticated route forwards only feedback operations and edited ima
   authenticated=true;
   const identityResponse=await app.request('http://localhost/api/feedback/identity');
   assert.equal(identityResponse.status,200);assert.equal(identityResponse.headers.get('cache-control'),'no-store');
-  const identity=(await identityResponse.json()).data.clientId;assert.match(identity,/^[A-Za-z0-9_-]{43}$/);assert.equal(calls.length,0);
+  const identityPayload=(await identityResponse.json()).data;assert.equal(identityPayload.appId,'fnos-app-health-records');assert.match(identityPayload.clientId,/^[A-Za-z0-9_-]{43}$/);assert.equal(identityPayload.deviceId,null);const identity=identityPayload.clientId;assert.equal(calls.length,0);
 
   assert.equal((await app.request('http://localhost/api/feedback/admin')).status,404);assert.equal(calls.length,0);
   assert.equal((await app.request('http://localhost/api/feedback/indicator-requests',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':'obsolete-indicator-request'},body:'{}'})).status,404);assert.equal(calls.length,0);
   assert.equal((await app.request('http://localhost/api/feedback/tickets?page=1')).status,200);
-  assert.equal(calls[0].url,'https://gateway.lby.link/health/v1/feedbacks?page=1&pageSize=20');const id=calls[0].headers.get('x-client-id');assert.match(id!,/^[A-Za-z0-9_-]{43}$/);assert.equal(id,identity);assert.equal(calls[0].headers.get('x-version'),getAppConfig().appVersion);
+  assert.equal(calls[0].url,'https://gateway.lby.link/apps/v1/feedbacks?page=1&pageSize=20');const id=calls[0].headers.get('x-client-id');assert.match(id!,/^[A-Za-z0-9_-]{43}$/);assert.equal(id,identity);assert.equal(calls[0].headers.get('x-app-id'),'fnos-app-health-records');assert.equal(calls[0].headers.get('x-version'),getAppConfig().appVersion);
   const form=new FormData();form.set('file',new Blob(['edited-synthetic-image'],{type:'image/png'}),'private-original-name.png');
   const uploaded=await app.request('http://localhost/api/feedback/upload',{method:'POST',headers:{'Idempotency-Key':'upload-test','x-client-id':'untrusted','cookie':'private'},body:form});assert.equal(uploaded.status,200);assert.deepEqual((await uploaded.json()).data,{id:1,url:'/uploads/example.png'});
   assert.equal(calls[1].headers.get('x-client-id'),id);assert.equal(calls[1].headers.get('cookie'),null);const file=(calls[1].body as FormData).get('file') as File;assert.equal(file.name,'screenshot.png');assert.equal(await file.text(),'edited-synthetic-image');assert.deepEqual(readdirSync(join(dir,'uploads')),[]);
@@ -48,7 +48,7 @@ test('local authenticated route forwards only feedback operations and edited ima
 
 test('list pages make one remote request and compare only returned states without duplicate reminders',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'feedback-pages-')),env={...process.env},originalFetch=globalThis.fetch;
- process.env.STORAGE_DIR=dir;process.env.DISABLE_JOB_RUNNER='true';
+ process.env.STORAGE_DIR=dir;process.env.DISABLE_JOB_RUNNER='true';delete process.env.TRIM_SYS_MACHINE_ID;
  const calls:string[]=[];
  const items=Array.from({length:20},(_,i)=>({number:'B'+String(i+21).padStart(4,'0'),status:'confirmed',version:2}));
  let result={items,total:61,page:2,pageSize:20};
@@ -59,7 +59,7 @@ test('list pages make one remote request and compare only returned states withou
   recordFeedbackStates(db,identity,[{number:'B0021',status:'received',version:1}]);
   const response=await app.request('http://localhost/api/feedback/tickets?page=2&pageSize=20');
   assert.equal(response.status,200);assert.deepEqual((await response.json()).data,result);
-  assert.deepEqual(calls,['https://gateway.lby.link/health/v1/feedbacks?page=2&pageSize=20']);
+  assert.deepEqual(calls,['https://gateway.lby.link/apps/v1/feedbacks?page=2&pageSize=20']);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM feedback_sync_state').get()?.n,20);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM feedback_notifications').get()?.n,1);
   assert.equal((await app.request('http://localhost/api/feedback/tickets?page=2&pageSize=20')).status,200);
@@ -67,7 +67,7 @@ test('list pages make one remote request and compare only returned states withou
   result={items:[{number:'B0061',status:'received',version:1}],total:61,page:4,pageSize:20};
   const last=await app.request('http://localhost/api/feedback/tickets?page=4&pageSize=20');
   assert.equal(last.status,200);assert.deepEqual((await last.json()).data,result);
-  assert.equal(calls.length,3);assert.equal(calls[2],'https://gateway.lby.link/health/v1/feedbacks?page=4&pageSize=20');
+  assert.equal(calls.length,3);assert.equal(calls[2],'https://gateway.lby.link/apps/v1/feedbacks?page=4&pageSize=20');
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM feedback_sync_state').get()?.n,21);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM feedback_notifications').get()?.n,1);
  }finally{globalThis.fetch=originalFetch;closeDatabaseForTests();process.env=env;rmSync(dir,{recursive:true,force:true});}
@@ -75,7 +75,7 @@ test('list pages make one remote request and compare only returned states withou
 
 test('search and filters preserve remote pagination; invalid pages and failed requests do not change local states',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'feedback-search-')),env={...process.env},originalFetch=globalThis.fetch;
- process.env.STORAGE_DIR=dir;process.env.DISABLE_JOB_RUNNER='true';
+ process.env.STORAGE_DIR=dir;process.env.DISABLE_JOB_RUNNER='true';delete process.env.TRIM_SYS_MACHINE_ID;
  const calls:string[]=[];
  const result={items:[{number:'B0021',status:'received',version:1}],total:25,page:2,pageSize:20};
  let fail=false;
@@ -87,7 +87,7 @@ test('search and filters preserve remote pagination; invalid pages and failed re
    const response=await app.request('http://localhost/api/feedback/tickets?page=2&pageSize=20&'+filter);
    assert.equal(response.status,200);assert.deepEqual((await response.json()).data,result);
    assert.equal(calls.length,count+1);
-   assert.equal(calls.at(-1),'https://gateway.lby.link/health/v1/feedbacks?page=2&pageSize=20&'+filter);
+   assert.equal(calls.at(-1),'https://gateway.lby.link/apps/v1/feedbacks?page=2&pageSize=20&'+filter);
   }
   const count=calls.length;
   for(const query of ['page=0','page=1.5','page=10001','pageSize=0','pageSize=51','q=synthetic&pageSize=invalid']) {
@@ -105,7 +105,7 @@ test('search and filters preserve remote pagination; invalid pages and failed re
 
 test('attachment proxy requires local login, injects installation identity and returns only bounded image bytes',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'feedback-image-')),env={...process.env},originalFetch=globalThis.fetch;
- process.env.STORAGE_DIR=dir;process.env.DISABLE_JOB_RUNNER='true';
+ process.env.STORAGE_DIR=dir;process.env.DISABLE_JOB_RUNNER='true';delete process.env.TRIM_SYS_MACHINE_ID;
  const calls:{url:string;headers:Headers}[]=[];let authenticated=false,denied=false;
  globalThis.fetch=async(url,init)=>{calls.push({url:String(url),headers:new Headers(init?.headers)});assert.equal(init?.redirect,'error');return denied?Response.json({success:false},{status:404}):new Response('synthetic-image',{headers:{'Content-Type':'image/png','Set-Cookie':'untrusted=1'}});};
  const app=new H3();app.use(e=>{e.context.requestUser={id:'synthetic',authenticated};});app.all('/api/feedback/**:path',handler);
@@ -114,8 +114,30 @@ test('attachment proxy requires local login, injects installation identity and r
   authenticated=true;
   const image=await app.request('http://localhost/api/feedback/attachments/42',{headers:{'x-client-id':'forged','Authorization':'Bearer forged','cookie':'private'}});
   assert.equal(image.status,200);assert.equal(await image.text(),'synthetic-image');assert.equal(image.headers.get('content-type'),'image/png');assert.equal(image.headers.get('cache-control'),'private, no-store');assert.equal(image.headers.get('x-content-type-options'),'nosniff');assert.equal(image.headers.get('set-cookie'),null);
-  assert.equal(calls[0].url,'https://gateway.lby.link/health/v1/feedback-attachments/42');assert.match(calls[0].headers.get('x-client-id')!,/^[A-Za-z0-9_-]{43}$/);assert.equal(calls[0].headers.get('authorization'),null);assert.equal(calls[0].headers.get('cookie'),null);
+  assert.equal(calls[0].url,'https://gateway.lby.link/apps/v1/feedback-attachments/42');assert.equal(calls[0].headers.get('x-app-id'),'fnos-app-health-records');assert.match(calls[0].headers.get('x-client-id')!,/^[A-Za-z0-9_-]{43}$/);assert.equal(calls[0].headers.get('authorization'),null);assert.equal(calls[0].headers.get('cookie'),null);
   assert.equal((await app.request('http://localhost/api/feedback/attachments/42?url=https://untrusted.invalid')).status,400);assert.equal(calls.length,1);
   denied=true;assert.equal((await app.request('http://localhost/api/feedback/attachments/43')).status,404);
+ }finally{globalThis.fetch=originalFetch;closeDatabaseForTests();process.env=env;rmSync(dir,{recursive:true,force:true});}
+});
+
+test('fnOS machine id uses apps v1 device header and dual-passes legacy client without creating another id',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'feedback-device-')),env={...process.env},originalFetch=globalThis.fetch;
+ process.env.STORAGE_DIR=dir;process.env.DISABLE_JOB_RUNNER='true';process.env.TRIM_SYS_MACHINE_ID='fnos-device-001';
+ const calls:{url:string;headers:Headers}[]=[];
+ globalThis.fetch=async(url,init)=>{calls.push({url:String(url),headers:new Headers(init?.headers)});return Response.json({success:true,data:{items:[],total:0}});};
+ const app=new H3();app.use(e=>{e.context.requestUser={id:'synthetic',authenticated:true};});app.all('/api/feedback/**:path',handler);
+ try {
+  const legacy=getFeedbackInstallation(getDatabase());
+  assert.equal((await app.request('http://localhost/api/feedback/tickets?page=1')).status,200);
+  assert.equal(calls[0].url,'https://gateway.lby.link/apps/v1/feedbacks?page=1&pageSize=20');
+  assert.equal(calls[0].headers.get('x-app-id'),'fnos-app-health-records');
+  assert.equal(calls[0].headers.get('x-device-id'),'fnos-device-001');
+  assert.equal(calls[0].headers.get('x-client-id'),legacy);
+  getDatabase().prepare("DELETE FROM app_settings WHERE setting_key='x-client-id'").run();
+  calls.length=0;
+  assert.equal((await app.request('http://localhost/api/feedback/tickets?page=1')).status,200);
+  assert.equal(calls[0].headers.get('x-device-id'),'fnos-device-001');
+  assert.equal(calls[0].headers.get('x-client-id'),null);
+  assert.equal(readFeedbackInstallation(getDatabase()),null);
  }finally{globalThis.fetch=originalFetch;closeDatabaseForTests();process.env=env;rmSync(dir,{recursive:true,force:true});}
 });

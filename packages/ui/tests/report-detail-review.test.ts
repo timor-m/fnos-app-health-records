@@ -612,3 +612,46 @@ it('preserves an explicit bone measurement method during an ordinary value edit'
   expect(body.method).toBe('合成方法A');expect(body.examinationModality).toBe('DXA');expect(body.measurementSite).toBe('femur_total');
  }finally{wrapper.unmount();}
 });
+
+describe('local original narrative grouping',()=>{
+ it('updates the four-field display locally without submitting AI or reprocess jobs',async()=>{
+  let refreshed=false;
+  fetchMock.mockImplementation(async (input:RequestInfo|URL)=>{
+   const url=String(input).replace('?includeDuplicateCandidates=false','');
+   if(url.endsWith('/refresh-original-narratives')) {refreshed=true;return jsonResponse({updatedFields:['impression'],protectedFields:['summary'],unresolvedFields:[],sourceVersion:8});}
+   if(url.endsWith('/api/reports/r1')) return jsonResponse({...detailPayload,summary:'人工概述原文。',impression:refreshed?'【第 1 页 · 胸部CT · 结论】\n完整结论原文。':'旧结论',sourceVersion:refreshed?8:7});
+   if(url.includes('jobs'))return jsonResponse([]);
+   if(url.includes('/original/status'))return jsonResponse({status:'ready'});
+   return jsonResponse({},404);
+  });
+  const wrapper=await mountReview('');
+  try {
+   const button=wrapper.findAll('button').find(b=>b.text()==='仅更新原文分组')!;
+   expect(button.attributes('title')).toContain('不调用 AI');
+   await button.trigger('click');await flushPromises();await flushPromises();
+   const call=callsTo('/refresh-original-narratives');expect(call).toHaveLength(1);
+   expect(JSON.parse(String(call[0][1]?.body))).toEqual({sourceVersion:7});
+   expect(wrapper.text()).toContain('完整结论原文。');expect(wrapper.text()).toContain('人工概述原文。');
+   expect(wrapper.emitted('updated')).toHaveLength(1);
+   expect(fetchMock.mock.calls.filter(([url,options])=>options?.method==='POST' && !String(url).endsWith('/refresh-original-narratives'))).toHaveLength(0);
+  }finally{wrapper.unmount();}
+ });
+ it('keeps the displayed report on conflict and allows retry instead of triggering a full rerun',async()=>{
+  fetchMock.mockImplementation(async (input:RequestInfo|URL)=>{
+   const url=String(input).replace('?includeDuplicateCandidates=false','');
+   if(url.endsWith('/refresh-original-narratives'))return new Response(JSON.stringify({ok:false,error:{message:'报告已发生变化，请刷新后重试'}}),{status:409,headers:{'content-type':'application/json'}});
+   if(url.endsWith('/api/reports/r1'))return jsonResponse({...detailPayload,impression:'原有结论。'});
+   if(url.includes('jobs'))return jsonResponse([]);
+   if(url.includes('/original/status'))return jsonResponse({status:'ready'});
+   return jsonResponse({},404);
+  });
+  const wrapper=await mountReview('');
+  try {
+   const button=wrapper.findAll('button').find(b=>b.text()==='仅更新原文分组')!;
+   await button.trigger('click');await flushPromises();
+   expect(wrapper.text()).toContain('原有结论。');expect(wrapper.find('[role="alert"]').exists()).toBe(true);
+   expect(button.attributes('disabled')).toBeUndefined();expect(wrapper.emitted('updated')).toBeUndefined();
+   expect(callsTo('/refresh-original-narratives')).toHaveLength(1);
+  }finally{wrapper.unmount();}
+ });
+});

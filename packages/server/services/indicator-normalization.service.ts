@@ -1315,6 +1315,20 @@ function candidateNameSet(values: Array<string | null | undefined>) {
 }
 
 function aliasAppliesToObservation(alias: AliasRow, row: ObservationRow) {
+  // M30/M65 are part of the assay identity; name cleanup must not drop them or turn
+  // an antibody/ratio into the soluble CK18 antigen measurement.
+  if (['liver_ck18_m30', 'liver_ck18_m65'].includes(alias.canonicalKey)) {
+    const original = `${row.itemName} ${row.itemCode || ''}`;
+    const m30 = alias.canonicalKey === 'liver_ck18_m30';
+    if (!(m30 ? /M30(?!\d)/i : /M65(?!\d)/i).test(original)
+      || (m30 ? /M65/i : /M30/i).test(original)
+      || /抗体|antibod|比值|比例|ratio|[\/／]/i.test(original)) return false;
+  }
+  if (alias.canonicalKey === 'urine_creatinine'
+    && /血清|血浆|血肌酐|serum|plasma|比值|比例|ratio|清除率|clearance|排泄|24\s*(?:h|小时)|[\/／]/i.test(row.itemName)) return false;
+  if (alias.canonicalKey === 'renal_creatinine' && /尿肌酐|尿液|\burine\b/i.test(row.itemName)) {
+    return false;
+  }
   // An AI-normalized name must not invent or reverse the measured side.
   if(['hip_axis_length_left','hip_axis_length_right'].includes(alias.canonicalKey)) {
     const left=alias.canonicalKey==='hip_axis_length_left';

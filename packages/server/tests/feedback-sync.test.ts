@@ -14,7 +14,7 @@ import type { RequestUser } from '../domain/request-user';
 
 async function setup(run: (db: ReturnType<typeof getDatabase>, id: string, admins: RequestUser[]) => void | Promise<void>) {
   const env = { ...process.env }, dir = mkdtempSync(join(tmpdir(),'feedback-sync-'));
-  process.env.STORAGE_DIR=dir;process.env.AUTH_MODE='local';process.env.DISABLE_JOB_RUNNER='true';
+  process.env.STORAGE_DIR=dir;process.env.AUTH_MODE='local';process.env.DISABLE_JOB_RUNNER='true';delete process.env.TRIM_SYS_MACHINE_ID;
   try {
     const db=getDatabase();
     const admins=['admin-a','admin-b'].map(id => ({id,displayName:'Synthetic',provider:'local',authenticated:true,isAdmin:true,isGatewayAdmin:true}) as RequestUser);

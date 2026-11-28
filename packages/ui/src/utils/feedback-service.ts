@@ -31,7 +31,7 @@ export function createFeedbackOperation() {
 // Installation identity and version are injected by the local backend.
 export function requestFeedback<T>(path:string,init?:RequestInit):Promise<T> {
   const headers=new Headers(init?.headers);
-  headers.delete('x-client-id');headers.delete('x-version');
+  headers.delete('x-client-id');headers.delete('x-device-id');headers.delete('x-app-id');headers.delete('x-debug');headers.delete('x-version');
   const safe:Record<string,string>={};headers.forEach((value,key)=>{safe[key.toLowerCase()]=value;});
   return request<T>('feedback/'+path,{...init,headers:safe});
 }

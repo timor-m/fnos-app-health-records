@@ -26,7 +26,7 @@ package/
 │   └── resource
 ├── wizard/
 ├── manifest
-├── ICON.PNG              512 x 512
+├── ICON.PNG              64 x 64
 └── ICON_256.PNG          256 x 256
 ```
 
@@ -156,7 +156,7 @@ fnOS 安装包仅监听上述 Unix Socket；未配置 Socket 时拒绝启动，�
 
 包根目录：
 
-- `ICON.PNG`：512 x 512，用于应用中心/应用详情页等大图展示
+- `ICON.PNG`：64 x 64，应用中心小图标
 - `ICON_256.PNG`：256 x 256
 
 要求：
@@ -164,10 +164,10 @@ fnOS 安装包仅监听上述 Unix Socket；未配置 Socket 时拒绝启动，�
 - PNG 或 JPG，sRGB
 - 单文件不超过 1024 KB
 - 正方形画布
-- 512px 和 256px 下主体清晰，64px 入口图标由 `app/ui/images/icon_64.png` 提供
+- 64px 和 256px 下主体清晰，桌面入口固定引用 `app/ui/images/icon_256.png`
 - 视觉主体使用符合系统风格的圆角；根图标不要保留过大的透明边距，避免应用详情页放大后显得模糊
 
-入口使用 `app/ui/images/icon_{0}.png`。包结构校验会检查根 512px、256px 和入口多尺寸文件存在且尺寸正确。
+入口使用 `app/ui/images/icon_256.png`。包结构校验会检查入口引用、根 64px/256px 图标，以及保留的 512px 和入口多尺寸文件存在且尺寸正确。
 
 ## 9. 本地与设备验证
 

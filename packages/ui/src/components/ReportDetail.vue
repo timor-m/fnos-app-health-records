@@ -173,6 +173,9 @@ const ocrCompareImage = ref<HTMLImageElement | null>(null);
 const confirming = ref(false);
 const triggeringAi = ref(false);
 const reprocessingReport = ref(false);
+const refreshingOriginalText=ref(false);
+const originalGroupingError=ref("");
+watch(()=>props.reportId,()=>{refreshingOriginalText.value=false;originalGroupingError.value="";});
 const cancellingJobs = ref(false);
 const trashingReport = ref(false);
 const editOpen = ref(false);
@@ -1861,6 +1864,28 @@ async function dismissMemberMismatch() {
   }
 }
 
+async function refreshOriginalTextGrouping() {
+  if(!canManageReport.value || !detail.value || refreshingOriginalText.value || hasRunningJobs.value) return;
+  const reportId=props.reportId,context=reportContextSeq;
+  refreshingOriginalText.value=true;originalGroupingError.value='';
+  try {
+    const result=await request<{updatedFields:string[];protectedFields:string[];unresolvedFields:string[]}>(
+      `reports/${encodeURIComponent(reportId)}/refresh-original-narratives`,
+      {method:'POST',body:JSON.stringify({sourceVersion:detail.value.sourceVersion})});
+    if(!detailActive || props.reportId!==reportId || context!==reportContextSeq) return;
+    await loadDetail(reportId,true);
+    if(!detailActive || props.reportId!==reportId) return;
+    emit('updated');
+    const message=result.updatedFields.length?'已更新原文分组':'原文分组无需更新';
+    toast.show(result.unresolvedFields.length?`${message}；无法从原文确认的内容已保留`
+      :result.protectedFields.length?`${message}；人工校对内容已保留`:message);
+  } catch(cause) {
+    if(props.reportId===reportId) originalGroupingError.value=cause instanceof Error?cause.message:'更新原文分组失败';
+  } finally {
+    if(props.reportId===reportId) refreshingOriginalText.value=false;
+  }
+}
+
 function runReprocessNoticeAction() {
   if (reprocessNotice.value?.action === "retry_ai") {
     triggerAiExtraction();
@@ -2466,6 +2491,10 @@ onActivated(() => {
         <div><h4>AI 整理结果</h4><p>{{ hasAiContent ? "以下为已整理或人工补充的内容，请核对原件。" : "AI 尚未整理出结构化内容。" }}</p></div>
         <div class="section-title-actions">
           <button v-if="canManageReport && detail && !detail.observations.length" class="soft-action-button" type="button" :disabled="jobsLoading || hasRunningJobs" @click="allObservationsOpen = true; openObservationEditor()"><Plus :size="15" />补充指标</button>
+          <button v-if="canManageReport" type="button" class="soft-action-button" :disabled="refreshingOriginalText || jobsLoading || hasRunningJobs" title="仅使用已保存的识别文字整理这四栏；不调用 AI，不改指标、人工校对和归档状态" @click="refreshOriginalTextGrouping">
+            <LoaderCircle v-if="refreshingOriginalText" class="spin-icon" :size="16" />
+            {{ refreshingOriginalText ? '更新分组中' : '仅更新原文分组' }}
+          </button>
           <button v-if="canManageReport && (canTriggerAi)" class="soft-action-button ai-trigger-button" type="button" :disabled="aiTriggerState.disabled" @click="triggerAiExtraction">
             <LoaderCircle v-if="aiTriggerState.loading" class="spin-icon" :size="16" />
             <Sparkles v-else :size="16" />
@@ -2474,6 +2503,7 @@ onActivated(() => {
           <Sparkles :size="19" />
         </div>
       </div>
+      <p v-if="originalGroupingError" class="inline-panel-error" role="alert">{{ originalGroupingError }}</p>
       <div v-if="hasAiContent" class="ai-content">
         <section v-if="detail?.summary || detail?.impression || detail?.recommendation" class="ai-section-grid">
           <ReportOriginalText v-if="detail?.summary" label="原报告概述" :text="detail.summary" :manual="isManualField('summary')" />

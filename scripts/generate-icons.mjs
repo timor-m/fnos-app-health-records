@@ -232,7 +232,7 @@ function writePng(path, size) {
 mkdirSync(generatedDir, { recursive: true });
 for (const size of sizes) writePng(join(generatedDir, `icon_${size}.png`), size);
 writePng(join(generatedDir, "icon-source.png"), 512);
-writePng(join(iconsDir, "ICON.PNG"), 512);
+writePng(join(iconsDir, "ICON.PNG"), 64);
 writePng(join(iconsDir, "ICON_256.PNG"), 256);
 writePng(uiIcon, 256);
 

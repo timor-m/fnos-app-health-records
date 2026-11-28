@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { createError } from 'h3';
 import { getDatabase, getUnreleasedSchemaMaintenance } from '../database/client';
-import { getFeedbackInstallation, readFeedbackInstallation } from './feedback-installation.service';
+import { resolveFeedbackAppsIdentity } from './feedback-installation.service';
 import { sendFeedbackRequest } from './feedback-remote.service';
 import { isAdministrator, type RequestUser } from '../domain/request-user';
 import { createId } from '../utils/identifier';
@@ -64,7 +64,7 @@ export function syncFeedbackUpdates(db = getDatabase(), send: typeof sendFeedbac
   if (pending) return pending;
   const request = (async () => {
     if (storageMigrationPaused() || getUnreleasedSchemaMaintenance()) throw new Error('应用正在维护');
-    const clientId = getFeedbackInstallation(db);
+    const identity = resolveFeedbackAppsIdentity(db);
     const marker = {};
     trackStorageRequest(marker);
     try {
@@ -73,7 +73,7 @@ export function syncFeedbackUpdates(db = getDatabase(), send: typeof sendFeedbac
       let total = 0;
       for (let page = 1; page <= 10000; page++) {
         const result = parseList(await send(`/tickets?page=${page}&pageSize=50`, { signal },
-          { fetch: globalThis.fetch, identity: () => clientId }));
+          { fetch: globalThis.fetch, resolveIdentity: () => identity }));
         total = result.total;
         for (const item of result.items) {
           const existing = collected.get(item.number);
@@ -82,9 +82,9 @@ export function syncFeedbackUpdates(db = getDatabase(), send: typeof sendFeedbac
         if (collected.size >= total) break;
         if (!result.items.length || page === 10000 || signal.aborted) throw new Error('反馈列表同步未完成');
       }
-      if (storageMigrationPaused() || readFeedbackInstallation(db) !== clientId) throw new Error('反馈安装身份已变化');
+      if (storageMigrationPaused() || resolveFeedbackAppsIdentity(db).localKey !== identity.localKey) throw new Error('反馈安装身份已变化');
       const items = [...collected.values()];
-      recordFeedbackStates(db, clientId, items);
+      recordFeedbackStates(db, identity.localKey, items);
       return { items, total };
     } finally { finishStorageRequest(marker); }
   })();
@@ -95,21 +95,20 @@ export function syncFeedbackUpdates(db = getDatabase(), send: typeof sendFeedbac
 
 export function listFeedbackNotifications(user: RequestUser, db = getDatabase()) {
   if (!user.authenticated || !isAdministrator(user)) return [];
-  const clientId = readFeedbackInstallation(db);
-  if (!clientId) return [];
+  const identity = resolveFeedbackAppsIdentity(db);
   return db.prepare(`SELECT n.id,NULL AS memberId,NULL AS reportId,'feedback_updated' AS type,
     '反馈进度更新' AS title,n.message,'info' AS severity,COALESCE(r.status,'unread') AS status,
     n.created_at AS createdAt,r.read_at AS readAt,NULL AS reportTitle,n.number AS feedbackNumber
     FROM feedback_notifications n LEFT JOIN feedback_notification_reads r ON r.notification_id=n.id AND r.user_id=?
     WHERE n.client_hash=? AND COALESCE(r.status,'unread')<>'archived'
     ORDER BY COALESCE(r.status,'unread')='unread' DESC,n.created_at DESC,n.id DESC LIMIT 100`)
-    .all(user.id, identityHash(clientId));
+    .all(user.id, identityHash(identity.localKey));
 }
 export function updateFeedbackNotification(user: RequestUser, id: string, status: string, db = getDatabase()) {
   if (!user.authenticated || !isAdministrator(user)) throw createError({ statusCode: 403, statusMessage: '仅管理员可管理反馈提醒' });
   if (!['unread','read','archived'].includes(status)) throw createError({ statusCode: 400, statusMessage: '通知状态无效' });
-  const clientId = readFeedbackInstallation(db);
-  if (!clientId || !db.prepare('SELECT id FROM feedback_notifications WHERE id=? AND client_hash=?').get(id, identityHash(clientId)))
+  const identity = resolveFeedbackAppsIdentity(db);
+  if (!db.prepare('SELECT id FROM feedback_notifications WHERE id=? AND client_hash=?').get(id, identityHash(identity.localKey)))
     throw createError({ statusCode: 404, statusMessage: '通知不存在' });
   db.prepare(`INSERT INTO feedback_notification_reads(notification_id,user_id,status,read_at)
     VALUES (?,?,?,CASE WHEN ?='unread' THEN NULL ELSE CURRENT_TIMESTAMP END)

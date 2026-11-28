@@ -1,6 +1,6 @@
 import { getDatabase } from '../../../database/client';
 import { recordFeedbackStates, type FeedbackList, type FeedbackState } from '../../../services/feedback-sync.service';
-import { getFeedbackInstallation } from '../../../services/feedback-installation.service';
+import { FEEDBACK_APP_ID, resolveFeedbackAppsIdentity } from '../../../services/feedback-installation.service';
 import { validateFeedbackEnvironment } from '../../../services/feedback-validation';
 import { createError, defineEventHandler, getHeader, getQuery, getRouterParam, setHeader } from 'h3';
 import { readFile } from 'node:fs/promises';
@@ -21,7 +21,10 @@ export default defineEventHandler(async event => {
     setHeader(event,'Cache-Control','private, no-store');
     return new Response(new Uint8Array(image.bytes),{headers:{'Content-Type':image.mimeType,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Disposition':'inline'}});
   }
-  if(get && path==='/identity') return ok({clientId:getFeedbackInstallation()});
+  if(get && path==='/identity') {
+    const identity=resolveFeedbackAppsIdentity();
+    return ok({appId:FEEDBACK_APP_ID,clientId:identity.clientId,deviceId:identity.deviceId});
+  }
   if(get && (path==='/tickets' || new RegExp('^'+ticket+'$').test(path))) {
     const query=getQuery(event); const allowed=path==='/tickets'?['page','pageSize','number','q','status','category']:['eventPage','eventPageSize'];
     const params=new URLSearchParams();
@@ -29,14 +32,14 @@ export default defineEventHandler(async event => {
       if(!allowed.includes(key) || typeof value!=='string' || value.length>120) throw createError({statusCode:400,statusMessage:'查询参数无效'});
       params.set(key,value);
     }
-    const db=getDatabase(),clientId=getFeedbackInstallation(db);
+    const db=getDatabase(),identity=resolveFeedbackAppsIdentity(db);
     if(path==='/tickets') {
       const page=Number(params.get('page') || 1),pageSize=Number(params.get('pageSize') || 20);
       if(!Number.isInteger(page) || page<1 || page>10000 || !Number.isInteger(pageSize) || pageSize<1 || pageSize>50) throw createError({statusCode:400,statusMessage:'分页参数无效'});
       params.set('page',String(page));params.set('pageSize',String(pageSize));
     }
-    const result=await sendFeedbackRequest(path+(params.size?'?'+params:''));
-    if(path==='/tickets') recordFeedbackStates(db,clientId,(result as FeedbackList).items);
+    const result=await sendFeedbackRequest(path+(params.size?'?'+params:''),{}, {fetch:globalThis.fetch,resolveIdentity:()=>identity});
+    if(path==='/tickets') recordFeedbackStates(db,identity.localKey,(result as FeedbackList).items);
     return ok(result);
   }
   if(event.req.method!=='POST' || !(path==='/upload' || path==='/tickets' || new RegExp('^'+ticket+'/(messages|resolution)$').test(path))) throw createError({statusCode:404,statusMessage:'反馈接口不存在'});
@@ -58,8 +61,8 @@ export default defineEventHandler(async event => {
   const allowed=path==='/tickets'?['category','title','description','reproductionSteps','attachmentIds','environment']:path.endsWith('/messages')?['content','attachmentIds']:['action','expectedVersion','content'];
   if(Object.keys(body).some(k=>!allowed.includes(k))) throw createError({statusCode:400,statusMessage:'反馈包含不支持的字段'});
   if(path==='/tickets') {validateFeedbackEnvironment(body.environment);body.appKey='health-records';}
-  const db=getDatabase(),clientId=getFeedbackInstallation(db);
-  const result=await sendFeedbackRequest(path,{method:'POST',key,json:true,body:JSON.stringify(body)});
-  if(path==='/tickets' || path.endsWith('/resolution')) recordFeedbackStates(db,clientId,[result as FeedbackState],false);
+  const db=getDatabase(),identity=resolveFeedbackAppsIdentity(db);
+  const result=await sendFeedbackRequest(path,{method:'POST',key,json:true,body:JSON.stringify(body)},{fetch:globalThis.fetch,resolveIdentity:()=>identity});
+  if(path==='/tickets' || path.endsWith('/resolution')) recordFeedbackStates(db,identity.localKey,[result as FeedbackState],false);
   return ok(result);
 });

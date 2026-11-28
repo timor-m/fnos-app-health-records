@@ -2,7 +2,7 @@
   "$schema": "../schemas/indicators.schema.json",
   "formatVersion": 1,
   "layer": "remote",
-  "revision": 30,
+  "revision": 31,
   "indicators": [
     {
       "canonicalKey": "lipid_ldl_hdl_ratio",
@@ -5615,6 +5615,92 @@
         "生化"
       ],
       "explanation": "肌红蛋白定量结果，保留原报告的检测方法、单位和参考范围；不与肌钙蛋白或肌酸激酶同工酶混用。"
+    },
+    {
+      "canonicalKey": "liver_ck18_m65",
+      "displayName": "细胞角蛋白18片段M65",
+      "categoryKey": "liver_function",
+      "order": 44,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/L",
+      "unitDimension": "other",
+      "aliases": [
+        "人细胞角蛋白18片段M65",
+        "细胞角蛋白18片段M65",
+        "CK18-M65",
+        "CK18 M65",
+        "K18-M65"
+      ],
+      "allowedUnits": [
+        "U/L"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "肝纤维化",
+        "生化"
+      ],
+      "explanation": "M65 免疫测定的可溶性细胞角蛋白18定量项目；与 M30、未注明类型的 CK18、M30/M65 比值及细胞角蛋白19片段分别观察。U/L 为本免疫测定的报告单位，不作为酶活性或质量浓度换算；保留原报告单位和参考范围，不同标本或检测方法的结果不视为可直接换算。"
+    },
+    {
+      "canonicalKey": "liver_ck18_m30",
+      "displayName": "细胞角蛋白18片段M30",
+      "categoryKey": "liver_function",
+      "order": 45,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "serum",
+      "defaultUnit": "U/L",
+      "unitDimension": "other",
+      "aliases": [
+        "人细胞角蛋白18片段M30",
+        "细胞角蛋白18片段M30",
+        "CK18-M30",
+        "CK18 M30",
+        "K18-M30"
+      ],
+      "allowedUnits": [
+        "U/L"
+      ],
+      "sectionHints": [
+        "肝功能",
+        "肝纤维化",
+        "生化"
+      ],
+      "explanation": "M30 免疫测定的 caspase 裂解细胞角蛋白18片段定量项目，与 M65、未注明类型的 CK18、抗体及 M30/M65 比值分别观察。U/L 为本免疫测定的报告单位，不作为酶活性或质量浓度换算；保留原报告单位和参考范围，不同标本或检测方法的结果不视为可直接换算。"
+    },
+    {
+      "canonicalKey": "urine_creatinine",
+      "displayName": "尿肌酐",
+      "categoryKey": "urinalysis",
+      "order": 86,
+      "kind": "quantitative",
+      "valueType": "numeric",
+      "specimen": "urine",
+      "defaultUnit": null,
+      "unitDimension": "other",
+      "aliases": [
+        "尿肌酐",
+        "尿肌酐测定",
+        "尿肌酐浓度",
+        "随机尿肌酐",
+        "Urine creatinine",
+        "Creatinine urine"
+      ],
+      "allowedUnits": [
+        "mmol/L",
+        "μmol/L",
+        "umol/L",
+        "mg/dL"
+      ],
+      "sectionHints": [
+        "尿液",
+        "尿常规",
+        "尿生化",
+        "尿微量白蛋白"
+      ],
+      "explanation": "尿液中肌酐浓度，独立于血清肌酐、定时尿肌酐排泄量、肌酐清除率和白蛋白或蛋白与肌酐的比值。保留原报告数值与单位，不自行换算或计算比值，不设置统一参考范围。"
     }
   ],
   "extensions": [

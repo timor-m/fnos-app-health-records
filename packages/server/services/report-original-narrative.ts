@@ -411,3 +411,17 @@ export function originalNarrativeFieldsFromSections(sections: OriginalNarrativeS
   return Object.fromEntries(originalNarrativeFields.map(field=>[field,sections.filter(section=>section.field===field)
     .map(section=>`【第 ${section.pageNumber} 页${section.title ? ` · ${section.title}` : ''}】\n${section.relatedIssue?`对应问题：${section.relatedIssue}\n\n`:''}${section.lines.map(line=>line.text).join('\n')}`).join('\n\n') || null])) as Record<OriginalNarrativeField,string|null>;
 }
+
+/** Replay saved classification against OCR; generated prose is never the source. */
+export function restoreOriginalNarrativeSections(pages:NarrativeOcrPage[], fields:Partial<Record<OriginalNarrativeField,string|null>> & {narrativeSections?:unknown}) {
+  const references=parseNarrativeSectionReferences(fields.narrativeSections);
+  for(const field of originalNarrativeFields) {
+    if(references.some(ref=>ref.field===field)) continue;
+    const lines=(fields[field] || '').split('\n').map(line=>line.trim()).filter(Boolean);
+    if(!lines.length) continue;
+    const startQuote=lines[0].slice(0,300),endQuote=lines[lines.length-1].slice(0,300);
+    const matches=pages.filter(page=>page.lines.some(line=>line.text.includes(startQuote)) && page.lines.some(line=>line.text.includes(endQuote)));
+    if(matches.length===1) references.push({field,pageNumber:matches[0].pageNumber,startQuote,endQuote});
+  }
+  return collectOriginalNarrativeSections(pages,references);
+}

@@ -105,6 +105,7 @@ check(
 
 const uiConfig = readJson("app/ui/config");
 const uiEntry = uiConfig?.[".url"]?.[template.desktopLaunchName];
+check(uiEntry?.icon === "images/icon_256.png", "desktop icon must reference the 256px image");
 check(uiEntry?.gatewayPrefix === template.gatewayPrefix, "gatewayPrefix mismatch");
 check(uiEntry?.gatewaySocket === template.gatewaySocket, "gatewaySocket mismatch");
 check(uiEntry?.url === template.gatewayPrefix, "gateway URL mismatch");
@@ -114,7 +115,7 @@ check(manifest.micro_app === "true", "fnOS user file picker requires micro_app=t
 const iconRoot = pngDimensions("ICON.PNG");
 const icon256 = pngDimensions("ICON_256.PNG");
 const icon512 = pngDimensions("ICON_512.PNG");
-check(iconRoot?.width === 512 && iconRoot?.height === 512, "ICON.PNG must be 512 x 512");
+check(iconRoot?.width === 64 && iconRoot?.height === 64, "ICON.PNG must be 64 x 64");
 check(icon256?.width === 256 && icon256?.height === 256, "ICON_256.PNG must be 256 x 256");
 check(icon512?.width === 512 && icon512?.height === 512, "ICON_512.PNG must be 512 x 512");
 
